@@ -1961,6 +1961,47 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#191 — the History panel rebuilt as a view of the timeline (2026-10-13).**
+      Raised by the owner after three reported bugs turned out to share one cause:
+      *"the reorder issues, the worthless 'current' tab, and now this click-reversion
+      inconsistency all point to the entire History panel feeling half-baked at best."*
+
+      **The cause.** The panel computed its own order, on TWO coordinate systems at
+      once: a data row was numbered by its index among all applied steps (loads
+      included), while an analysis was placed by `at`, a count of transforms only.
+      That interleaving rule was written out FOUR times — the panel,
+      `crosstab-syntax.bodyLines`, its per-dataset `serializeProject`, and the aligned
+      Syntax grid — on three different definitions of "transform" (nine op types, five,
+      and eight). An analysis's position was GENERATED with one, DRAWN with another and
+      SERIALISED with a third, so after a `dropVars` or a `weight by` the three views of
+      one history disagreed about where an analysis belonged.
+
+      **The model.** One `core/timeline.js` produces an ordered, numbered row list; the
+      panel, the Syntax view and the script writer all read it. `at` is DERIVED from
+      position rather than stored and maintained, so what the list shows and what the
+      numbers describe cannot drift. One `reorder` op orders both tiers. The cursor is
+      the last applied row and governs the analyses as well as the data — the timeline
+      is a recipe for the grid AND the outputs.
+
+      Six tiers, each with its own commit: dynamic menu labels (`Undo: Computed age2`),
+      the timeline producer, the arrow rule, the cross-tier cursor, `reads[]`/stale
+      marking, and nested record rows. Suite 1751 → 1823.
+
+      **Found along the way, each a bug in its own right:** `setWeight` was missing from
+      `DATA_OPS` while `replaceTransforms` retracted it, so rebuilding a pipeline from
+      `getTransforms()` dropped the dataset's weight — which every analysis move did,
+      twice; branch-discard was documented in `rewindTo` since it was written and never
+      implemented, so a redo re-inserted an undone step mid-list; a retracted op was
+      still offered to redo; `repositionAnalysis` wrote 4N ops and rewrote every
+      transform's id per move; and for a LIVE memo there was no list anywhere in the app
+      — the sidebar's count is inert and the orphan list only appears once the anchor is
+      already gone.
+
+      **Still open:** record EDITS and DELETIONS no longer appear in the panel (the old
+      chronological group was replaced by live records nested under their anchor, since
+      keeping both lists the same note twice). The log and the bin still hold them. Say
+      if that group should come back alongside.
+
 - [x] **FIXED (2026-10-13). The History arrows move ONE ROW, and two analyses at the same
       data step can finally be ordered.** Three reports from the owner on the desktop app,
       all one root cause:
