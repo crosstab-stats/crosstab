@@ -2064,13 +2064,14 @@ bottom; they are the project's memory and are not summarised away.
       and `listSettings()` is a Settings screen's entire data source. The same
       declare-and-the-host-renders pattern as `menus.register` and the plugin manifests.
 
-      **What it absorbed** — five settings over three modules, each of which had rebuilt
+      **What it absorbed** — eight settings over five modules, each of which had rebuilt
       the same five pieces (key, accepted values, default, validate-on-read, and a
       `try/catch` on both sides because storage throws outright in Safari private mode and
       in a sandboxed frame): `varlist.order` (+ its legacy key), `varlist.display`,
-      `screen.mode`, `screen.autoNoteSeen`, `debug.logging`. Every public function
-      (`loadVarOrder`, `storedScreenMode`, `setDebug`, …) kept its signature and became a
-      one-liner, so nothing else in the app changed.
+      `screen.mode`, `screen.autoNoteSeen`, `debug.logging`, `privacy.encryption`,
+      `collab.relays`, `collab.turn`. Every public function (`loadVarOrder`,
+      `storedScreenMode`, `setDebug`, `getEncryptionPolicy`, `getRelayUrls`, …) kept its
+      signature and became a one-liner, so nothing else in the app changed.
 
       **Two behaviours a naive fold would have broken**, now pinned by tests:
       `screen.mode` is TRI-state — `small`, `full`, or null for "nobody has said", which
@@ -2089,15 +2090,37 @@ bottom; they are the project's memory and are not summarised away.
       (`dropbox.config` — a screen that enumerates settings must never print a token),
       and identity/first-run flags.
 
-      **The borderline, left for when the screen exists:** the encryption policy and the
-      collab relay/TURN config are both user-editable and screen-worthy, but shaped
-      (objects and arrays) rather than scalar, and the encryption policy already has its
-      own modal. Deciding how a generic screen edits a shaped value needs the screen.
+      **Shaped settings, added on the owner's call (2026-10-15):** *"I think it's worth
+      including the encryption settings and collab settings in this same registry. If we
+      ever do build a settings screen it would make sense to move them there."* They had
+      been left out for being objects and arrays rather than scalars, which was a gap in
+      the registry rather than a property of those settings — so `json` and `coerce`
+      close it. `coerce` runs on BOTH directions, which is what lets the encryption policy
+      state its one real rule in one place: what is stored may be a **partial**, and the
+      effective policy is always that read over the defaults, so a target nobody has ruled
+      on keeps following the default even after the default changes. A stored full
+      snapshot would have frozen it silently.
+
+      Each module kept its own write semantics, because those are domain rules rather than
+      storage rules and burying them in a generic store would have made them invisible:
+      the policy merges a patch, `setRelayUrls([])` **clears** the override (nobody can
+      mean "use no relays"), and `setTurnConfig(null)` clears.
+
+      **`secret`, found while doing it.** A TURN entry is `{urls, username, credential}`.
+      A registry whose entire purpose is to let a screen enumerate settings must not be
+      the thing that prints a credential — so a setting can declare itself `secret` and
+      `listSettings` then reports `isSet` and withholds the value. Verified in the running
+      app: a probe credential appears nowhere in the listing, the row still says one is
+      configured, and the app itself still reads it. `isSet` is useful beyond secrets —
+      it is how a screen shows "Default" beside an untouched setting instead of implying
+      the user chose it.
 
   - [ ] **The Settings screen itself.** Now a view over `listSettings()` — group by
-        `group`, render `options` as a `<select>` and the rest by kind. The open question
-        is what it does about the shaped settings above: absorb them, or link out to the
-        modals that already edit them.
+        `group` (Appearance, Variables, Privacy, Collaboration, Advanced), render
+        `options` as a `<select>`, respect `secret` by showing configured/not rather than
+        a value. Two things to decide when it is built: how a shaped value (the three
+        encryption toggles, a relay list) is edited generically, and whether it absorbs
+        the existing Encryption settings modal or links out to it.
 
 - [~] **Variable-picker polish — two of three DONE (2026-10-15).** The "Selected" group
       is a snapshot taken when the dialog opens — ticking a box inside the dialog

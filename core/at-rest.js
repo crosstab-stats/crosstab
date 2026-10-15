@@ -27,11 +27,35 @@
  * crypto-envelope); a forgotten passphrase is unrecoverable.
  */
 
-const POLICY_KEY = 'crosstab.encryption-policy';
+import { defineSetting } from './settings.js';
 
 /** Default posture per target. Opt-out for anything leaving origin-private storage;
  * opt-in for storage that stays in the browser origin. */
 const DEFAULTS = Object.freeze({ export: true, folder: true, local: false });
+
+/**
+ * The policy as a declared setting, so a Settings screen can find it (the key is
+ * unchanged).
+ *
+ * `coerce` is where the merge lives: what is STORED may be a partial — `{local: true}`
+ * and nothing else — and the effective policy is always that read over the defaults. Put
+ * differently, a target the user has never ruled on keeps following the default even
+ * after the defaults change, which is the behaviour a stored full snapshot would have
+ * quietly frozen.
+ *
+ * The fallback is a thunk because callers have always received a fresh, mutable object;
+ * handing back the frozen DEFAULTS instead would turn a stray write into a silent no-op.
+ */
+const policySetting = defineSetting({
+  id: 'privacy.encryption',
+  key: 'crosstab.encryption-policy',
+  json: true,
+  coerce: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? { ...DEFAULTS, ...v } : undefined),
+  fallback: () => ({ ...DEFAULTS }),
+  label: 'Encrypt at rest',
+  group: 'Privacy',
+  hint: 'Which targets are encrypted: exports and synced folders by default, local storage on request.',
+});
 
 /** The default encryption posture for a target (ignoring user overrides). */
 export function defaultEncrypt(target) {
@@ -40,19 +64,14 @@ export function defaultEncrypt(target) {
 
 /** The effective policy = defaults with any persisted user overrides applied. */
 export function getEncryptionPolicy() {
-  try {
-    const raw = globalThis.localStorage?.getItem(POLICY_KEY);
-    return { ...DEFAULTS, ...(raw ? JSON.parse(raw) : {}) };
-  } catch {
-    return { ...DEFAULTS };
-  }
+  return policySetting.get();
 }
 
 /** Persist an override patch (e.g. `{ local: true }` to opt local storage in, or
  * `{ export: false }` to opt exports out). Returns the effective policy. */
 export function setEncryptionPolicy(patch) {
   const next = { ...getEncryptionPolicy(), ...(patch || {}) };
-  try { globalThis.localStorage?.setItem(POLICY_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
+  policySetting.set(next);
   return next;
 }
 

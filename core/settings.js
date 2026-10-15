@@ -34,9 +34,15 @@
  *  - **Identity and first-run flags** (`crosstab.identity`, `crosstab.launcher.seen`) —
  *    data and lifecycle, not preference.
  *
- * Collab relay/TURN config (`crosstab.relays`, `crosstab.turn`) is the honest borderline:
- * user-editable and screen-worthy, but shaped (arrays and objects) rather than scalar.
- * Left where it is until the screen exists to say what editing it should look like.
+ * The encryption policy and the collab relay/TURN config ARE settings and are declared
+ * here. They are shaped — an object and an array — rather than scalar, which is the only
+ * reason they waited: a registry that could hold nothing but strings was a gap in the
+ * registry, not a property of those settings. Hence `json` and `coerce` below.
+ *
+ * One of them carries a secret. A TURN entry has `username`/`credential`, and a registry
+ * whose whole purpose is to let a screen enumerate settings must not be the thing that
+ * prints those — so a setting may declare itself `secret`, and {@link listSettings} then
+ * reports only whether it is set.
  *
  * ## Keys are never renamed
  *
@@ -54,11 +60,22 @@
  * @property {any[]} [values] - The accepted values. A stored value outside this set is
  *   treated as absent, so a hand-edited or stale entry degrades to the default rather
  *   than reaching the app.
- * @property {any} [fallback=null] - The value when nothing valid is stored.
+ * @property {boolean} [json] - Stored as JSON rather than as a bare string.
+ * @property {(value: any) => any} [coerce] - Accept, adjust or REJECT a value. Applied
+ *   both to what is read out of storage and to what is written in, so one rule covers
+ *   both directions. Returning `undefined` rejects: on read that yields the fallback, on
+ *   write the call is a no-op. This is where a shaped setting states its shape — and
+ *   where the encryption policy merges what is stored over its defaults, so that a stored
+ *   partial stays a partial.
+ * @property {any} [fallback=null] - The value when nothing valid is stored. May be a
+ *   FUNCTION, called per read, for a default a caller might mutate: the encryption policy
+ *   has always handed back a fresh object and has to keep doing so.
  * @property {any} [onError] - The value when storage THROWS, which is not always the
  *   same answer — see `screen-mode.autoNote`, where a dismissal that cannot be
  *   remembered must read as "already seen" or the note nags on every load. Defaults to
  *   `fallback`.
+ * @property {boolean} [secret] - The value may contain a credential, so {@link
+ *   listSettings} reports only whether it is set. See the TURN config.
  * @property {string} [label] - Shown by a Settings screen.
  * @property {string} [group] - How a Settings screen would section it.
  * @property {string} [hint] - One line on what the choice does.
@@ -89,8 +106,6 @@ export function defineSetting(spec) {
   if (!('onError' in full)) full.onError = full.fallback;
   registry.set(full.id, full);
 
-  const ok = (v) => (full.values ? full.values.includes(v) : v != null);
-
   return {
     spec: full,
     get() {
@@ -100,22 +115,56 @@ export function defineSetting(spec) {
         for (const legacy of full.legacyKeys) {
           if (raw == null) raw = s?.getItem(legacy);
         }
-        return ok(raw) ? raw : full.fallback;
+        const v = decode(full, raw);
+        return v === undefined ? resolve(full.fallback) : v;
       } catch {
-        return full.onError; // storage disabled (private mode, sandboxed frame)
+        return resolve(full.onError); // storage disabled (private mode, sandboxed frame)
       }
     },
-    /** Writing an unaccepted value is a no-op, not a throw: a caller passing rubbish is a
-     * bug to fix, and corrupting the stored preference on the way out helps nobody. */
+    /**
+     * Write a value. An unaccepted one is a no-op, not a throw: a caller passing rubbish
+     * is a bug to fix, and corrupting the stored preference on the way out helps nobody.
+     *
+     * "Unaccepted" is not the same as "means clear". `setRelayUrls([])` clears the
+     * override and says so by calling {@link clear} — rather than leaning on an empty
+     * array being quietly rejected here, which would read the same and mean something
+     * else entirely.
+     */
     set(value) {
-      if (!ok(value)) return;
-      try { storage()?.setItem(full.key, value); } catch { /* storage unavailable */ }
+      const v = accept(full, value);
+      if (v === undefined) return;
+      try {
+        storage()?.setItem(full.key, full.json ? JSON.stringify(v) : v);
+      } catch { /* storage unavailable */ }
     },
     /** Forget the choice — the stored absence that `fallback` describes. */
     clear() {
       try { storage()?.removeItem(full.key); } catch { /* storage unavailable */ }
     },
   };
+}
+
+/** A fallback may be a thunk, for a default a caller could mutate. */
+const resolve = (f) => (typeof f === 'function' ? f() : f);
+
+/** Storage string -> value, or `undefined` when there is nothing usable there. */
+function decode(spec, raw) {
+  if (raw == null) return undefined;
+  let v = raw;
+  if (spec.json) {
+    // A malformed entry is treated as absent rather than thrown. It is one hand edit or
+    // one half-finished write away, and taking the app down over it would be a worse
+    // answer than falling back to the default.
+    try { v = JSON.parse(raw); } catch { return undefined; }
+  }
+  return accept(spec, v);
+}
+
+/** Value -> the value to use, or `undefined` to reject it. */
+function accept(spec, value) {
+  if (spec.values) return spec.values.includes(value) ? value : undefined;
+  if (spec.coerce) return spec.coerce(value);
+  return value == null ? undefined : value;
 }
 
 /**
@@ -129,12 +178,20 @@ export function defineSetting(spec) {
  */
 export function listSettings() {
   return [...registry.values()].map((spec) => {
-    let value = spec.fallback;
+    let value;
+    let isSet = false;
     try {
       const raw = storage()?.getItem(spec.key);
-      value = (spec.values ? spec.values.includes(raw) : raw != null) ? raw : spec.fallback;
-    } catch { value = spec.onError; }
-    return { ...spec, value };
+      isSet = raw != null;
+      const v = decode(spec, raw);
+      value = v === undefined ? resolve(spec.fallback) : v;
+    } catch {
+      value = resolve(spec.onError);
+    }
+    // A TURN entry carries `username`/`credential`. WHETHER one is configured is a fine
+    // thing for a screen to show; its contents are not, and a registry that printed them
+    // would have turned "list the settings" into a credential dump.
+    return spec.secret ? { ...spec, value: undefined, isSet } : { ...spec, value, isSet };
   });
 }
 

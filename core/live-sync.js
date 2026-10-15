@@ -25,6 +25,7 @@
  * behavior is user-gated.
  */
 
+import { defineSetting } from './settings.js';
 import { getAssets } from './assets.js';
 import { LiveDoc } from './live-protocol.js';
 import { PresenceRoom } from './presence.js';
@@ -34,8 +35,7 @@ import { debug } from './debug.js';
  * override or extend via {@link setTurnConfig}. */
 export const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
-const TURN_KEY = 'crosstab.turn';
-const RELAY_KEY = 'crosstab.relays';
+
 
 /** MQTT-over-WSS brokers for Trystero rendezvous. Trystero's built-in list includes
  * some flaky/dead public brokers (notably `mqtt.eclipseprojects.io`) that spam the
@@ -48,23 +48,52 @@ export const DEFAULT_RELAYS = [
   'wss://broker.hivemq.com:8884/mqtt',
 ];
 
+/**
+ * The relay list and the TURN config as declared settings (keys unchanged), so an
+ * institution pointing CrossTab at its own infrastructure can be shown what it is set to.
+ *
+ * The TURN config is marked `secret`: an entry is `{urls, username?, credential?}`, and
+ * `listSettings` must be able to say that a TURN server is configured without printing
+ * the credential to whatever renders it.
+ */
+const relaySetting = defineSetting({
+  id: 'collab.relays',
+  key: 'crosstab.relays',
+  json: true,
+  coerce: (v) => (Array.isArray(v) && v.length ? v : undefined),
+  fallback: DEFAULT_RELAYS, // the same shared array callers have always received
+  label: 'Rendezvous relays',
+  group: 'Collaboration',
+  hint: 'MQTT brokers used to find a collaborator. Override to use your institution\'s own.',
+});
+
+const turnSetting = defineSetting({
+  id: 'collab.turn',
+  key: 'crosstab.turn',
+  json: true,
+  coerce: (v) => (v && typeof v === 'object' ? v : undefined),
+  fallback: null,
+  secret: true,
+  label: 'TURN server',
+  group: 'Collaboration',
+  hint: 'A relay for peers that cannot connect directly. Holds a credential.',
+});
+
 /** The MQTT relay URLs to use (persisted override, else the curated default). */
 export function getRelayUrls() {
-  try {
-    const raw = globalThis.localStorage?.getItem(RELAY_KEY);
-    const a = raw ? JSON.parse(raw) : null;
-    return Array.isArray(a) && a.length ? a : DEFAULT_RELAYS;
-  } catch {
-    return DEFAULT_RELAYS;
-  }
+  return relaySetting.get();
 }
 
-/** Persist (or clear, with null/[]) the user/institution MQTT relay list. */
+/**
+ * Persist (or clear, with null/[]) the user/institution MQTT relay list.
+ *
+ * An empty list CLEARS the override rather than storing emptiness — "use no relays" is
+ * not a thing anyone can mean, and a stored `[]` would read as one. That is a rule about
+ * relays rather than about storage, so it is said here and not inside the setting.
+ */
 export function setRelayUrls(urls) {
-  try {
-    if (Array.isArray(urls) && urls.length) globalThis.localStorage?.setItem(RELAY_KEY, JSON.stringify(urls));
-    else globalThis.localStorage?.removeItem(RELAY_KEY);
-  } catch { /* storage unavailable — non-fatal */ }
+  if (Array.isArray(urls) && urls.length) relaySetting.set(urls);
+  else relaySetting.clear();
 }
 
 /**
@@ -89,20 +118,13 @@ export function buildIceServers(turn) {
 
 /** Read the persisted TURN config (an institution's relay), or null. */
 export function getTurnConfig() {
-  try {
-    const raw = globalThis.localStorage?.getItem(TURN_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  return turnSetting.get();
 }
 
 /** Persist (or clear, with null) the user/institution TURN config. */
 export function setTurnConfig(cfg) {
-  try {
-    if (cfg) globalThis.localStorage?.setItem(TURN_KEY, JSON.stringify(cfg));
-    else globalThis.localStorage?.removeItem(TURN_KEY);
-  } catch { /* storage unavailable — non-fatal */ }
+  if (cfg) turnSetting.set(cfg);
+  else turnSetting.clear();
 }
 
 let _trystero = null;

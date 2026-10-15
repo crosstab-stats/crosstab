@@ -27,6 +27,10 @@ import { defineSetting, listSettings, settingIds } from '../core/settings.js';
 import { loadVarOrder, saveVarOrder, loadVarDisplay, saveVarDisplay } from '../core/var-order.js';
 import { storedScreenMode, saveScreenMode, autoNoteSeen, dismissAutoNote } from '../core/screen-mode.js';
 import { isDebug, setDebug } from '../core/debug.js';
+import { getEncryptionPolicy, setEncryptionPolicy, defaultEncrypt } from '../core/at-rest.js';
+import {
+  getRelayUrls, setRelayUrls, getTurnConfig, setTurnConfig, DEFAULT_RELAYS,
+} from '../core/live-sync.js';
 
 /** A `localStorage` stand-in; `explode` makes every call throw, as private mode does. */
 function fakeStorage(seed = {}, { explode = false } = {}) {
@@ -66,6 +70,9 @@ test('every setting still uses the key its module shipped with', () => {
   assert.equal(byId['screen.mode'].key, 'crosstab.screen-mode');
   assert.equal(byId['screen.autoNoteSeen'].key, 'crosstab.screen-mode.noted');
   assert.equal(byId['debug.logging'].key, 'crosstab_debug');
+  assert.equal(byId['privacy.encryption'].key, 'crosstab.encryption-policy');
+  assert.equal(byId['collab.relays'].key, 'crosstab.relays');
+  assert.equal(byId['collab.turn'].key, 'crosstab.turn');
 });
 
 test('a setting cannot collide with another by id or by key', () => {
@@ -216,10 +223,143 @@ test('state, caches and credentials are NOT settings', () => {
     'crosstab.dropbox.config', 'crosstab.identity', 'crosstab.launcher.seen',
     'crosstab.oauth.result', 'crosstab.offline.resume',
   ]) {
+    // The encryption policy and the collab config are NOT in this list: they are
+    // settings, and they are declared (owner, 2026-10-15). Dropbox stays out because it
+    // is a credential store rather than a preference.
     assert.ok(!keys.includes(notASetting), `${notASetting} must not be a declared setting`);
   }
 });
 
 test('every declared id is namespaced, so a screen can group them', () => {
   for (const id of settingIds()) assert.match(id, /^[a-z]+\.[a-zA-Z]+$/, id);
+});
+
+// =============================================================================
+// Shaped settings — stored as JSON, with their own write rules
+// =============================================================================
+
+test('the encryption policy merges what is stored OVER the defaults', () => {
+  // The stored value may be a partial. A target nobody has ruled on keeps following the
+  // default — including after the default changes — which a stored full snapshot would
+  // have quietly frozen.
+  withStorage(fakeStorage({ 'crosstab.encryption-policy': JSON.stringify({ local: true }) }), () => {
+    assert.deepEqual(getEncryptionPolicy(), { export: true, folder: true, local: true });
+  });
+  withStorage(fakeStorage(), () => {
+    assert.deepEqual(getEncryptionPolicy(), { export: true, folder: true, local: false });
+  });
+});
+
+test('the policy a caller receives is theirs to mutate', () => {
+  // It has always been a fresh object. Handing back the frozen DEFAULTS instead would
+  // turn a stray write into a silent no-op — or a throw, in a strict-mode caller.
+  withStorage(fakeStorage(), () => {
+    const a = getEncryptionPolicy();
+    a.local = true;
+    assert.equal(getEncryptionPolicy().local, false, 'the default must not be edited in place');
+    assert.equal(defaultEncrypt('export'), true);
+  });
+});
+
+test('a corrupt policy falls back to the defaults rather than throwing', () => {
+  withStorage(fakeStorage({ 'crosstab.encryption-policy': '{not json' }), () => {
+    assert.deepEqual(getEncryptionPolicy(), { export: true, folder: true, local: false });
+  });
+  // An array is JSON, and is not a policy.
+  withStorage(fakeStorage({ 'crosstab.encryption-policy': '[1,2]' }), () => {
+    assert.deepEqual(getEncryptionPolicy(), { export: true, folder: true, local: false });
+  });
+  withStorage(fakeStorage({}, { explode: true }), () => {
+    assert.deepEqual(getEncryptionPolicy(), { export: true, folder: true, local: false });
+  });
+});
+
+test('setting the policy writes a patch merged over what was there', () => {
+  withStorage(fakeStorage(), (s) => {
+    assert.deepEqual(setEncryptionPolicy({ local: true }), { export: true, folder: true, local: true });
+    assert.deepEqual(JSON.parse(s.map.get('crosstab.encryption-policy')),
+      { export: true, folder: true, local: true });
+    setEncryptionPolicy({ export: false });
+    assert.equal(getEncryptionPolicy().local, true, 'the earlier choice must survive');
+    assert.equal(getEncryptionPolicy().export, false);
+  });
+});
+
+test('relays fall back to the curated list, and an empty override CLEARS', () => {
+  withStorage(fakeStorage(), (s) => {
+    assert.deepEqual(getRelayUrls(), DEFAULT_RELAYS);
+    setRelayUrls(['wss://mine.example.edu/mqtt']);
+    assert.deepEqual(getRelayUrls(), ['wss://mine.example.edu/mqtt']);
+    // "Use no relays" is not something anyone can mean, so [] removes the override
+    // rather than storing emptiness.
+    setRelayUrls([]);
+    assert.equal(s.map.has('crosstab.relays'), false);
+    assert.deepEqual(getRelayUrls(), DEFAULT_RELAYS);
+    setRelayUrls(['wss://a']);
+    setRelayUrls(null);
+    assert.deepEqual(getRelayUrls(), DEFAULT_RELAYS);
+  });
+});
+
+test('a stored relay list that is not a non-empty array is ignored', () => {
+  for (const junk of ['[]', '"wss://a"', '{"a":1}', 'null', 'not json']) {
+    withStorage(fakeStorage({ 'crosstab.relays': junk }), () => {
+      assert.deepEqual(getRelayUrls(), DEFAULT_RELAYS, junk);
+    });
+  }
+});
+
+test('the TURN config round-trips and clears', () => {
+  withStorage(fakeStorage(), (s) => {
+    assert.equal(getTurnConfig(), null);
+    setTurnConfig({ urls: 'turn:relay.example.edu', username: 'u', credential: 'p' });
+    assert.equal(getTurnConfig().urls, 'turn:relay.example.edu');
+    setTurnConfig(null);
+    assert.equal(s.map.has('crosstab.turn'), false);
+    assert.equal(getTurnConfig(), null);
+  });
+  withStorage(fakeStorage({ 'crosstab.turn': 'not json' }), () => {
+    assert.equal(getTurnConfig(), null, 'a corrupt entry must not throw at connect time');
+  });
+});
+
+// =============================================================================
+// The secret
+// =============================================================================
+
+test('listSettings never prints the TURN credential', () => {
+  // The whole point of the registry is that a screen can enumerate it. A TURN entry
+  // holds a username and a credential, so enumerating must not mean disclosing.
+  withStorage(fakeStorage({
+    'crosstab.turn': JSON.stringify({ urls: 'turn:x', username: 'u', credential: 'SECRET' }),
+  }), () => {
+    const row = listSettings().find((r) => r.id === 'collab.turn');
+    assert.equal(row.secret, true);
+    assert.equal(row.value, undefined, 'a secret setting must not report its value');
+    assert.equal(row.isSet, true, 'but a screen may still say that one is configured');
+    assert.ok(!JSON.stringify(listSettings()).includes('SECRET'),
+      'the credential must not appear anywhere in the listing');
+  });
+  withStorage(fakeStorage(), () => {
+    assert.equal(listSettings().find((r) => r.id === 'collab.turn').isSet, false);
+  });
+});
+
+test('isSet distinguishes a chosen value from a default', () => {
+  // What a screen needs to show "Default" beside an untouched setting rather than
+  // implying the user picked it.
+  withStorage(fakeStorage({ 'crosstab.varlist.sort': 'name' }), () => {
+    const byId = Object.fromEntries(listSettings().map((r) => [r.id, r]));
+    assert.equal(byId['varlist.order'].isSet, true);
+    assert.equal(byId['varlist.display'].isSet, false);
+    assert.equal(byId['varlist.display'].value, 'label', 'still reports the effective value');
+  });
+});
+
+test('a shaped setting reports its effective value to a screen', () => {
+  withStorage(fakeStorage({ 'crosstab.encryption-policy': JSON.stringify({ local: true }) }), () => {
+    const row = listSettings().find((r) => r.id === 'privacy.encryption');
+    assert.deepEqual(row.value, { export: true, folder: true, local: true });
+    assert.equal(row.group, 'Privacy');
+  });
 });
