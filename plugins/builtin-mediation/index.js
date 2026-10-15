@@ -135,7 +135,7 @@ export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNa
     pe <- pe[match(ord, pe$label), ]
     list(label = pe$label, est = pe$est, se = pe$se, z = pe$z, p = pe$pvalue,
          lo = pe$ci.lower, hi = pe$ci.upper, n = lavInspect(fit, "nobs"))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const lab = r.strs('label'), est = r.nums('est'), sev = r.nums('se'), z = r.nums('z'), p = r.nums('p'), lo = r.nums('lo'), hi = r.nums('hi');
   const nameMap = {
     a: `a: ${shortLabel(meta, xName)} → ${shortLabel(meta, mName)}`,
@@ -189,7 +189,7 @@ export async function moderation(app, { y: yName, x: xName, w: wName, covs: covN
     list(terms = rownames(co), est = co[, 1], se = co[, 2], t = co[, 3], p = co[, 4],
          levels = lv, wlabels = c("Low (−1 SD)", "Mean", "High (+1 SD)"),
          slope = slope, sslope = sse, st = tt, sp = pp, df = df, n = nrow(d))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), sev = r.nums('se'), tv = r.nums('t'), p = r.nums('p');
 
   await app.results.appendTable(
@@ -217,12 +217,6 @@ export async function moderation(app, { y: yName, x: xName, w: wName, covs: covN
 }
 
 // --- helpers -----------------------------------------------------------------
-
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}
 
 function shortLabel(meta, name) {
   return meta.get(name)?.label || name;

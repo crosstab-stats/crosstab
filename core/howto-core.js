@@ -208,5 +208,17 @@ export const CORE_HOWTO = {
       keywords: ['expression', 'sql', 'duckdb', 'quoting', 'backtick', 'string', 'number', 'name', 'spaces'],
       seeAlso: ['syntax-basics'],
     },
+    // In the Syntax category on purpose (#176's loose end). The guide documented the
+    // grammar and every command and said nothing about the script being a FILE you can
+    // send someone — so a reader who opened it to answer "how do I give this to my Stata
+    // colleague" found fifteen commands and no mention that the button exists.
+    {
+      id: 'syntax-save-load',
+      title: 'Save the script, or open one — .ctscript, Stata .do, SPSS .sps, R',
+      category: 'Syntax',
+      keywords: ['export script', 'import script', 'ctscript', 'do file', 'stata', 'sps',
+        'spss syntax', 'r script', 'save script', 'share', 'colleague', 'reproduce', 'send'],
+      seeAlso: ['syntax-basics', 'history-and-undo', 'export-data'],
+    },
   ],
 };

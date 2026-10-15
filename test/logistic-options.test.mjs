@@ -19,6 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { manifest, run } from '../plugins/builtin-logistic/index.js';
+import { fakeWebr } from './webr-fake.mjs';
 
 const FIXTURE = JSON.parse(
   readFileSync(new URL('./logistic-r-result.fixture.json', import.meta.url), 'utf8'),
@@ -35,12 +36,12 @@ async function invoke(inputs, { result = FIXTURE } = {}) {
   const out = { rCode: '', tables: [], texts: [], charts: [], errors: [] };
   const app = {
     data: { getVariableMeta: async () => META },
-    webr: {
+    webr: fakeWebr({
       run: async (code) => {
         out.rCode = code;
         return { result };
       },
-    },
+    }),
     results: {
       appendTable: async (t, o) => { out.tables.push({ ...t, caption: o?.caption ?? '' }); },
       appendText: async (s) => { out.texts.push(s); },
@@ -111,7 +112,7 @@ test('a factor predictor is dummy-coded without being declared', async () => {
         { name: 'REGION', type: 'factor', label: 'Region' },
       ],
     },
-    webr: { run: async (code) => { out.rCode = code; return { result: FIXTURE }; } },
+    webr: fakeWebr({ run: async (code) => { out.rCode = code; return { result: FIXTURE }; } }),
     results: {
       appendTable: async () => {}, appendText: async () => {},
       appendChart: async () => {}, appendError: async () => {},

@@ -33,16 +33,17 @@ import * as nonparametric from '../plugins/builtin-nonparametric/index.js';
 import * as bayesian from '../plugins/builtin-bayesian/index.js';
 import * as bootstrap from '../plugins/builtin-bootstrap/index.js';
 import * as categorical from '../plugins/builtin-categorical/index.js';
+import { fakeWebr } from './webr-fake.mjs';
 
 /** Collect the R source a plugin emits, plus whatever it printed. */
 function harness(meta, result) {
   const out = { rCode: '', tables: [], texts: [], errors: [], charts: [] };
   const app = {
     data: { getVariableMeta: async () => meta },
-    webr: {
+    webr: fakeWebr({
       run: async (code) => { out.rCode += code; return { result }; },
       installPackages: async () => {},
-    },
+    }),
     results: {
       appendTable: async (t, o) => { out.tables.push({ ...t, caption: o?.caption ?? '' }); },
       appendText: async (s) => { out.texts.push(s); },

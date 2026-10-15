@@ -1100,6 +1100,24 @@ export async function boot(mounts) {
     command: () => historyPanel.toggle(),
   });
 
+  // File ▸ Export analysis script… (#176's loose end). The chooser already existed, on
+  // the History panel's toolbar — which is the wrong place to be the ONLY place: someone
+  // who wants to hand their steps to a Stata colleague opens the File menu, finds
+  // "Export data…" listing data formats, and concludes CrossTab cannot do it.
+  //
+  // Deliberately NOT a format inside that picker: it lists DATA formats, and a script is
+  // not a dataset ([[unified-import-export-picker]]). It is its own item, next to it.
+  //
+  // Import stays on the panel, and the asymmetry is the point — a script import loads a
+  // DRAFT to review and Run, so it only means anything with the editor in front of you.
+  menus.register({
+    id: 'core:script-export',
+    path: ['File'],
+    label: 'Export analysis script…',
+    order: 32,
+    command: () => historyPanel.exportScript(),
+  });
+
   // The reactive half of #151. The swap path offers this automatically, but importing to
   // a NEW dataset detaches nothing, so nothing prompts — and that is exactly what someone
   // does when they want to keep the old data as a backup. Same dialog either way.

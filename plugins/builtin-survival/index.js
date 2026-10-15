@@ -138,7 +138,7 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, eve
          eventLevel = attr(.st, "event"),
          curveT = sf$time, curveS = sf$surv, curveLo = lo, curveHi = hi,
          curveCens = sf$n.censor, curveStratum = stratum, curveNames = stratumNames)`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const groups = r.strs('groups'), nn = r.nums('n'), ev = r.nums('events'), med = r.nums('median'), lcl = r.nums('lcl'), ucl = r.nums('ucl');
 
   await app.results.appendTable(
@@ -205,7 +205,7 @@ export async function cox(app, { time: timeName, status: statusName, event, pred
          zphTerms = if (is.null(zt)) character(0) else rownames(zt),
          eventLevel = attr(.st, "event"),
          zphChi = if (is.null(zt)) numeric(0) else zt[, "chisq"], zphP = if (is.null(zt)) numeric(0) else zt[, "p"])`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), coef = r.nums('coef'), hr = r.nums('hr'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p'), lo = r.nums('lo'), hi = r.nums('hi');
 
   await app.results.appendTable(
@@ -316,8 +316,3 @@ function kmCurves(r, labelFor) {
   return series.filter((sv) => sv.points.length > 1);
 }
 
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}

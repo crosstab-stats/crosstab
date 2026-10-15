@@ -124,7 +124,7 @@ export async function varModel(app, { series, lag, type, horizon }) {
          coefRows = unlist(lapply(co, function(m) nrow(m))),
          coefTerms = unlist(lapply(co, rownames)),
          gcF = gcF, gcP = gcP, svg = svg)`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const disp = r.strs('dispnames');
   const p = r.num1('p');
 
@@ -176,12 +176,6 @@ export async function varModel(app, { series, lag, type, horizon }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}
 
 /** Map a VAR coefficient term like "V1.l1" / "const" / "trend" to a readable label. */
 function varTerm(term, disp, varcols) {

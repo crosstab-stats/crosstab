@@ -131,7 +131,7 @@ export async function quantile(app, { y: yName, ivs: ivNames, taus }) {
     est <- sapply(ss, function(s) s$coefficients[, 1]); pv <- sapply(ss, function(s) s$coefficients[, 4])
     if (is.null(dim(est))) { est <- t(as.matrix(est)); pv <- t(as.matrix(pv)) }
     list(terms = rownames(ss[[1]]$coefficients), taus = taus, est = as.numeric(est), p = as.numeric(pv), n = nrow(d))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), taus2 = r.nums('taus'), est = r.nums('est'), p = r.nums('p');
   const nT = terms.length;
 
@@ -172,7 +172,7 @@ export async function tobit(app, { y: yName, ivs: ivNames, left, right }) {
     nRight <- if (is.finite(${R != null ? R : 'Inf'})) sum(d$.y >= ${R != null ? R : 'Inf'}) else 0
     list(terms = rownames(co), est = co[, 1], se = co[, 2], z = co[, 3], p = co[, 4],
          n = nrow(d), nLeft = nLeft, nRight = nRight)`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p');
 
   await app.results.appendTable(
@@ -212,7 +212,7 @@ export async function heckman(app, { y: yName, outIv: outNames, sel: selName, se
     co <- coef(summary(fit))
     list(terms = rownames(co), est = co[, 1], se = co[, 2], t = co[, 3], p = co[, 4],
          nSel = ${nSel}, nOut = ${nOut}, n = nrow(d))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), t = r.nums('t'), p = r.nums('p');
   const section = (i) => (i < nSel ? 'Selection: ' : i < nSel + nOut ? 'Outcome: ' : '');
 
@@ -230,12 +230,6 @@ export async function heckman(app, { y: yName, outIv: outNames, sel: selName, se
 }
 
 // --- helpers -----------------------------------------------------------------
-
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}
 
 function withStars(b, p) {
   if (!Number.isFinite(b)) return '—';

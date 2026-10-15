@@ -117,7 +117,7 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
          reGrp = vc$grp, reTerm = vc$var1, reVar = vc$vcov, reSd = vc$sdcor,
          icc = gvar / (gvar + rvar), nobs = nobs(fit), ngrp = as.numeric(ngrps(fit)),
          aic = AIC(fit), bic = BIC(fit))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), df = r.nums('df'), tv = r.nums('t'), p = r.nums('p');
 
   await app.results.appendTable(
@@ -177,7 +177,7 @@ export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: g
          z = co[, "z value"], p = co[, "Pr(>|z|)"],
          gvar = gvar, icc = gvar / (gvar + (pi^2) / 3), nobs = nobs(fit), ngrp = as.numeric(ngrps(fit)),
          ypos = attr(.yb, "pos"))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p');
 
   await app.results.appendTable(
@@ -221,8 +221,3 @@ const BIN01_R = `bin01 <- function(v, want = NULL){ ch <- as.character(v); u <- 
   pos <- if (!is.null(want) && want %in% u) want else if (identical(u, c("0","1"))) "1" else u[2]
   structure(as.integer(ch == pos), pos = pos) }`;
 
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}

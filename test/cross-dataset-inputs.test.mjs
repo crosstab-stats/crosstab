@@ -194,11 +194,15 @@ test('a qualified reference is quoted safely into R', () => {
 // =============================================================================
 
 test('frequencies’ own lookup shape works on a list', () => {
-  // `x <- vars[[name]]` — the plugin indexes by the reference it was handed, which a named
+  // `vars[[name]]` — the plugin indexes by the reference it was handed, which a named
   // list supports exactly as a data.frame does. This is why the flagship case (one multi-select
   // spanning two datasets) needs no plugin change at all.
+  //
+  // The lookup moved from a statement (`x <- vars[[name]]`) into an argument when the
+  // plugin began measuring every variable in one R call; what matters here is that it is
+  // still `[[reference]]` against `vars` and not, say, a column index.
   const src = readFileSync('plugins/builtin-frequencies/index.js', 'utf8');
-  assert.match(src, /x <- vars\[\[\$\{rStr\(name\)\}\]\]/,
+  assert.match(src, /vars\[\[\$\{rStr\(name\)\}\]\]/,
     'if this lookup changed shape, the list binding needs revisiting');
 });
 

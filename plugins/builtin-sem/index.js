@@ -156,7 +156,7 @@ export async function cfa(app, { items, factorName }) {
          cfi = unname(fm["cfi"]), tli = unname(fm["tli"]), rmsea = unname(fm["rmsea"]),
          rlo = unname(fm["rmsea.ci.lower"]), rhi = unname(fm["rmsea.ci.upper"]), srmr = unname(fm["srmr"]),
          n = lavInspect(fit, "nobs"))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
 
   await app.results.appendTable(
     {
@@ -212,7 +212,7 @@ export async function sem(app, { vars, model }) {
          chisq = unname(fm["chisq"]), df = unname(fm["df"]), pval = unname(fm["pvalue"]),
          cfi = unname(fm["cfi"]), tli = unname(fm["tli"]), rmsea = unname(fm["rmsea"]), srmr = unname(fm["srmr"]),
          n = lavInspect(fit, "nobs"))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
 
   await app.results.appendTable(
     {
@@ -380,12 +380,6 @@ export async function growth(app, { waves, quadratic }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}
 
 function sanitizeName(s) {
   const n = String(s ?? '').trim().replace(/[^A-Za-z0-9_]/g, '');

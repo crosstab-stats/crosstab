@@ -34,6 +34,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { gmm, lca, lpa, manifest } from '../plugins/builtin-mixture/index.js';
+import { fakeWebr } from './webr-fake.mjs';
 
 /** An R list in the shape webR hands back. */
 const rList = (obj) => ({
@@ -50,7 +51,7 @@ async function invoke(fn, inputs, result, opts = {}) {
       getColumns: async () => opts.columns ?? {},
       create: async (d) => { out.created.push(d); },
     },
-    webr: { run: async (code) => { out.rCode = code; return { result }; } },
+    webr: fakeWebr({ run: async (code) => { out.rCode = code; return { result }; } }),
     results: {
       beginAnalysis() {}, endAnalysis() {},
       appendTable: async (t, o) => out.tables.push({ ...t, caption: o?.caption ?? '' }),

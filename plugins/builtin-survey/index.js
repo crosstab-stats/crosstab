@@ -159,7 +159,7 @@ export async function means(app, { vars, weight, strata, cluster }) {
     list(terms = nm, mean = as.numeric(coef(m)), se = as.numeric(SE(m)),
          lo = as.numeric(ci[, 1]), hi = as.numeric(ci[, 2]),
          uw = sapply(nm, function(v) mean(d[[v]], na.rm = TRUE)), n = nrow(d))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), mean = r.nums('mean'), se = r.nums('se'), lo = r.nums('lo'), hi = r.nums('hi'), uw = r.nums('uw');
   await app.results.appendTable(
     {
@@ -199,7 +199,7 @@ export async function crosstab(app, { rowvar, colvar, weight, strata, cluster })
          rowTotals = as.numeric(rowSums(tab)), colTotals = as.numeric(colSums(tab)), total = sum(tab),
          Fstat = unname(ch$statistic), ndf = unname(ch$parameter[1]), ddf = unname(ch$parameter[2]),
          p = ch$p.value, n = nrow(d))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const rl = r.strs('rowLevels'), cl = r.strs('colLevels'), counts = r.nums('counts');
   const rt = r.nums('rowTotals'), ct = r.nums('colTotals');
   const lv = (m, code) => m?.valueLabels?.[code] ?? code;
@@ -258,7 +258,7 @@ export async function regression(app, { dv, ivs, yes, family, weight, strata, cl
     list(terms = rownames(co), est = co[, 1], se = co[, 2], tval = co[, 3], p = co[, 4],
          lo = ci[, 1], hi = ci[, 2], n = nrow(d),
          pos = if (exists(".pos")) .pos else NA_character_)`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), tv = r.nums('tval'), p = r.nums('p'), lo = r.nums('lo'), hi = r.nums('hi');
   const cols = logistic
     ? ['', 'B', 'Std. Error', 't', 'Sig.', 'Odds ratio', '95% CI (OR)']
@@ -304,8 +304,3 @@ function designCaption(meta, weight, strata, cluster) {
   return parts.join(', ');
 }
 
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}

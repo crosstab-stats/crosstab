@@ -123,7 +123,7 @@ export async function ancova(app, { y: yName, factors: factorNames, covs: covNam
     list(terms = fl, ss = a3[fl, "Sum Sq"], df = a3[fl, "Df"], F = a3[fl, "F value"], p = a3[fl, "Pr(>F)"],
          peta = as.numeric(petasq), emmLab = emmLab, emm = emm$emmean, emmSe = emm$SE,
          emmLo = emm$lower.CL, emmHi = emm$upper.CL, n = nrow(d))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), ss = r.nums('ss'), df = r.nums('df'), F = r.nums('F'), p = r.nums('p'), peta = r.nums('peta');
 
   await app.results.appendTable(
@@ -174,7 +174,7 @@ export async function mixedAnova(app, { within: withinNames, between: betweenNam
     at <- aw$anova_table
     list(terms = rownames(at), numdf = at[, "num Df"], dendf = at[, "den Df"], F = at[, "F"],
          ges = at[, "ges"], p = at[, "Pr(>F)"], nsub = nb, k = k)`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), ndf = r.nums('numdf'), ddf = r.nums('dendf'), F = r.nums('F'), ges = r.nums('ges'), p = r.nums('p');
 
   await app.results.appendTable(
@@ -191,12 +191,6 @@ export async function mixedAnova(app, { within: withinNames, between: betweenNam
 }
 
 // --- helpers -----------------------------------------------------------------
-
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}
 
 function ancTerm(term, factorNames, covNames, meta) {
   if (term === 'Residuals') return 'Residuals';

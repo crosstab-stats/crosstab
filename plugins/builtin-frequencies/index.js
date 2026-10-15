@@ -200,18 +200,38 @@ export async function run(app, { vars, statistics, weight }) {
   // Compute every variable first, then print: the Statistics table belongs ABOVE
   // the frequency tables (SPSS's order), but it can only be assembled once every
   // column has been measured.
+  //
+  // ONE R call for every variable (not one each): the measurement is defined once and
+  // then applied per column, so the cost of a wide Frequencies is the columns rather
+  // than the round-trips. A failure inside a column is reported per column, below.
   const done = [];
-  for (const name of vars) {
-    const m = meta.get(name);
-    try {
-      const { result } = await app.webr.run(rFor(name, m, weight));
-      if (!result) throw new Error('R returned no result');
-      done.push({ name, meta: m, data: normalizeResult(result) });
-    } catch (err) {
-      await app.results.appendError(`Frequencies for "${name}": ${err.message}`);
-      console.error(err);
-    }
+  const errors = [];
+  let batch;
+  try {
+    batch = unpackR(await app.webr.runOrThrow(`
+      ${freqFnR(weight)}
+      out <- list()
+      ${vars.map((name, i) => freqCallR(name, meta.get(name), i)).join('\n      ')}
+      out`));
+  } catch (err) {
+    await app.results.appendError(`Frequencies: ${err.message}`);
+    console.error(err);
+    return;
   }
+  vars.forEach((name, i) => {
+    const raw = batch.raw(slotFor(i));
+    const one = unpackR(raw);
+    // `.error` is the R-side tryCatch reporting one column; an absent slot means the
+    // statement never ran, which is a bug here rather than a property of the data.
+    const failure = one.has('.error') ? one.str1('.error')
+      : raw == null ? 'no result for this variable' : null;
+    if (failure) {
+      errors.push(`Frequencies for "${name}": ${failure}`);
+      return;
+    }
+    done.push({ name, meta: meta.get(name), data: normalizeResult(raw) });
+  });
+  for (const msg of errors) await app.results.appendError(msg);
   if (!done.length) return;
 
   if (wanted.length) {
@@ -246,8 +266,13 @@ function pickStats(chosen) {
 // --- R ------------------------------------------------------------------------
 
 /**
- * The R for one variable: fold its designated missing codes to NA, tabulate, and
- * measure it.
+ * The measurement, as an R function — defined ONCE for the whole run.
+ *
+ * Every variable used to get its own `webr.run`, so a 20-variable Frequencies paid
+ * twenty round-trips to re-send `WEIGHTED_R` and re-measure the same weight vector.
+ * The body below is the old per-variable script verbatim; what changed is that the
+ * missing codes arrive as arguments instead of being pasted into the source, which is
+ * what lets one definition serve every column.
  *
  * The missing fold is written out here rather than taken from the host because
  * this action sets `keepMissing` — it has to see the raw codes to *count* them.
@@ -255,27 +280,18 @@ function pickStats(chosen) {
  * gives: an unenumerable `(LO THRU 0)` span otherwise contributes only its two
  * endpoints, and every value between them is silently counted as real data.
  */
-function rFor(name, meta, weight) {
-  const codes = (meta?.missingValues ?? []).map(Number).filter(Number.isFinite);
-  const ranges = (meta?.missingRanges ?? [])
-    .map((r) => (Array.isArray(r) ? [Number(r[0]), Number(r[1])] : [Number(r?.lo), Number(r?.hi)]))
-    .filter(([lo, hi]) => Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo);
-
-  // Fold on a numeric VIEW of the column, so a code matches whether the column
-  // arrived as a double or as character-coded labels.
-  const folds = [];
-  if (codes.length || ranges.length) {
-    folds.push(`.v <- suppressWarnings(as.numeric(as.character(x)))`);
-    if (codes.length) folds.push(`x[!is.na(.v) & .v %in% c(${codes.join(', ')})] <- NA`);
-    for (const [lo, hi] of ranges) {
-      folds.push(`x[!is.na(.v) & .v >= ${lo} & .v <= ${hi}] <- NA`);
-    }
-  }
-
+function freqFnR(weight) {
   return `
     ${WEIGHTED_R}
-    x <- vars[[${rStr(name)}]]
-    ${folds.join('\n    ')}
+    .freq1 <- function(x, codes, mlo, mhi) {
+    # Fold on a numeric VIEW of the column, so a code matches whether the column
+    # arrived as a double or as character-coded labels. Skipped entirely when the
+    # variable designates nothing, as the generated source used to be.
+    if (length(codes) || length(mlo)) {
+      .v <- suppressWarnings(as.numeric(as.character(x)))
+      if (length(codes)) x[!is.na(.v) & .v %in% codes] <- NA
+      for (.i in seq_along(mlo)) x[!is.na(.v) & .v >= mlo[.i] & .v <= mhi[.i]] <- NA
+    }
     # A case the weight cannot score is not a case with a missing VALUE — it has
     # no size at all — so it leaves the table entirely rather than landing in the
     # Missing row and inflating the total.
@@ -325,8 +341,34 @@ function rFor(name, meta, weight) {
       mode_value = if (length(mvals)) mvals[1] else NA_character_,
       mode_ties = length(mvals),
       n_numeric = length(xn)
-    )`;
+    )
+    }`;
 }
+
+/**
+ * One variable's call into {@link freqFnR}'s function.
+ *
+ * Keyed by POSITION (`v1`, `v2`, …) rather than by variable name: the key is only a
+ * handle for pairing the result back up, and a positional one cannot be mangled by R's
+ * name rules or collide with anything.
+ *
+ * Each call is wrapped in `tryCatch` so one unusable column still reports itself and the
+ * rest of the run proceeds — the per-variable `try/catch` the JS loop used to provide,
+ * which batching would otherwise have turned into "one bad variable, no tables at all".
+ */
+function freqCallR(name, meta, i) {
+  const codes = (meta?.missingValues ?? []).map(Number).filter(Number.isFinite);
+  const ranges = (meta?.missingRanges ?? [])
+    .map((r) => (Array.isArray(r) ? [Number(r[0]), Number(r[1])] : [Number(r?.lo), Number(r?.hi)]))
+    .filter(([lo, hi]) => Number.isFinite(lo) && Number.isFinite(hi) && hi >= lo);
+  const vec = (xs) => `c(${xs.join(', ')})`;
+  return `out[[${rStr(slotFor(i))}]] <- tryCatch(
+      .freq1(vars[[${rStr(name)}]], ${vec(codes)}, ${vec(ranges.map(([lo]) => lo))}, ${vec(ranges.map(([, hi]) => hi))}),
+      error = function(e) list(.error = conditionMessage(e)))`;
+}
+
+/** The result key for the i-th requested variable. */
+const slotFor = (i) => `v${i + 1}`;
 
 // --- tables -------------------------------------------------------------------
 

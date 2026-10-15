@@ -134,7 +134,7 @@ async function invoke(fn, inputs, result, meta = []) {
   const out = { charts: [], tables: [], texts: [], errors: [], plots: 0, rCode: '' };
   const app = {
     data: { getVariableMeta: async () => meta },
-    webr: { run: async (code) => { out.rCode = code; return { result }; } },
+    webr: fakeWebr({ run: async (code) => { out.rCode = code; return { result }; } }),
     results: {
       appendChart: async (model) => { out.charts.push(model); },
       appendTable: async (t, o) => { out.tables.push({ ...t, caption: o?.caption ?? '' }); },
@@ -291,3 +291,4 @@ test('neither plugin declares svglite or bakes an SVG', async () => {
     assert.deepEqual(mod.manifest.rPackages, [], `${id} still declares R packages`);
   }
 });
+import { fakeWebr } from './webr-fake.mjs';

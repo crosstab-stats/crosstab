@@ -117,7 +117,7 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
     out$mrZ <- mr$zval; out$mrP <- mr$pval
     out$QM <- mr$QM; out$QMdf <- mr$m; out$QMp <- mr$QMp; out$I2res <- mr$I2` : ''}
     out`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
 
   await app.results.appendTable(
     {
@@ -194,12 +194,6 @@ export async function metaAnalysis(app, { yi: yiName, prec: precName, precType, 
 }
 
 // --- helpers -----------------------------------------------------------------
-
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}
 
 function metaRegTerm(term, mods, meta) {
   if (term === 'intrcpt') return '(Intercept)';

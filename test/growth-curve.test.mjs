@@ -31,6 +31,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { growth, manifest } from '../plugins/builtin-sem/index.js';
+import { fakeWebr } from './webr-fake.mjs';
 
 const rList = (obj) => ({
   names: Object.keys(obj),
@@ -58,7 +59,7 @@ async function invoke(inputs, result, meta = META) {
   const out = { rCode: '', tables: [], texts: [], errors: [] };
   const app = {
     data: { getVariableMeta: async () => meta },
-    webr: { run: async (code) => { out.rCode = code; return { result }; } },
+    webr: fakeWebr({ run: async (code) => { out.rCode = code; return { result }; } }),
     results: {
       beginAnalysis() {}, endAnalysis() {},
       appendTable: async (t, o) => out.tables.push({ ...t, caption: o?.caption ?? '' }),

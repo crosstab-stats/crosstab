@@ -143,7 +143,7 @@ export async function did(app, { y: yName, treat: treatName, treated, post: post
     rn <- rownames(ctab)
     list(terms = rn, est = ctab[, 1], se = ctab[, 2], t = ctab[, 3], p = ctab[, 4],
          n = nrow(d), iIdx = which(rn == ".t:.p"), tpos = .tpos, ppos = .ppos)`;
-  const r = flat(await runR(app, rCode, [bin01R(), ].join('\n')));
+  const r = flat(await app.webr.runOrThrow([bin01R(), rCode].join('\n')));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), tv = r.nums('t'), p = r.nums('p');
   const iIdx = r.num1('iIdx') - 1;
 
@@ -186,7 +186,7 @@ export async function rdd(app, { y: yName, run: runName, cutoff, bw }) {
     list(labels = rownames(rd$coef), coef = rd$coef[, 1], se = rd$se[, 1], z = rd$z[, 1], p = rd$pv[, 1],
          ciL = rd$ci[, 1], ciU = rd$ci[, 2], h = rd$bws[1, 1], nLeft = rd$N_h[1], nRight = rd$N_h[2],
          order = rd$p, kernel = rd$kernel)`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const labels = r.strs('labels'), coef = r.nums('coef'), se = r.nums('se'), z = r.nums('z'), p = r.nums('p'), ciL = r.nums('ciL'), ciU = r.nums('ciU');
 
   await app.results.appendTable(
@@ -245,7 +245,7 @@ export async function matching(app, { y: yName, treat: treatName, treated, covs:
     list(att = ctab[".t", 1], se = ctab[".t", 2], t = ctab[".t", 3], p = ctab[".t", 4],
          nTreatAll = sum(d$.t == 1), nCtrlAll = sum(d$.t == 0), nMatched = nrow(md), tpos = .tpos,
          covNames = rownames(ball), smdBefore = ball[, smdCol], smdAfter = bmat[, smdCol])`;
-  const r = flat(await runR(app, rCode, bin01R()));
+  const r = flat(await app.webr.runOrThrow([bin01R(), rCode].join('\n')));
 
   await app.results.appendTable(
     {
@@ -285,13 +285,6 @@ function bin01R() {
     if (length(u) != 2) stop("indicator must have exactly two values (e.g. 0/1)")
     pos <- if (!is.null(want) && want %in% u) want else u[2]
     structure(as.integer(ch == pos), pos = pos) }`;
-}
-
-async function runR(app, rCode, prelude) {
-  const code = prelude ? `${prelude}\n${rCode}` : rCode;
-  const { result } = await app.webr.run(code);
-  if (!result) throw new Error('R returned no result');
-  return result;
 }
 
 function didLabel(term, treatName, postName, meta) {

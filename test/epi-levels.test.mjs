@@ -15,6 +15,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { manifest, run } from '../plugins/builtin-epi/index.js';
+import { fakeWebr } from './webr-fake.mjs';
 
 const META = [
   { name: 'smoker', type: 'numeric', label: 'Smokes', valueLabels: { 1: 'Yes', 2: 'No' } },
@@ -26,7 +27,7 @@ async function invoke(inputs, levels) {
   const out = { rCode: '', tables: [], texts: [], errors: [] };
   const app = {
     data: { getVariableMeta: async () => META },
-    webr: {
+    webr: fakeWebr({
       run: async (code) => {
         out.rCode = code;
         return {
@@ -37,7 +38,7 @@ async function invoke(inputs, levels) {
           },
         };
       },
-    },
+    }),
     results: {
       appendTable: async (t, o) => { out.tables.push({ ...t, caption: o?.caption ?? '' }); },
       appendText: async (s) => { out.texts.push(s); },
@@ -108,10 +109,10 @@ test('an unlabelled code still prints as itself rather than as "undefined"', asy
   const out = { tables: [] };
   const app = {
     data: { getVariableMeta: async () => [{ name: 'a', type: 'numeric' }, { name: 'b', type: 'numeric' }] },
-    webr: { run: async () => ({ result: {
+    webr: fakeWebr({ run: async () => ({ result: {
       names: ['a', 'b', 'c', 'd', 'n', 'expPos', 'expNeg', 'outPos', 'outNeg'],
       values: [3, 1, 1, 5, 10, '7', '4', '1', '0'].map((v) => ({ values: [v] })),
-    } }) },
+    } }) }),
     results: {
       appendTable: async (t, o) => { out.tables.push({ ...t, caption: o?.caption ?? '' }); },
       appendText: async () => {}, appendError: async () => {},

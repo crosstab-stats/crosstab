@@ -157,17 +157,6 @@ bottom; they are the project's memory and are not summarised away.
       the moment. One `pluginPickerHost` bundle now, spread at both sites; the tests pin the
       SHAPE of the call rather than the dependency that happened to drift.
 
-- [ ] **`runR` wants to be `app.webr.runOrThrow` (raised 2026-10-13).** Eleven plugins
-      carry `async function runR(app, code)` — run it, throw if `result` is null. One
-      (builtin-causal) takes an optional prelude, which is a strict superset.
-
-      It is real duplication, but `core/plugin-stdlib.js` is the wrong home: it is for pure
-      synchronous functions, and an async helper that calls the host breaks the property
-      that makes `app.std` usable without `await`. The right move is a verb on the
-      `app.webr` namespace the plugins already have — which means touching the postMessage
-      proxy's method list rather than the stdlib, and is why it was not done in the same
-      pass.
-
 - [ ] **Two functions named `wrapLabel` (found 2026-10-08).** `wrapToWidth` in the charts
       stdlib wraps a legend entry with no ceiling; `wrapLabel` inside builtin-charts wraps
       the SCED chart's rotated case captions with a `maxLines` and an ellipsis, because
@@ -2042,9 +2031,6 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Nice-to-have / optimisations
 
-- [ ] Batch a multi-variable Frequencies run into one R call instead of one job
-      per variable (`plugins/builtin-frequencies/index.js`).
-
 - [~] Settings persistence (localStorage). **Still ad hoc as of 2026-08-21** — nine core
       modules now reach for `localStorage` independently (app, at-rest, debug, launcher,
       live-sync, plugin-broker, plugin-manager, plugin-package-store, user-identity), which
@@ -2082,14 +2068,13 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Open follow-ups attached to completed entries
 
-Seven loose ends live as sub-items under entries that are otherwise **done**, where they
+Six loose ends live as sub-items under entries that are otherwise **done**, where they
 are easy to miss. They stay there because the reasoning around them is the parent entry's;
 this is the index.
 
 - **Latent transition analysis** — not built, no longer ruled out. *(under #141, More analyses)*
 - **Building-block eligibility** — unblocked 2026-08-21, not built. *(under Plugin data as first-class citizens, #146)*
 - **A preset file per chapter**, paired with #185 deployments — *the obvious pairing when #184 happens*. *(under #162)*
-- **The Syntax guide says nothing about Import/Export.** *(under #176)*
 - **Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin note. *(under #162)*
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
@@ -2099,6 +2084,31 @@ this is the index.
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **`runR` is now `app.webr.runOrThrow` (2026-10-14).** Eleven plugins each carried
+      `async function runR(app, code)` — run it, throw if `result` is null, byte-identical
+      in ten of them; builtin-causal's took an optional prelude.
+
+      **The planned implementation would have been a bug.** This entry proposed "a verb on
+      the `app.webr` namespace … touching the postMessage proxy's method list", i.e. a new
+      host dispatch entry. The broker REPLACES `dispatch['webr.run']` per invocation to
+      inject the run's gathered inputs (`PluginBroker`'s constructor), so a second host verb
+      calling the WebR manager directly would have run plugins' R **without the variables
+      they were holding** — silently, and only for the plugins that adopted it.
+
+      So the wrapper lives in `plugin-host.html` beside `makeNamespace`, over the proxy:
+      `runOrThrow` goes out as `webr.run`, through the same injection, and adds no protocol
+      surface. `app.std` was correctly ruled out here — it is pure and synchronous.
+
+      Causal's `prelude` parameter did not survive, and should not have: both its call sites
+      passed exactly `bin01R()`, so they compose the string inline. One signature.
+
+      **Test fakes were the real work.** Eight test files stub `webr` by hand; five broke,
+      and pasting the helper into each would have left eight copies of a host behaviour to
+      keep in step. `test/webr-fake.mjs` lifts the host's own `makeWebr` (a `webr:start`/
+      `webr:end` seam, the technique sw.js's host rules already use) and runs it over the
+      stub's `run` — so a change to `runOrThrow` reaches every plugin test without anyone
+      editing a fake. A repo-wide check fails if any plugin defines `runR` again.
 
 - [x] **#191 — the History panel rebuilt as a view of the timeline (2026-10-13).**
       Raised by the owner after three reported bugs turned out to share one cause:
@@ -8665,6 +8675,35 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Nice-to-have / optimisations
 
+- [x] **Frequencies measures every variable in ONE R call (2026-10-14).** It used to
+      issue one `webr.run` per variable. `WEIGHTED_R` + the measurement are now defined
+      once as `.freq1(x, codes, mlo, mhi)` and called per column, with the missing codes
+      passed as arguments instead of pasted into the source — which is what lets one
+      definition serve every variable.
+
+      **Where the cost actually was.** Round-trip latency is not the point: a bare
+      `webr.run` is ~1.3 ms. Every injected call re-marshals the bound columns through a
+      Parquet write into WebR's filesystem, and *that* is per-call — measured at **15.6 ms
+      for 20 columns × 2 000 rows**. Twenty injected calls cost **255 ms against 13 ms for
+      one**, so a 20-variable run sheds ~242 ms of pure re-marshalling: measured end to end
+      at 259–288 ms where the old shape would have been roughly double. The saving scales
+      with cells, so it grows with both variables and rows.
+
+      **Validated against the code it replaced, in real R.** Both generators were driven
+      through the plugin, the captured R run under local R 4.6.0, and every returned field
+      compared value by value: **96 values identical per weighting mode** across four
+      variables chosen to be awkward — a designated code, a designated `(90 THRU 99)`
+      range, string categories, NAs, a mode tie, and a weight containing 0 and −1.
+      Confirmed in the browser too, which is the only place the remaining assumption could
+      be checked: webR returns a nested list as `{type, names, values}`, so `unpackR`'s
+      `raw(k)` unpacks a per-variable slot. 20 variables → 21 tables, no errors.
+
+      The one property that moved from JS to R is the **per-variable `try/catch`**: each
+      call is wrapped in `tryCatch` so one unusable column still reports itself and the
+      rest of the run prints. Without it, batching would have turned "one bad variable"
+      into "no tables at all" — which is why `test/frequencies-batch.test.mjs` tests the
+      isolation, the one-call claim, and a whole-call failure separately.
+
 - [x] **Order the top-level menus: host menus first, then plugins A→Z — DONE**
       (`core/menu-shell.js` `byTopLevel`). The **built-in (host) menus** are pinned
       in a fixed order — **File, Edit, Transform** — and plugin-contributed menus
@@ -9274,7 +9313,24 @@ The record of what shipped and why. Kept in full, in the original sections.
     - [x] A logistic run that names its **modelled category** is refused in BOTH languages now,
           not just Stata — SPSS models the higher code, so the newer route would otherwise have
           been the quiet way to get the #186 bug back.
-  - [ ] **The in-app Syntax guide says nothing about Import/Export.** `core/syntax-guide.js`
+  - [x] **DONE (2026-10-14) — the script is reachable from the File menu, and the guide
+        says so.** `File ▸ Export analysis script…` (order 32, beside `Export data…`) opens
+        the SAME chooser the History toolbar's ⬇ Export does — `HistoryPanel#exportScript`
+        made public, not copied, so there is one list of dialects. It works with the panel
+        never opened, because `#currentScript` already fell back to serialising the applied
+        steps; verified from the real menu item on a fresh load (two statements, all three
+        dialects translating).
+
+        Deliberately NOT a format inside the data picker — that one lists DATA formats and a
+        script is not a dataset ([[unified-import-export-picker]]). **Import stays on the
+        panel**, and the asymmetry is the point: an imported script arrives as a draft to
+        review and Run, which only means anything with the editor in front of you.
+
+        The guide half is a new core topic, `syntax-save-load`, filed in the **Syntax**
+        category — the guide is a view of that category, so a topic filed anywhere else
+        would not have appeared in it, which is how the gap arose. Original note follows.
+
+  - [x] **The in-app Syntax guide says nothing about Import/Export.** `core/syntax-guide.js`
         documents the grammar and the live `run id.fn` list, so a user who opens it to find
         out how to hand their steps to a Stata colleague finds no mention that the button
         exists. Small, and it belongs with **#184**'s task-oriented material rather than as

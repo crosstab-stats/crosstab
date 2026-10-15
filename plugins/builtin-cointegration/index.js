@@ -124,7 +124,7 @@ export async function cointegration(app, { series, ecdet, K }) {
     list(rlabels = paste0("r <= ", r_index), rzero = r_index, stat = as.numeric(ts),
          c10 = as.numeric(cv[, 1]), c5 = as.numeric(cv[, 2]), c1 = as.numeric(cv[, 3]),
          betaNames = names(beta), beta = as.numeric(beta), nm = nm, adj = as.numeric(adj), nobs = nrow(d))`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const rlab = r.strs('rlabels'), stat = r.nums('stat'), c10 = r.nums('c10'), c5 = r.nums('c5'), c1 = r.nums('c1');
   const nm = r.strs('nm');
 
@@ -186,7 +186,7 @@ export async function garch(app, { series: sName, q, p, dist }) {
     list(terms = aterms, est = as.numeric(cf[, 1]), se = as.numeric(cf[, 2]),
          t = as.numeric(cf[, 3]), p = as.numeric(cf[, 4]),
          persist = persist, ll = ll, aic = aic, n = length(x), svg = svg)`;
-  const r = flat(await runR(app, rCode));
+  const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), tv = r.nums('t'), pv = r.nums('p');
 
   await app.results.appendTable(
@@ -217,12 +217,6 @@ export async function garch(app, { series: sName, q, p, dist }) {
 }
 
 // --- helpers -----------------------------------------------------------------
-
-async function runR(app, rCode) {
-  const { result } = await app.webr.run(rCode);
-  if (!result) throw new Error('R returned no result');
-  return result;
-}
 
 function garchTerm(t) {
   if (t === 'mu') return 'μ (mean)';

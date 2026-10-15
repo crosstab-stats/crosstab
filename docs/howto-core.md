@@ -276,3 +276,21 @@ Expressions (EXPR) are DuckDB SQL, kept verbatim — anything DuckDB can evaluat
 Variable names with spaces or punctuation go in `backticks`. Strings use "double quotes"; numbers are bare.
 
 Tip: run any analysis once from the menu, then open History ▸ ✎ Syntax — its exact `run …` line is right there to copy as a template.
+
+
+--- id: syntax-save-load
+The script is a file you can save, send, and open again.
+
+**Save it** — **File ▸ Export analysis script…**, or **⬇ Export** on the History panel's toolbar. Both open the same chooser:
+
+- **CrossTab syntax (`.ctscript`)** — lossless. It imports back into the editor exactly as it left, so this is the one to keep.
+- **Stata do-file (`.do`)** and **SPSS syntax (`.sps`)** — best-effort translation, for a colleague who does not run CrossTab.
+- **R script (`.R`)** — a runnable script that reads your data, repeats the preparation and then the analyses, with the R CrossTab actually ran recorded beneath each one.
+
+Before you export, the chooser tells you how much of the script the dialect can carry — "12 of 16 statements translate; 4 are written into the file as comments to finish by hand." That count is the thing that decides whether the file is worth sending, which is why it appears before the download rather than after.
+
+**Open one** — **⬆ Import** on the History panel. A `.ctscript` loads verbatim; a `.do` or `.sps` is translated as far as it goes. Either way it arrives as a **draft**: nothing runs until you have read it and pressed **Run**.
+
+Two things worth knowing. The export sends your **unapplied draft** if you have one, and says so — so what you send is what you are looking at. And `.ctscript` is the only round-trip that is guaranteed: a script that has been through Stata or SPSS and back has been translated twice.
+
+See [reading and running the script](howto:syntax-basics) for the editor itself, and [save your work and export results](howto:export-data) for data and output files — which are a different question from the recipe that made them.

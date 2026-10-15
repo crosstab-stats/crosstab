@@ -1531,7 +1531,7 @@ export class HistoryPanel {
       const exportBtn = el('button', { text: '⬇ Export', class: 'history-panel__action' });
       exportBtn.type = 'button';
       exportBtn.title = 'Save this script — .ctscript (lossless), or a best-effort Stata .do / SPSS .sps';
-      exportBtn.addEventListener('click', () => this.#exportScript());
+      exportBtn.addEventListener('click', () => this.exportScript());
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
       fileInput.accept = '.ctscript,.txt,.do,.sps,text/plain';
@@ -1954,13 +1954,20 @@ export class HistoryPanel {
     this.#ta?.focus();
   }
 
-  /** Save the current script. CrossTab's own `.ctscript` is the lossless default (it is
+  /**
+   * Save the current script — also reachable from **File ▸ Export analysis script…**,
+   * which is where someone handing their steps to a Stata colleague looks first (#176).
+   * Public for that menu item: the chooser does not need the panel to be open, because
+   * {@link HistoryPanel#currentScript} falls back to the applied steps when there is no
+   * editor to hold a draft.
+   *
+   * CrossTab's own `.ctscript` is the lossless default (it is
    * `serialize()` output, so it imports back exactly); the Stata/SPSS choices are #176's
    * best-effort translation, for handing the data steps to a colleague who does not run
    * CrossTab. The dialog translates on SELECTION rather than on Export, because "12 of
    * 16 statements" is the fact that decides whether the file is worth sending — finding
    * that out after the download is too late to matter. */
-  #exportScript() {
+  exportScript() {
     const { text, draft } = this.#currentScript();
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog';

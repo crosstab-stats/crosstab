@@ -179,6 +179,44 @@
           return Object.freeze(obj);
         }
 
+        // webr:start — extracted and run by test/webr-run-or-throw.test.mjs.
+        /**
+         * The `webr` namespace: the host's proxied verbs plus one LOCAL convenience.
+         *
+         * Eleven plugins carried `async function runR(app, code)` — run it, throw if
+         * `result` is null — byte-identical in ten of them. The obvious home was a new
+         * `webr.runOrThrow` dispatch verb on the host, and that would have been a bug:
+         * the broker REPLACES `dispatch['webr.run']` per invocation to inject the run's
+         * bound inputs (see PluginBroker's constructor), so a second host verb calling
+         * the WebR manager directly would have run the plugin's R without the variables
+         * it was holding — silently, and only for plugins that adopted it.
+         *
+         * Wrapping the proxy here instead means `runOrThrow` goes out over the SAME
+         * `webr.run` message, through the same injection, and costs no new protocol
+         * surface. It is also not a candidate for `app.std`: that namespace is pure and
+         * synchronous, and an async helper there would break the property that makes it
+         * callable without `await`.
+         */
+        function makeWebr() {
+          const ns = makeNamespace('webr', ['run', 'installPackages', 'writeFile', 'readFile', 'mountFile', 'unmount']);
+          return Object.freeze({
+            ...ns,
+            /**
+             * Run R and return `result`, throwing when there is none.
+             *
+             * No `prelude` parameter: builtin-causal's variant took one and composing the
+             * string is the caller's business — a second way to spell "put this code
+             * first" is not worth a wider verb.
+             */
+            runOrThrow: async (code, opts) => {
+              const { result } = await ns.run(code, opts);
+              if (!result) throw new Error('R returned no result');
+              return result;
+            },
+          });
+        }
+        // webr:end
+
         /** Listeners for host-pushed `pluginsChanged` notifications. */
         const pluginsChangedListeners = [];
 
@@ -208,7 +246,7 @@
               'appendTable', 'appendPlot', 'appendChart', 'updatePlot', 'appendText', 'appendError',
               'getModel', 'getStyles', 'getPlotPng',
             ]),
-            webr: makeNamespace('webr', ['run', 'installPackages', 'writeFile', 'readFile', 'mountFile', 'unmount']),
+            webr: makeWebr(),
             ui: makeNamespace('ui', ['selectVariables', 'selectFromList', 'showForm']),
             web: makeNamespace('web', ['get']),
             // The current user's identity snapshot (#148): { authorId, initials, name,
