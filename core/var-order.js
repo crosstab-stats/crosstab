@@ -29,11 +29,12 @@
  * Pure module: no DOM, no app deps.
  */
 
-/** Storage key. Was `crosstab.varpicker.sort` while only the picker honoured it. */
-const KEY = 'crosstab.varlist.sort';
-const LEGACY_KEY = 'crosstab.varpicker.sort';
-/** Storage key for the display half. */
-const DISPLAY_KEY = 'crosstab.varlist.display';
+import { defineSetting } from './settings.js';
+
+// Both halves are declared settings (see core/settings.js), which is what puts them in
+// front of a Settings screen rather than only in this strip's dropdowns. The keys are
+// unchanged — `crosstab.varpicker.sort` is still read, from when only the picker honoured
+// the choice.
 
 /**
  * @typedef {'file'|'file-desc'|'name'|'name-desc'|'label'|'label-desc'} VarOrder
@@ -68,19 +69,12 @@ export const VAR_ORDER_OPTIONS = [
 /** The remembered order, defaulting to file order — what every surface did before
  * the choice existed, so an unset preference changes nothing. */
 export function loadVarOrder() {
-  try {
-    const s = globalThis.localStorage;
-    const v = s?.getItem(KEY) ?? s?.getItem(LEGACY_KEY);
-    return VAR_ORDERS.includes(v) ? v : 'file';
-  } catch {
-    return 'file'; // storage disabled (private mode, sandboxed frame)
-  }
+  return orderSetting.get();
 }
 
 /** Remember the order. Failing to persist is not worth interrupting anyone for. */
 export function saveVarOrder(value) {
-  if (!VAR_ORDERS.includes(value)) return;
-  try { globalThis.localStorage?.setItem(KEY, value); } catch { /* storage unavailable */ }
+  orderSetting.set(value);
 }
 
 /**
@@ -113,21 +107,38 @@ export const VAR_DISPLAY_OPTIONS = [
   ['both', 'Show both'],
 ];
 
+const orderSetting = defineSetting({
+  id: 'varlist.order',
+  key: 'crosstab.varlist.sort',
+  legacyKeys: ['crosstab.varpicker.sort'],
+  values: VAR_ORDERS,
+  fallback: 'file', // what every surface did before the choice existed
+  label: 'Variable list order',
+  group: 'Variables',
+  hint: 'How the Data grid, Variable View and every picker order their variables.',
+  options: VAR_ORDER_OPTIONS,
+});
+
+const displaySetting = defineSetting({
+  id: 'varlist.display',
+  key: 'crosstab.varlist.display',
+  values: VAR_DISPLAYS,
+  fallback: 'label',
+  label: 'Show variables as',
+  group: 'Variables',
+  hint: 'Whether a variable is named by its label, its name, or both.',
+  options: VAR_DISPLAY_OPTIONS,
+});
+
 /** The remembered display, defaulting to `label` — what every surface did before the
  * choice existed, so an unset preference changes nothing. */
 export function loadVarDisplay() {
-  try {
-    const v = globalThis.localStorage?.getItem(DISPLAY_KEY);
-    return VAR_DISPLAYS.includes(v) ? v : 'label';
-  } catch {
-    return 'label'; // storage disabled (private mode, sandboxed frame)
-  }
+  return displaySetting.get();
 }
 
 /** Remember the display. Failing to persist is not worth interrupting anyone for. */
 export function saveVarDisplay(value) {
-  if (!VAR_DISPLAYS.includes(value)) return;
-  try { globalThis.localStorage?.setItem(DISPLAY_KEY, value); } catch { /* storage unavailable */ }
+  displaySetting.set(value);
 }
 
 /**

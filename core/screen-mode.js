@@ -36,12 +36,50 @@
  * menu away.
  */
 
+import { defineSetting } from './settings.js';
+
 /** Where the choice lives. Not in the project: it describes this reader on this device, not
  * anything about the data — the same reasoning {@link module:core/var-order} gives. */
 const KEY = 'crosstab.screen-mode';
 
+/**
+ * The mode is a declared setting, and its stored form is deliberately TRI-state:
+ * `small`, `full`, or null for "nobody has said", which is what lets the viewport decide
+ * until someone does. So the fallback is null rather than a mode — a default here would
+ * read as a choice and outrank the viewport.
+ */
+const modeSetting = defineSetting({
+  id: 'screen.mode',
+  key: KEY,
+  values: ['small', 'full'],
+  fallback: null,
+  label: 'Screen layout',
+  group: 'Appearance',
+  hint: 'Small-screen mode, or the full layout. Unset lets the window size decide.',
+  options: [['small', 'Small screen'], ['full', 'Full layout']],
+});
+
 /** Dismissal of the "this was turned on for you" note, so it is said once and not again. */
 const NOTE_KEY = 'crosstab.screen-mode.noted';
+
+/**
+ * The dismissal of the "turned on for you" note.
+ *
+ * `onError` is `true`, NOT the fallback, and that asymmetry is the whole reason this
+ * field exists: when storage throws there is no way to remember a dismissal, and
+ * answering "not seen" would re-show the note on every single load — nagging precisely
+ * the user whose browser cannot be told to stop.
+ *
+ * Not offered to a Settings screen (no `label`): "have you seen a notice" is lifecycle,
+ * and a checkbox for it would be stranger than the notice.
+ */
+const noteSetting = defineSetting({
+  id: 'screen.autoNoteSeen',
+  key: NOTE_KEY,
+  values: ['1'],
+  fallback: null,
+  onError: '1',
+});
 
 /**
  * Below this width the FULL layout stops working, so it is where an unset preference
@@ -102,18 +140,12 @@ export function resolveScreenMode({ stored = null, narrowViewport = false, urlFl
 
 /** The remembered preference, or null when nobody has chosen. */
 export function storedScreenMode() {
-  try {
-    const v = globalThis.localStorage?.getItem(KEY);
-    return v === 'small' || v === 'full' ? v : null;
-  } catch {
-    return null; // storage disabled (private mode, sandboxed frame)
-  }
+  return modeSetting.get();
 }
 
 /** Remember a choice. Failing to persist is not worth interrupting anyone for. */
 export function saveScreenMode(mode) {
-  if (mode !== 'small' && mode !== 'full') return;
-  try { globalThis.localStorage?.setItem(KEY, mode); } catch { /* storage unavailable */ }
+  modeSetting.set(mode);
 }
 
 /** Is the viewport narrower than the full layout can take? */
@@ -190,16 +222,12 @@ export function toggleScreenMode({ doc = globalThis.document } = {}) {
 
 /** Has the "turned on for you" note been dismissed (or already shown)? */
 export function autoNoteSeen() {
-  try {
-    return globalThis.localStorage?.getItem(NOTE_KEY) === '1';
-  } catch {
-    return true; // cannot remember a dismissal ⇒ do not nag every load
-  }
+  return noteSetting.get() === '1';
 }
 
 /** Remember that the note has been seen. */
 export function dismissAutoNote() {
-  try { globalThis.localStorage?.setItem(NOTE_KEY, '1'); } catch { /* storage unavailable */ }
+  noteSetting.set('1');
 }
 
 /**

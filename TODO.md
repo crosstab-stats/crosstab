@@ -2051,13 +2051,53 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Nice-to-have / optimisations
 
-- [~] Settings persistence (localStorage). **Still ad hoc as of 2026-08-21** — nine core
-      modules now reach for `localStorage` independently (app, at-rest, debug, launcher,
-      live-sync, plugin-broker, plugin-manager, plugin-package-store, user-identity), which
-      strengthens rather than weakens the case for one store. *Started:* the plugin manager persists
-      its disabled-set + catalog there (`core/plugin-manager.js`). A general
-      settings store can generalise that pattern. (Dataset persistence is its own
-      item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
+- [~] **Settings persistence — the STORE is built (2026-10-15); the screen is not.**
+      `core/settings.js`. Confirmed with the owner first: *"is this talking about pulling
+      together the various call sites that put/read some sort of persistent setting to
+      local storage and making a unified settings get/set mechanism? I agree that sounds
+      worth doing, as it could also be helpful if we want to build a single 'settings'
+      screen where the user can edit those."*
+
+      That second half decided the shape. A `get`/`set` wrapper would have removed some
+      duplication and given a screen nothing to render, so this is a **registry**: each
+      setting declares its key, accepted values, default, label, group, hint and options,
+      and `listSettings()` is a Settings screen's entire data source. The same
+      declare-and-the-host-renders pattern as `menus.register` and the plugin manifests.
+
+      **What it absorbed** — five settings over three modules, each of which had rebuilt
+      the same five pieces (key, accepted values, default, validate-on-read, and a
+      `try/catch` on both sides because storage throws outright in Safari private mode and
+      in a sandboxed frame): `varlist.order` (+ its legacy key), `varlist.display`,
+      `screen.mode`, `screen.autoNoteSeen`, `debug.logging`. Every public function
+      (`loadVarOrder`, `storedScreenMode`, `setDebug`, …) kept its signature and became a
+      one-liner, so nothing else in the app changed.
+
+      **Two behaviours a naive fold would have broken**, now pinned by tests:
+      `screen.mode` is TRI-state — `small`, `full`, or null for "nobody has said", which
+      is what lets the viewport decide, so a default there would read as a choice; and
+      `screen.autoNoteSeen` answers **`true` when storage throws**, not its fallback,
+      because a dismissal that cannot be remembered must not re-show the note on every
+      load. Hence `onError` as a field separate from `fallback`.
+
+      **Keys are never renamed.** A tidier scheme costs nothing to type and silently
+      resets every existing user's preferences on upgrade; the test that checks this says
+      so, and says the fix is to restore the key rather than update the expectation.
+
+      **Deliberately NOT settings**, and the exclusions are the design rather than a
+      backlog: plugin install/enable state (that *is* the plugin manager), the catalogue
+      cache, transient handoffs (`oauth.result`, the offline resume), credentials
+      (`dropbox.config` — a screen that enumerates settings must never print a token),
+      and identity/first-run flags.
+
+      **The borderline, left for when the screen exists:** the encryption policy and the
+      collab relay/TURN config are both user-editable and screen-worthy, but shaped
+      (objects and arrays) rather than scalar, and the encryption policy already has its
+      own modal. Deciding how a generic screen edits a shaped value needs the screen.
+
+  - [ ] **The Settings screen itself.** Now a view over `listSettings()` — group by
+        `group`, render `options` as a `<select>` and the rest by kind. The open question
+        is what it does about the shaped settings above: absorb them, or link out to the
+        modals that already edit them.
 
 - [~] **Variable-picker polish — two of three DONE (2026-10-15).** The "Selected" group
       is a snapshot taken when the dialog opens — ticking a box inside the dialog
@@ -2081,9 +2121,16 @@ bottom; they are the project's memory and are not summarised away.
             is selected yet" rather than blaming a filter the reader never set.
             The three behaviours are pure functions (`visibleVars`, `pickerCountLabel`,
             `pickerEmptyLabel`) so they are testable without a DOM.
-      - [ ] **Picker→selection write-back** — still open, and still a real design call
-            rather than a refinement: today the picker's choice returns to the plugin but
-            does not change the grid/sidebar selection. Left as-is pending the owner.
+      - [x] **Picker→selection write-back — DECIDED AGAINST (owner, 2026-10-15).** The
+            question was whether ticking or clearing a variable inside a run's dialog
+            should change the active selection in the Data grid. *"No. The selections (or
+            clearing selections) in the variable picker dialog is purely ephemeral to that
+            run and should not change the overall project state."*
+
+            So the current behaviour is the intended one, not an unfinished edge: the
+            picker reads the grid selection as a convenience seed and writes nothing back.
+            Worth keeping in mind for anything that looks like a near-miss here — a run's
+            inputs are the run's, and the project state is not a scratchpad for them.
 
 - [ ] **#184 — a comprehensive how-to guide (owner, 2026-09-21).** Nothing like it
       exists. What exists is scattered and each piece is deliberately narrow: *Getting

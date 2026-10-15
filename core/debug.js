@@ -15,7 +15,27 @@
  * the user can attach to a bug report.
  */
 
+import { defineSetting } from './settings.js';
+
 const MAX_BUFFER = 2000;
+
+/**
+ * The gate, as a declared setting.
+ *
+ * Free-form rather than a boolean: the value is `1`/`*` for everything, or a
+ * comma-separated tag list (`ws-mgr,app`) — so no `values` list, and the menu's
+ * checkbox writes `1` while a developer typing into the console can still narrow it.
+ * Off is the key being ABSENT, which is why `setDebug(false)` clears rather than writes.
+ */
+const gateSetting = defineSetting({
+  id: 'debug.logging',
+  key: 'crosstab_debug',
+  fallback: '',
+  onError: '', // sandboxed / private browsing ⇒ logging stays off
+  label: 'Debug logging',
+  group: 'Advanced',
+  hint: 'Record diagnostics for a bug report. Off unless you have been asked to turn it on.',
+});
 
 let _enabled = false;
 /** @type {Set<string>|'all'} */
@@ -24,14 +44,10 @@ let _tags = 'all';
 const _buffer = [];
 
 function _readGate() {
-  try {
-    const raw = localStorage.getItem('crosstab_debug');
-    if (!raw) { _enabled = false; return; }
-    _enabled = true;
-    _tags = (raw === '1' || raw === '*') ? 'all' : new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-  } catch {
-    _enabled = false;
-  }
+  const raw = gateSetting.get();
+  if (!raw) { _enabled = false; return; }
+  _enabled = true;
+  _tags = (raw === '1' || raw === '*') ? 'all' : new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
 }
 _readGate();
 
@@ -57,13 +73,8 @@ export function isDebug() {
 
 /** Turn debug logging on or off (updates localStorage + live state). */
 export function setDebug(on) {
-  try {
-    if (on) {
-      localStorage.setItem('crosstab_debug', '1');
-    } else {
-      localStorage.removeItem('crosstab_debug');
-    }
-  } catch { /* sandboxed / private browsing */ }
+  if (on) gateSetting.set('1');
+  else gateSetting.clear(); // off is the ABSENCE of the key, not the string "0"
   _readGate();
   if (on) debug('debug', 'logging enabled');
 }
