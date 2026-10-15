@@ -69,7 +69,10 @@ export class OutputExportService {
       id: 'core:export-output',
       path: ['File'],
       label: 'Export output…',
-      order: 10,
+      // 30-33 is File's one in/out block (owner, 2026-10-15). This used to sit at 10,
+      // ten slots and four unrelated items away from the other two exports — which is
+      // what made three export entries read as clutter rather than as a list.
+      order: 32,
       command: () => this.#open(),
     });
   }

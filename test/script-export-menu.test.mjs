@@ -27,9 +27,11 @@ test('File carries an Export analysis script item, next to Export data', () => {
   assert.match(block, /path: \['File'\]/);
   assert.match(block, /label: 'Export analysis script…'/);
   assert.match(block, /historyPanel\.exportScript\(\)/);
-  // Export data… is order 31; this sits immediately after it rather than among the
-  // project items at the top.
-  assert.match(block, /order: 32/);
+  // It belongs to File's 30-33 in/out block rather than to the project items at the top.
+  // The exact position within that block is file-menu-order.test.mjs's business — pinning
+  // the number here too meant one reshuffle broke two tests for one reason.
+  const order = Number(block.match(/order: (\d+)/)[1]);
+  assert.ok(order >= 30 && order <= 33, `order ${order} is outside the in/out block`);
 });
 
 test('the chooser is public, and the panel still uses the same one', () => {

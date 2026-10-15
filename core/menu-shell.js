@@ -398,7 +398,19 @@ export class MenuShell {
     }
   }
 
-  /** Render a nested submenu as a labelled group with an inline flyout. */
+  /**
+   * Render a submenu — a top-level menu inside the ☰ panel, or a nested group like
+   * `Edit ▸ Debugging`. One function draws both, which is what keeps the two
+   * arrangements from drifting, but it also means **depth is not in the markup**: a
+   * nested group gets the same element and the same classes as a top-level one, and
+   * only CSS tells them apart (see `.menu__flyout .menu__group-toggle` in index.html).
+   * Styling a group without accounting for nesting therefore styles both.
+   *
+   * On a wide screen this is NOT a flyout, despite the class name: the children are
+   * rendered inline under an uppercase label, so a nested group reads as a titled
+   * section of its parent panel and nothing hovers or expands. Only the small-screen
+   * arrangement makes it collapsible.
+   */
   #renderSubmenu(node) {
     const group = document.createElement('div');
     group.className = 'menu__group';

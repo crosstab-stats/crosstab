@@ -1204,6 +1204,19 @@
       [aria-expanded="true"] > .menu__caret { transform: rotate(90deg); }
       /* Indent a section's items so the heading reads as their parent. */
       [data-screen="small"] .menu__group-toggle + .menu__flyout .menu__item { padding-left: 26px; }
+      /* A section INSIDE a section (Edit ▸ Debugging) used to match none of the above:
+         the rule over it indents `.menu__item`, and a nested group is not one — so it
+         kept full top-level chrome and read as a sibling of Transform rather than as a
+         child of Edit (owner, on the phone, 2026-10-15). One renderer draws both depths,
+         so the depth has to be said in CSS. Descendant selectors, because a top-level
+         toggle is a direct child of the panel and never sits inside a flyout. */
+      [data-screen="small"] .menu__flyout .menu__group-toggle {
+        padding-left: 26px; font-size: 11px; text-transform: none; letter-spacing: 0;
+        font-weight: 600; color: #5a6672;
+      }
+      [data-screen="small"] .menu__flyout .menu__group-toggle + .menu__flyout .menu__item {
+        padding-left: 40px;
+      }
       /* The separators between top-level sections were doing the work of telling groups
          apart; collapsed headings do that themselves, so the rules only add noise. */
       [data-screen="small"] .menu__panel--all .menu__group + .menu__group {

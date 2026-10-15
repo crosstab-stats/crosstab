@@ -1114,7 +1114,7 @@ export async function boot(mounts) {
     id: 'core:script-export',
     path: ['File'],
     label: 'Export analysis script…',
-    order: 32,
+    order: 33,
     command: () => historyPanel.exportScript(),
   });
 
