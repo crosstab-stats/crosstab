@@ -2115,12 +2115,35 @@ bottom; they are the project's memory and are not summarised away.
       it is how a screen shows "Default" beside an untouched setting instead of implying
       the user chose it.
 
-  - [ ] **The Settings screen itself.** Now a view over `listSettings()` — group by
-        `group` (Appearance, Variables, Privacy, Collaboration, Advanced), render
-        `options` as a `<select>`, respect `secret` by showing configured/not rather than
-        a value. Two things to decide when it is built: how a shaped value (the three
-        encryption toggles, a relay list) is edited generically, and whether it absorbs
-        the existing Encryption settings modal or links out to it.
+  - [ ] **A Settings screen — MAYBE YES, MAYBE NO (owner, 2026-10-15).** Deliberately not
+        a commitment: *"I'm not sure it's needed so far, we don't have many settings and
+        each one currently is set close to the source that uses it. But maybe it'll be
+        reasonable to add later on."*
+
+        The case against building it now is the better one. Eight settings is not a
+        screen's worth, and each already sits beside what it affects — the variable order
+        and display in the toolbar of every list that obeys them, the screen mode in the
+        Edit menu next to what it reflows, encryption in the modal that asks about a
+        project. A central screen would move each of them *away* from its context and buy
+        a second place to look.
+
+        What would change the answer: enough settings that "where is that option" becomes
+        a real question, or a setting with no natural home next to its effect. Watch the
+        count — and note that the registry already makes the list cheap to see
+        (`listSettings()`), so the question can be re-asked from evidence rather than
+        guessed at.
+
+        **The registry does not depend on this.** It was built for the duplication (five
+        copies of key + values + default + validate + try/catch) and for the two
+        behaviours that duplication was about to lose; a screen was the second reason, not
+        the first. If this is never built, nothing is stranded.
+
+        If it IS built, it is a view over `listSettings()`: group by `group` (Appearance,
+        Variables, Privacy, Collaboration, Advanced), render `options` as a `<select>`,
+        respect `secret` by showing configured/not rather than a value, and use `isSet` to
+        say "Default" instead of implying a choice. Two things to decide then: how a
+        shaped value (the three encryption toggles, a relay list) is edited generically,
+        and whether it absorbs the Encryption settings modal or links out to it.
 
 - [~] **Variable-picker polish — two of three DONE (2026-10-15).** The "Selected" group
       is a snapshot taken when the dialog opens — ticking a box inside the dialog
