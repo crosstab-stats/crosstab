@@ -15,6 +15,11 @@
  * options beyond variable choice; it is intentionally not built yet.
  */
 
+
+/** Shortest list that earns a "Selected only" toggle — below this the answer is
+ * already on screen, and the control would only be another thing to read. */
+const SELECTED_ONLY_MIN = 15;
+
 /**
  * @typedef {Object} SelectVariablesOptions
  * @property {string} [title='Select variables']
@@ -69,6 +74,50 @@ function dialogHead(title, howto, onHowto) {
     head.append(info);
   }
   return head;
+}
+
+/**
+ * Which rows the picker shows, given its filter box and its "Selected only" toggle.
+ *
+ * Pulled out of the dialog so it can be tested: the suite runs `node --test` with no
+ * jsdom, and a rule about what a list contains is worth more than an assertion that a
+ * line of source still exists.
+ *
+ * `ticked` is the LIVE tick set, not the selection the dialog opened with — "Selected
+ * only" has to mean what is chosen now, or it would show the opening state forever.
+ *
+ * @param {Array<object>} rows @param {{query: string, selectedOnly: boolean, ticked: Set<string>}} view
+ */
+export function visibleVars(rows, { query = '', selectedOnly = false, ticked = new Set() } = {}) {
+  const hits = filterVars(rows, query);
+  return selectedOnly ? hits.filter((m) => ticked.has(m.name)) : hits;
+}
+
+/**
+ * The picker's status line: how much of the list is on screen, and how much is ticked.
+ *
+ * The tick half is multi-select only — "1 selected" beside a radio list states what the
+ * list already shows. It is rendered into an `aria-live` element, so this string is also
+ * what a screen reader hears when a box is ticked.
+ */
+export function pickerCountLabel({ shown, total, ticked = 0, multiple = true }) {
+  const of = shown === total
+    ? `${total} variable${total === 1 ? '' : 's'}`
+    : `${shown} of ${total} variables`;
+  return multiple ? `${of} · ${ticked} selected` : of;
+}
+
+/**
+ * What to say when the list comes back empty — which emptiness it is.
+ *
+ * "No variable matches that filter" under a ticked "Selected only" box sends the reader
+ * hunting for a typo in a filter they never set.
+ */
+export function pickerEmptyLabel({ selectedOnly, ticked = 0 }) {
+  if (!selectedOnly) return 'No variable matches that filter.';
+  return ticked
+    ? 'No selected variable matches that filter.'
+    : 'Nothing is selected yet. Untick “Selected only” to choose.';
 }
 
 export class UiService {
@@ -240,8 +289,39 @@ export class UiService {
         bar.el.append(wrap);
       }
 
+      // "Selected only" — the picker's own filter, for the long lists where the ticks are
+      // scattered through hundreds of rows and checking what you have chosen means
+      // scrolling the whole thing. Multi-select only: a radio picker holds at most one
+      // tick, so the control could never earn its place there.
+      //
+      // Gated on list length for the same reason the scope switch is gated on there being
+      // a second dataset — a control that cannot usefully change anything reads as broken,
+      // and on a twelve-variable list the answer is already on screen.
+      let selectedOnly = false;
+      let selectedOnlyBox = null;
+      if (multiple && meta.length >= SELECTED_ONLY_MIN) {
+        const wrap = document.createElement('label');
+        wrap.className = 'ct-vartools__scope';
+        selectedOnlyBox = document.createElement('input');
+        selectedOnlyBox.type = 'checkbox';
+        const txt = document.createElement('span');
+        txt.textContent = 'Selected only';
+        wrap.append(selectedOnlyBox, txt);
+        wrap.title = 'Show only the variables currently ticked.';
+        selectedOnlyBox.addEventListener('change', () => {
+          selectedOnly = selectedOnlyBox.checked;
+          render();
+        });
+        bar.el.append(wrap);
+      }
+
       const sorted = (rows) => sortVars(rows, order.value);
-      const matching = (rows) => filterVars(rows, query);
+      // Ticking is live; the grouping above it is not. Filtering on `ticked` rather than on
+      // the opening `checked` is what makes this show what is chosen NOW — and because
+      // ticking a box does not re-render (the rule that stops rows jumping under the
+      // cursor), unticking inside this view leaves the row in place with its box cleared
+      // rather than yanking it out from under the pointer.
+      const matching = (rows) => visibleVars(rows, { query, selectedOnly, ticked });
 
       const row = (m) => {
         const disabled = excluded.has(m.name);
@@ -265,6 +345,7 @@ export class UiService {
               el.checked = el.value === '' ? ticked.size === 0 : ticked.has(el.value);
             }
           }
+          paintCount();
         });
         const shown = varDisplay(m, display);
         const span = document.createElement('span');
@@ -301,6 +382,26 @@ export class UiService {
         li.className = 'ct-dialog__group';
         li.textContent = text;
         return li;
+      };
+
+      /**
+       * The status line: how much of the list is on screen, and how much is ticked.
+       *
+       * Separate from {@link render} because ticking deliberately does NOT re-render —
+       * rows must not reorder under the cursor — so the count has to be repainted on its
+       * own or it would show the opening number for the rest of the dialog's life. The
+       * element is `aria-live="polite"`, so this is also how a screen reader is told that
+       * a tick landed.
+       *
+       * The tick count is multi-select only: "1 selected" beside a radio list states
+       * something the list already makes obvious.
+       */
+      let shownCount = 0;
+      const paintCount = (shown = shownCount) => {
+        shownCount = shown;
+        countEl.textContent = pickerCountLabel({
+          shown, total: meta.length, ticked: ticked.size, multiple,
+        });
       };
 
       /**
@@ -354,11 +455,13 @@ export class UiService {
           for (const m of bottom) list.append(row(m));
         }
         const shown = top.length + bottom.length;
-        countEl.textContent =
-          shown === meta.length
-            ? `${meta.length} variable${meta.length === 1 ? '' : 's'}`
-            : `${shown} of ${meta.length} variables`;
-        if (!shown) list.append(groupLabel('No variable matches that filter.'));
+        paintCount(shown);
+        if (!shown) {
+          // Which emptiness it is. "No variable matches that filter" under a ticked
+          // "Selected only" box sends the reader hunting for a typo in a filter they did
+          // not set.
+          list.append(groupLabel(pickerEmptyLabel({ selectedOnly, ticked: ticked.size })));
+        }
       };
       render();
 

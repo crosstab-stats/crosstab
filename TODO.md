@@ -1843,11 +1843,24 @@ bottom; they are the project's memory and are not summarised away.
          + CI band. Validated against local R 4.6.0.
       4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
 
-      What is left is the genuinely hard residue, and it is the right residue: the 16
-      remaining sites are mostly cases where **the geometry is the hard part and is not
-      ours** — force-directed network layout, map projections, biplot arrow fields,
-      ordination configurations. Each of those needs the numbers extracting from R first,
-      which is a per-plugin data question rather than a chart-layer one.
+      What is left is the genuinely hard residue, and it is the right residue: the **11
+      remaining sites across 9 plugins** (re-counted 2026-10-15 — this line used to say 16,
+      the figure from before the four migrations above) are mostly cases where **the
+      geometry is the hard part and is not ours** — force-directed network layout, map
+      projections, biplot arrow fields, ordination configurations. Each of those needs the
+      numbers extracting from R first, which is a per-plugin data question rather than a
+      chart-layer one.
+
+      **Noted while re-counting, for the owner's call:** two of the eleven look cheaper
+      than their group suggests. The `scatter` kind already supports `model.line` (draw it
+      as a polyline) and `model.reference` (a meaning line, deliberately distinct from a
+      trend line) — which is exactly the shape of the **Lorenz curve** (cumulative
+      population share against cumulative income share, plus the 45° equality line) and of
+      **conditional volatility** (one series over time). Both already compute every number
+      in R and then ask it for a picture, which is the tell this review was written around.
+      Left alone deliberately: this entry's own judgement is that the marginal-fit charts
+      "weren't worth a Layer-2 model" and that their story is Layer 3b, so overturning that
+      is a decision rather than a tidy-up.
 
       5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
          *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
@@ -2000,26 +2013,33 @@ bottom; they are the project's memory and are not summarised away.
       deferred to Layer 3 (below), not forced into the model.
     - [ ] **Layer 3b — host-mediated controls for BAKED plots.** *(Distinct from Layer
       3a, which shipped 2026-08-06: that one is plugin-supplied model-driven KINDS. This
-      is the story for figures whose geometry only R can produce — the 16 remaining
+      is the story for figures whose geometry only R can produce — the 11 remaining
       `appendPlot` sites — where the picture stays baked but gains controls.)*
       A plugin draws its own
       SVG (full R power) AND declares the alterations it supports
       (`controls: [{ id, label, type, options }]`); the host renders those controls and
       calls back to re-chart on change (generalises the existing `onRedraw` size-recipe).
-      Opt-in, for everything not in Layer 2 where body edits are worth a round-trip:
-      - *Marginal-fit charts (weren't worth a Layer-2 model):* `decisions` tornado + CE
-        plane, `ecology` NMDS, `inequality` Lorenz, `cointegration` volatility,
-        `timeseries` forecast.
-      - *New-glyph charts (Tier B — no existing kind):* `plots` boxplot, `meta` forest,
-        `ordination` biplot, `survival` Kaplan-Meier (step line).
-      - *No-data-model charts (only Layer 1 + maybe a redraw/param control):* `sna`
-        network, `spatial` map, `decisions` tree, `timeseries` STL decomposition, `var`
-        IRF (multi-panel), word clouds (`textanalytics`, `caqdas` themed), 
-        `assumptions`/`regression` Q-Q + residual diagnostics.
-      *Coverage checked 2026-08-04:* every plugin still calling `appendPlot` (16 of them,
-      23 call sites) appears in one of the three groups above — so each remaining chart
-      has a recorded disposition, and "still on the old API" is a deliberate outcome
-      rather than a backlog. Layer 2 is closed; only Layer 3 itself is unbuilt.
+      Opt-in, for everything not in Layer 2 where body edits are worth a round-trip.
+      **Re-counted 2026-10-15** — the groups below had kept every chart listed in August,
+      the ones since migrated to model kinds included, so this read as 16 plugins of work
+      when 7 of those entries no longer call `appendPlot` at all:
+      - *Marginal-fit charts (weren't worth a Layer-2 model) — 4:* `ecology` NMDS,
+        `inequality` Lorenz, `cointegration` volatility, `timeseries` ARIMA forecast.
+        *(`decisions` tornado + CE plane have migrated.)*
+      - *New-glyph charts (Tier B — no existing kind) — 2:* `ordination` CA biplot,
+        `ordination` MDS map. *(`plots` boxplot, `meta` forest and `survival`
+        Kaplan-Meier have migrated — box, forest and steps are kinds now.)*
+      - *No-data-model charts (only Layer 1 + maybe a redraw/param control) — 5:* `sna`
+        network, `spatial` choropleth, `decisions` tree, `timeseries` STL decomposition,
+        `var` IRF (multi-panel). *(Word clouds and the Q-Q/residual diagnostics have
+        migrated.)*
+
+      *Coverage checked 2026-10-15 by counting the call sites:* **11 sites across 9
+      plugins**, every one of them in a group above — so each remaining chart has a
+      recorded disposition, and "still on the old API" is a deliberate outcome rather than
+      a backlog. The inventory is now asserted by `test/baked-plot-inventory.test.mjs`,
+      because a hand-maintained list of what is left is precisely the thing that goes
+      stale without anyone noticing. Layer 2 is closed; only Layer 3 itself is unbuilt.
     - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
       their svglite bodies and gain Layer 1 (frame) + optional Layer 3 (declared controls);
       only common charts warranted full Layer 2 model migration — now complete.
@@ -2039,15 +2059,31 @@ bottom; they are the project's memory and are not summarised away.
       settings store can generalise that pattern. (Dataset persistence is its own
       item — see **Dataset library** under Deferred features; OPFS, not IndexedDB.)
 
-- [ ] **Variable-picker polish (later).** The "Selected" group is a snapshot taken
-      when the dialog opens — ticking a box inside the dialog deliberately does
-      *not* live-reorder it to the top (reordering rows under the cursor causes
-      mis-clicks). Possible later refinements, none urgent: a live "N selected"
-      count in the dialog; a "selected only" filter inside the picker (mirroring
-      the grid's column filter) for very long lists; and an optional
-      **picker→selection write-back** so confirming a picker updates the shared
-      selection (today the picker's choice returns to the plugin but doesn't
-      change the grid/sidebar selection — a real design call, left as-is for now).
+- [~] **Variable-picker polish — two of three DONE (2026-10-15).** The "Selected" group
+      is a snapshot taken when the dialog opens — ticking a box inside the dialog
+      deliberately does *not* live-reorder it to the top (reordering rows under the cursor
+      causes mis-clicks). That rule is what shaped both of these.
+
+      - [x] **A live "N selected" count.** The status line said "12 of 900 variables" —
+            how much the filter was showing — and never how much was *chosen*, which on a
+            900-variable extract is the number the user wants. It could not just be added
+            to `render()`, because ticking does not re-render; it is repainted on its own
+            from the change handler, into the existing `aria-live` element, so a screen
+            reader hears the tick land too. Multi-select only — "1 selected" beside a
+            radio list states what the list already shows.
+      - [x] **A "Selected only" view**, restricted to what is ticked *now* (the live set,
+            not the one the dialog opened with). Offered only for a multi-select list of
+            at least `SELECTED_ONLY_MIN` (15) — the rule the cross-dataset scope switch
+            already follows, that a control which cannot usefully change anything reads as
+            broken. Unticking inside the view leaves the row in place with its box cleared,
+            because ticking still does not re-render — the no-jumping rule paying off
+            rather than being worked around. Empty says *which* emptiness it is: "Nothing
+            is selected yet" rather than blaming a filter the reader never set.
+            The three behaviours are pure functions (`visibleVars`, `pickerCountLabel`,
+            `pickerEmptyLabel`) so they are testable without a DOM.
+      - [ ] **Picker→selection write-back** — still open, and still a real design call
+            rather than a refinement: today the picker's choice returns to the plugin but
+            does not change the grid/sidebar selection. Left as-is pending the owner.
 
 - [ ] **#184 — a comprehensive how-to guide (owner, 2026-09-21).** Nothing like it
       exists. What exists is scattered and each piece is deliberately narrow: *Getting
