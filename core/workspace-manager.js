@@ -15,6 +15,7 @@
  * and tearing down the rest.
  */
 
+import { pickFile } from './pick-file.js';
 import { PluginBroker } from './plugin-broker.js';
 import { attachSandbox } from './plugin-sandbox.js';
 import { Lifecycle, advisory } from './plugin-lifecycle.js';
@@ -704,7 +705,7 @@ function buildVerbToolbar(verbs, onInvoke, onRestart) {
     btn.className = 'ws-verb';
     btn.addEventListener('click', () => {
       if (verb.needsFile) {
-        verbPickFile(verb.needsFile.extensions).then((file) => {
+        pickFile({ accept: verb.needsFile.extensions }).then((file) => {
           if (file) onInvoke(verb, file);
         });
       } else {
@@ -728,19 +729,4 @@ function buildVerbToolbar(verbs, onInvoke, onRestart) {
   return bar;
 }
 
-/** Open a native file picker for a verb's needsFile declaration. Must be called
- * synchronously from a click handler to preserve user activation. */
-function verbPickFile(extensions) {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    if (Array.isArray(extensions) && extensions.length) input.accept = extensions.join(',');
-    input.style.display = 'none';
-    let settled = false;
-    const finish = (v) => { if (settled) return; settled = true; input.remove(); resolve(v); };
-    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
-    input.addEventListener('cancel', () => finish(null));
-    document.body.append(input);
-    input.click();
-  });
-}
+

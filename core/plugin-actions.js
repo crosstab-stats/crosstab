@@ -16,6 +16,7 @@
  * The plugin function therefore receives ready inputs and only does the analysis.
  */
 
+import { pickFile } from './pick-file.js';
 import { CoreEvents } from './event-bus.js';
 import { datasetsNamed, parseVarRef } from './var-ref.js';
 import { registerRemoteChartKind, unregisterChartKind } from './chart-renderer.js';
@@ -367,7 +368,7 @@ export class PluginActions {
       if (gathered === null) return;
     }
     if (verb.needsFile) {
-      const file = await pickFile(verb.needsFile.extensions);
+      const file = await pickFile({ accept: verb.needsFile.extensions });
       if (!file) return;
       gathered.__file = { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) };
     }
@@ -778,7 +779,7 @@ export class PluginActions {
       await this.#dataStore.materialize();
       this.#activate(restoreTo); // and the user's dataset tab back where they left it
     }
-    this.#results.reorderRuns?.(analysisOrder(this.#analysisLog.entries()));
+    this.#results.reorderRuns?.(runOrderFromLog(this.#analysisLog.entries()));
     return true;
   }
 
@@ -950,8 +951,14 @@ export class PluginActions {
  * The runIds in the order the timeline shows them: by data position, and within one position
  * by the order they were run. The same ordering `serialize()` and the History list use, so
  * Output, History and the script text cannot disagree about sequence.
+ *
+ * NOT `timeline.analysisOrder`, which this was named until the two were told apart.
+ * That one takes timeline ROWS and keeps only the live ones; this takes LOG ENTRIES and
+ * keeps every one, because a withdrawn run has no blocks in the model so naming it is
+ * free. Same name, different input, opposite answer on liveness — `data-views` already
+ * carried a comment spelling out which of the two it meant at one call site.
  */
-function analysisOrder(entries) {
+function runOrderFromLog(entries) {
   return [...(entries || [])]
     .map((e, i) => ({ e, i }))
     .sort((a, b) => {
@@ -1121,7 +1128,7 @@ async function gatherInputs(ui, specs, item, data, howto = null) {
       // matrix…) — distinct from the importer flow, which produces a dataset. The
       // plugin receives { name, bytes } and does what it likes (e.g. writes the
       // bytes to WebR's FS and reads them in R).
-      const file = await pickFile(spec.extensions);
+      const file = await pickFile({ accept: spec.extensions });
       if (!file) {
         if (spec.optional) {
           out[spec.name] = null;
@@ -1179,28 +1186,6 @@ function toInjectInputs(specs, gathered) {
     }
   }
   return inj;
-}
-
-/** Open a native file picker and resolve the chosen File, or null if cancelled.
- * `extensions` (e.g. ['.geojson','.json']) filters the picker. */
-function pickFile(extensions) {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    if (Array.isArray(extensions) && extensions.length) input.accept = extensions.join(',');
-    input.style.display = 'none';
-    let settled = false;
-    const finish = (v) => {
-      if (settled) return;
-      settled = true;
-      input.remove();
-      resolve(v);
-    };
-    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
-    input.addEventListener('cancel', () => finish(null));
-    document.body.append(input);
-    input.click();
-  });
 }
 
 /**

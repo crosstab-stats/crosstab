@@ -26,6 +26,7 @@
  * 4. The host downloads the bytes.
  */
 
+import { filenameFor } from './plugin-stdlib.js';
 import { downloadFile } from './export-service.js';
 import { escapeHtml } from './text.js';
 
@@ -274,13 +275,3 @@ function escapeAttr(s) {
   return escapeHtml(s).replace(/"/g, '&quot;');
 }
 
-/** A filesystem-friendly filename from a title + extension. */
-function filenameFor(title, ext) {
-  const base =
-    String(title || 'crosstab-output')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60) || 'crosstab-output';
-  return `${base}.${ext}`;
-}

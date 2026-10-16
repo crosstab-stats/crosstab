@@ -23,6 +23,7 @@
  * removes its menu items immediately.
  */
 
+import { pickFile } from './pick-file.js';
 import { foldPluginOpinions, isPluginOp, pluginTarget } from './plugin-state.js';
 import { PluginActions } from './plugin-actions.js';
 import { deployConfig } from './deploy-config.js';
@@ -243,7 +244,7 @@ export class PluginManager {
 
   /** Pick a file and add the plugin in it. Resolves the new load key, or null. */
   async addFromFilePrompt() {
-    const file = await pickFile();
+    const file = await pickFile({ accept: '.js,.mjs,.ctplugin,.zip,text/javascript,application/zip' });
     if (!file) return null;
     try {
       return await this.addFromFile(file);
@@ -1203,25 +1204,7 @@ function pluginSlug(name) {
 }
 
 /** Open a file picker for a plugin source file. Resolves the File, or null. */
-function pickFile() {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.js,.mjs,.ctplugin,.zip,text/javascript,application/zip';
-    input.style.display = 'none';
-    let settled = false;
-    const finish = (v) => {
-      if (settled) return;
-      settled = true;
-      input.remove();
-      resolve(v);
-    };
-    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
-    input.addEventListener('cancel', () => finish(null));
-    document.body.append(input);
-    input.click();
-  });
-}
+
 
 /** Does a plugin match the search query? Matches across name, id, category, and
  * keywords — so an oddly-named plugin is still found by what it does. */

@@ -17,6 +17,7 @@
  * reproducible analysis.R / output report.html are follow-ups.
  */
 
+import { pickFile } from './pick-file.js';
 import { makeZip, readZip } from './zip.js';
 
 const FORMAT = 'crosstab-project';
@@ -191,25 +192,11 @@ export function importProjectBundle(buf) {
   };
 }
 
-/** Open a native picker for a `.crosstab` bundle; resolves the File or null. */
+/** Open a native picker for a `.crosstab` bundle; resolves the File or null.
+ * Thin wrapper over the shared picker — see core/pick-file.js for why there is only
+ * one of these now. */
 export function pickBundleFile() {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.crosstab,.zip';
-    input.style.display = 'none';
-    let settled = false;
-    const finish = (v) => {
-      if (settled) return;
-      settled = true;
-      input.remove();
-      resolve(v);
-    };
-    input.addEventListener('change', () => finish(input.files?.[0] ?? null));
-    input.addEventListener('cancel', () => finish(null));
-    document.body.append(input);
-    input.click();
-  });
+  return pickFile({ accept: '.crosstab,.zip' });
 }
 
 /** Trigger a browser download of a Blob. */

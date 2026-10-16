@@ -37,6 +37,7 @@ const SELECTED_ONLY_MIN = 15;
  * @property {string} [okLabel='OK']
  */
 
+import { pickFile as pickOneFile } from './pick-file.js';
 import { loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
 import { makeVarToolbar, filterVars } from './var-toolbar.js';
 import { isCategorical, isQuantitative } from './var-role.js';
@@ -735,24 +736,13 @@ export class UiService {
    * @param {{title?: string, accept?: string, hint?: string}} [opts]
    * @returns {Promise<File|null>} null if the user cancels
    */
-  pickFile({ accept = '', hint = '' } = {}) {
-    return new Promise((resolve) => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      if (accept) input.accept = accept;
-      input.style.display = 'none';
-      if (hint) input.title = hint;
-      let settled = false;
-      const done = (v) => { if (!settled) { settled = true; input.remove(); resolve(v); } };
-      input.addEventListener('change', () => done(input.files?.[0] ?? null));
-      // `cancel` is not universal; the focus fallback covers browsers without it. Both
-      // are idempotent through `settled`, so a double fire cannot resolve twice.
-      input.addEventListener('cancel', () => done(null));
-      window.addEventListener('focus', () => setTimeout(() => done(input.files?.[0] ?? null), 400), { once: true });
-      document.body.append(input);
-      input.click();
-    });
+  pickFile(opts = {}) {
+    // Delegates. The focus fallback this method used to own is now shared, which is the
+    // point of the move: four other pickers relied on `cancel` alone and simply never
+    // settled without it. See core/pick-file.js.
+    return pickOneFile(opts);
   }
+
 
   /**
    * The frozen object exposed to plugins as `app.ui`.

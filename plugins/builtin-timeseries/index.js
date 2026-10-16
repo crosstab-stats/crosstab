@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -209,7 +209,7 @@ export async function decompose(app, { series, frequency }) {
     list(svg = .d(), n = length(x))`;
   const r = flat((await app.webr.run(rCode)).result);
   await app.results.appendText(`**STL Decomposition — ${label(meta, series)}** (frequency ${freq}, N = ${int(r.num1('n'))})`);
-  if (/<svg[\s>]/i.test(r.str1('svg'))) await app.results.appendPlot(stripSize(r.str1('svg')), { title: `STL Decomposition — ${label(meta, series)}` });
+  if (/<svg[\s>]/i.test(r.str1('svg'))) await app.results.appendPlot(cleanSvg(r.str1('svg')), { title: `STL Decomposition — ${label(meta, series)}` });
 }
 
 export async function arima(app, { series, h, frequency }) {
@@ -251,14 +251,11 @@ export async function arima(app, { series, h, frequency }) {
     },
     { caption: 'Forecast' },
   );
-  if (/<svg[\s>]/i.test(r.str1('svg'))) await app.results.appendPlot(stripSize(r.str1('svg')), { title: `ARIMA forecast — ${label(meta, series)}` });
+  if (/<svg[\s>]/i.test(r.str1('svg'))) await app.results.appendPlot(cleanSvg(r.str1('svg')), { title: `ARIMA forecast — ${label(meta, series)}` });
 }
 
 // --- helpers -----------------------------------------------------------------
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
-}
-function stripSize(svg) {
-  return svg.replace(/(<svg\b[^>]*?)\s+width='[^']*'/i, '$1').replace(/(<svg\b[^>]*?)\s+height='[^']*'/i, '$1');
 }

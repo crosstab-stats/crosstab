@@ -61,6 +61,7 @@
  * the picker just gathers them.
  */
 
+import { pickFiles } from './pick-file.js';
 import { showFormatPicker, chooseFormat, groupFor, byGroupThenOrder } from './format-picker.js';
 import { readZipEntries } from './zip.js';
 import { isSelfContained, decryptSelfContained } from './crypto-envelope.js';
@@ -1066,28 +1067,7 @@ function askMode(fileCount, canJoin = false) {
  * @param {boolean} multiple - Allow selecting several files at once.
  * @returns {Promise<File[]>}
  */
-function pickFiles(extensions, multiple) {
-  return new Promise((resolve) => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = extensions.join(',');
-    input.multiple = multiple;
-    input.style.display = 'none';
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      input.remove();
-      resolve(value);
-    };
-    input.addEventListener('change', () => finish([...(input.files ?? [])]));
-    // `cancel` fires when the dialog is dismissed (recent browsers). Harmless
-    // where unsupported — change still resolves the happy path.
-    input.addEventListener('cancel', () => finish([]));
-    document.body.append(input);
-    input.click();
-  });
-}
+
 
 /** Normalised key for matching: text, trimmed, lower-cased. */
 function normKey(v) {
