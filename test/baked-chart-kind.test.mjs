@@ -144,3 +144,82 @@ test('a project saved before the change is converted, not kept on the old path',
   assert.match(branch.slice(0, 1400), /bakedModel\(\{[\s\S]*?title:[\s\S]*?caption:/,
     'the legacy title and caption must be carried into the model');
 });
+
+// =============================================================================
+// The legend layer — entries a plugin supplies, wording the reader owns
+// =============================================================================
+
+const LEGEND = [
+  { key: 'rows', label: 'Rows: Region of residence (region)', color: '#2980b9' },
+  { key: 'cols', label: 'Columns: Highest education level (education)', color: '#c0392b' },
+];
+
+test('a figure with no legend entries draws no legend', () => {
+  // None of the nine baked figures had one, so the absence has to stay the default —
+  // an empty legend box floating beside a map would be worse than no legend at all.
+  const svg = render(bakedModel({ svg: R_SVG, title: 'T' }));
+  assert.deepEqual(layersOf(svg), ['plot', 'title']);
+  assert.equal(defaultView(bakedModel({ svg: R_SVG })).legend, 'none');
+});
+
+test('supplied entries become a legend layer in the figure', () => {
+  const model = bakedModel({ svg: R_SVG, title: 'Biplot', legend: LEGEND });
+  assert.equal(defaultView(model).legend, 'right');
+  const svg = render(model);
+  assert.deepEqual(layersOf(svg), ['plot', 'legend', 'title']);
+  assert.ok(svg.includes('#2980b9') && svg.includes('#c0392b'), 'the swatches use the plugin’s colours');
+});
+
+test("a long entry wraps rather than being clipped — which is why relabelling matters", () => {
+  const svg = render(bakedModel({ svg: R_SVG, legend: LEGEND }));
+  // Both words survive even though they cannot share a line in a 150px column.
+  assert.ok(svg.includes('Columns:') && svg.includes('education'));
+});
+
+test('the reader can reword an entry, and clearing reverts to the data’s label', () => {
+  // The owner's case: *"shortening a variable label in particular will be common."*
+  const model = bakedModel({ svg: R_SVG, legend: LEGEND });
+  const base = defaultView(model);
+  const short = render(model, { legendLabels: { cols: 'Education' } });
+  assert.ok(short.includes('>Education<'));
+  assert.ok(!short.includes('Highest'), 'the long label must be replaced, not appended to');
+  // An empty override is "no override", not "an entry with no text" — otherwise
+  // clearing the box would leave a swatch with nothing beside it and no way back.
+  assert.ok(render(model, { legendLabels: { cols: '' } }).includes('Highest'));
+  assert.ok(render(model, base).includes('Highest'));
+});
+
+test('the colours are NOT the reader’s to change', () => {
+  // They have to keep agreeing with a picture the host cannot repaint. The panel reads
+  // this flag to drop the swatch pickers while keeping the rename boxes.
+  const spec = chartUiSpec(bakedModel({ svg: R_SVG, legend: LEGEND }));
+  assert.equal(spec.colorEditable, false);
+  assert.deepEqual(spec.colorItems.map((i) => i.key), ['rows', 'cols']);
+  assert.notEqual(spec.colorLabel, 'Series', 'a baked figure has no series');
+});
+
+test('every other kind keeps its palette', () => {
+  // `colorEditable` defaults true, so this change is invisible to the ten plugin kinds.
+  const controls = readFileSync('core/charts/runtime.js', 'utf8');
+  assert.match(controls, /colorEditable: kd\.colorEditable !== false/);
+  const panel = readFileSync('core/chart-controls.js', 'utf8');
+  assert.match(panel, /const swatches = spec\.colorEditable !== false;/);
+});
+
+test('the legend placement and format controls appear only with entries', () => {
+  const without = chartUiSpec(bakedModel({ svg: R_SVG })).controls.map((c) => c.id);
+  const withEntries = chartUiSpec(bakedModel({ svg: R_SVG, legend: LEGEND })).controls.map((c) => c.id);
+  assert.ok(!without.includes('legend'), 'no entries ⇒ nothing to place');
+  assert.ok(withEntries.includes('legend') && withEntries.includes('legendSize'));
+});
+
+test('the biplot states its colours once, for R and for the key', () => {
+  // The figure and the key beside it must agree, so neither gets its own copy of the
+  // colour. `plot(cc)` used to take ca's defaults and the reader had to know that ca
+  // draws rows first — the key is what replaces that knowledge.
+  const src = readFileSync('plugins/builtin-ordination/index.js', 'utf8');
+  assert.match(src, /const ROW_COLOR = '#[0-9a-f]{6}';/);
+  assert.match(src, /plot\(cc, col = c\("\$\{ROW_COLOR\}", "\$\{COL_COLOR\}"\)\)/);
+  assert.match(src, /color: ROW_COLOR/);
+  assert.match(src, /color: COL_COLOR/);
+});

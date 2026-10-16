@@ -183,9 +183,14 @@ export function buildChartControls(item, onChange, { holder } = {}) {
       // a kind's own section of the same name — SCED has both a Phases section (lines,
       // labels) and a per-phase colour list, and two identically-titled sections is a
       // puzzle rather than a grouping.
-      const name = multi ? `Colour & order (${spec.colorLabel})` : 'Colour';
-      into(name, reorderList(items, view.seriesOrder, view, multi, paint, onChange, refocusRow), items.length);
-      if (Object.keys(view.colors).length) {
+      // Named for what it actually offers: "Colour & order" over a list with no colour
+      // pickers would be a label describing a control that is not there.
+      const swatches = spec.colorEditable !== false;
+      const name = !swatches ? `Legend (${spec.colorLabel})`
+        : multi ? `Colour & order (${spec.colorLabel})` : 'Colour';
+      into(name, reorderList(items, view.seriesOrder, view, multi, paint, onChange, refocusRow, swatches),
+        items.length);
+      if (swatches && Object.keys(view.colors).length) {
         into(name, textBtn('Reset colours', () => { view.colors = {}; paint(); onChange(); }), 0);
       }
     }
@@ -304,13 +309,17 @@ function buildControl(ctl, view, changed) {
 }
 
 /** A list of `items` ({key,label}) in `order`, each with optional colour picker
- * (when `viewForColor` is given) and ▲▼ reorder buttons. Mutates `order` in place. */
-function reorderList(items, order, viewForColor, showOrder, paint, onChange, refocus = () => {}) {
+ * (when `viewForColor` is given AND `swatches`) and ▲▼ reorder buttons. Mutates `order` in place. */
+function reorderList(items, order, viewForColor, showOrder, paint, onChange,
+  refocus = () => {}, swatches = true) {
   const by = new Map(items.map((it) => [it.key, it]));
   // The colour items ARE the legend entries, so this list is where their wording gets
   // edited. Only where there is a legend to edit: `showOrder` is the kind's `multi`,
   // and the category-order list passes no view at all (those are axis labels, not
   // legend entries, and renaming them here would rename the wrong thing).
+  //
+  // Renaming is deliberately NOT tied to `swatches`: a figure drawn in R owns its
+  // colours and not its wording, and the wording is the half people actually reach for.
   const renameable = !!viewForColor && showOrder;
   const list = elem('div', 'results-chart__series');
 
@@ -321,7 +330,7 @@ function reorderList(items, order, viewForColor, showOrder, paint, onChange, ref
     const row = elem('div', 'results-chart__srow');
     row.dataset.key = key; // so focus can be restored to this row after a repaint
 
-    if (viewForColor) {
+    if (viewForColor && swatches) {
       const color = document.createElement('input');
       color.type = 'color';
       color.className = 'results-chart__swatch';

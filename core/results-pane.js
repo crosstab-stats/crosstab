@@ -574,6 +574,9 @@ export class ResultsPane {
       svg: sanitizeHtml(svgString),
       title: typeof opts.title === 'string' ? opts.title : '',
       caption: typeof opts.caption === 'string' ? opts.caption : '',
+      // Legend entries the plugin supplies as DATA, drawn by the host as a live layer
+      // the reader can reword. Plain objects, so they cross the sandbox boundary.
+      legend: Array.isArray(opts.legend) ? opts.legend : [],
     }));
   }
 

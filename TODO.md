@@ -2171,11 +2171,45 @@ bottom; they are the project's memory and are not summarised away.
         R plot): composed into plot + title layers, R's own markup untouched, and PNG
         export rasterises the nested SVG (29.5 KB, valid header).
 
-      What is still to do from the proposal above: the **legend** layer. No baked figure
-      supplies legend entries as data yet, so there is nothing for the host to draw —
-      that is the per-plugin subtractive R change (stop drawing the legend, pass
-      `[{label, colour, marker}]` instead), and it can be done one plugin at a time now
-      that the frame is there.
+      **The legend layer followed, 2026-10-16** (owner: *"I can see legend in particular
+      being a thing users would want to edit — shortening a variable label in particular
+      will be common"*). A plugin passes `legend: [{key, label, color}]` to `appendPlot`
+      and the host draws it as a live layer.
+
+      **The expected work was not the work.** This entry assumed a *subtractive* change —
+      stop drawing the legend in R, pass it as data instead. In fact **none of the nine
+      baked figures drew a legend at all**, so there was nothing to stop doing: the host
+      legend is a key those figures never had. The one legend-ish thing that existed is
+      the choropleth's continuous colour bar, drawn inside the panel by `sf` via
+      `key.pos = 1`, which is a colour SCALE and not the row-per-category shape
+      `legendBlock` draws.
+
+      **Relabelling already existed and is the valuable half.** `view.legendLabels[key]`
+      overrides, with an empty box meaning "revert to the data's label" rather than "an
+      entry with no text" — and stdlib's own note names the case exactly: *"a
+      60-character legend entry is not a choice the user made, it is the value label the
+      DATA handed them."* So the work was to let a baked figure into that machinery.
+
+      **`colorEditable`, the one new idea.** Rename and recolour were coupled: the panel
+      drew the colour picker and the rename box from the same list. A baked figure's
+      swatches have to keep agreeing with a picture the host cannot repaint, so a kind
+      can now declare `colorEditable: false` — the entries stay relabellable and
+      reorderable, the colour pickers go, and the section is titled "Legend (…)" rather
+      than "Colour & order". It defaults true, so the ten plugin kinds are untouched.
+
+      **First plugin: the CA biplot.** `plot(cc)` draws row and column categories in two
+      colours and says nowhere which is which — the reader had to know that `ca` puts
+      rows in the first colour. It now states both colours explicitly (one definition
+      shared by the R call and the key, so they cannot drift) and supplies the entries.
+      Verified in the app: three layers, no swatch pickers, both rename boxes
+      placeholdered with the full variable labels, and shortening "Columns: Highest
+      education level (education)" to "Education" redraws the key while leaving R's
+      figure untouched; clearing the box puts the long label back.
+
+      **Still open:** the other eight baked figures have no categorical groups to key —
+      a network, a choropleth, an MDS map and an STL decomposition genuinely have nothing
+      to label. If one grows groups (nodes coloured by community, NMDS sites by
+      treatment), the frame is there and it is a few lines in that plugin.
 
       **Recommendation.** Do not build Layer 3b as one feature. The three-of-eleven
       appearance group should migrate instead; STL should be weighed against the `sced`

@@ -43,6 +43,7 @@ import { registerChartKind } from './runtime.js';
 import {
   designBox, layerOpen, LAYER_CLOSE, titleBlock, scalePlot, titleControls,
   plotSizeControl, TITLE_BAND, W, H, FONT,
+  legendBlock, legendControl, legendFormatControls, plotRightInset, plotVerticalInset,
 } from './stdlib.js';
 
 /** Round to a tidy number of SVG units. */
@@ -54,6 +55,28 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => (
 
 /** Room kept under the plot for a caption, when there is one. */
 const CAPTION_BAND = 26;
+
+/**
+ * The figure's legend entries, as the host will draw them.
+ *
+ * A plugin supplies `legend: [{key, label, color, marker?}]` alongside the SVG. None of
+ * the nine baked figures drew a legend in R — this is not a relocation of one, it is a
+ * key those figures never had: `ca`'s biplot, for one, plots row and column categories
+ * in different colours and says nowhere which is which.
+ *
+ * The colours come from the plugin because the plugin told R what to draw with. That is
+ * why `colorEditable` is false: the host can reword an entry but must not repaint a
+ * swatch, or the key would stop describing the picture next to it.
+ */
+function legendItems(model) {
+  return (model.legend || [])
+    .filter((e) => e && (e.label || e.key))
+    .map((e, i) => ({
+      key: String(e.key ?? e.label ?? i),
+      label: String(e.label ?? e.key ?? ''),
+      color: e.color || '#888888',
+    }));
+}
 
 /**
  * Place R's `<svg>` inside the plot layer's rect.
@@ -77,31 +100,39 @@ function placed(svg, box) {
   return s.replace(/<svg\b/i, `<svg${attrs}`);
 }
 
-/** The plot layer's rect: the canvas, less the title band and any caption band. */
+/** The plot layer's rect: the canvas, less the title band, any caption band, and the
+ * inset that leaves room for a default-sized legend. */
 function plotRect(model, view) {
   const canvas = designBox();
   const hasCaption = !!(view.captionText ?? model.caption);
+  const multi = legendItems(model).length > 1;
   return scalePlot({
     x0: canvas.x0,
-    x1: canvas.x1,
-    y0: canvas.y0 - (hasCaption ? CAPTION_BAND : 0),
-    y1: canvas.y1 + TITLE_BAND,
+    x1: canvas.x1 - plotRightInset(view, { none: 0 }),
+    y0: canvas.y0 - (hasCaption ? CAPTION_BAND : 0) - plotVerticalInset(view, 'bottom', multi),
+    y1: canvas.y1 + TITLE_BAND + plotVerticalInset(view, 'top', multi),
   }, view);
 }
 
 registerChartKind('baked', {
   altNoun: 'Figure',
-  colorLabel: 'Series',
+  // Not 'Series': these entries are whatever the figure distinguishes — rows and
+  // columns of a biplot, groups on an ordination — and 'Series' would name a thing a
+  // baked figure does not have.
+  colorLabel: 'Entries',
   reorderCategories: false,
-  // No colour items: the host did not choose these colours and cannot change them
-  // without re-running R. Offering a palette that silently does nothing would be worse
-  // than offering none — an empty list hides the palette and colour sections entirely.
-  colorItems: () => [],
+  // The legend entries, when the plugin supplied any. They appear in the panel as a
+  // relabel-and-reorder list — the wording is the host's to change, the colours are not.
+  colorItems: (model) => legendItems(model),
+  colorEditable: false,
 
-  baseView: () => ({ legend: 'none' }),
+  baseView: (model) => ({ legend: legendItems(model).length ? 'right' : 'none' }),
 
   controls: (model) => [
     ...titleControls(model),
+    ...(legendItems(model).length
+      ? [legendControl(true), ...legendFormatControls(true)]
+      : []),
     plotSizeControl(),
     {
       id: 'captionText',
@@ -129,6 +160,9 @@ registerChartKind('baked', {
     body.push(svg ?? String(model.svg || ''));
     body.push(LAYER_CLOSE);
 
+    const items = legendItems(model);
+    if (items.length) body.push(legendBlock(items, view.legend, box, view, designBox()));
+
     if (caption) {
       body.push(`<text x="${r((box.x0 + box.x1) / 2)}" y="${r(H - 8)}" text-anchor="middle" `
         + `font-family="${FONT}" font-size="12" fill="#5a6470">${esc(caption)}</text>`);
@@ -143,6 +177,12 @@ registerChartKind('baked', {
 });
 
 /** The model a baked figure is stored as. Exported for the results pane and its tests. */
-export function bakedModel({ svg, title = '', caption = '' }) {
-  return { kind: 'baked', svg: String(svg || ''), title, caption };
+export function bakedModel({ svg, title = '', caption = '', legend = [] }) {
+  return {
+    kind: 'baked',
+    svg: String(svg || ''),
+    title,
+    caption,
+    legend: Array.isArray(legend) ? legend : [],
+  };
 }

@@ -24,6 +24,11 @@
  */
 const { fixed: f, labelOf, metaMap, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
+/** The biplot's two point colours. Shared between the R call and the key the host
+ * draws beside it — one definition, so they cannot drift into disagreeing. */
+const ROW_COLOR = '#2980b9';
+const COL_COLOR = '#c0392b';
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-ordination',
@@ -103,7 +108,10 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
     iner <- cc$sv^2; tot <- sum(iner); pct <- 100 * iner / tot
     .ct_dev <- svgstring(width = 6, height = 5.4, pointsize = 11)
     par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    plot(cc)
+    # Colours stated rather than left to ca's defaults, because the host draws the key
+    # beside this figure and the two have to agree. col[1] is the row categories,
+    # col[2] the column categories.
+    plot(cc, col = c("${ROW_COLOR}", "${COL_COLOR}"))
     dev.off(); svg <- .ct_dev()
     list(dim = seq_along(iner), sv = cc$sv, inertia = iner, pct = pct, cum = cumsum(pct),
          totalInertia = tot, chisq = tot * sum(tab), n = sum(tab), svg = svg,
@@ -122,7 +130,22 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
     { caption: `Correspondence Analysis — ${labelOf(meta.get(rowName), rowName)} × ${labelOf(meta.get(colName), colName)} (total inertia = ${f(r.num1('totalInertia'), 4)})` },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Correspondence biplot' });
+  if (svg && /<svg[\s>]/i.test(svg)) {
+    // The key this figure never had. `plot(cc)` draws row and column categories in two
+    // colours and says nowhere which is which — the reader had to know that ca puts rows
+    // in the first colour. The host draws it as a live layer, so the wording can be
+    // shortened: "Highest education level (columns)" is the variable's label, not a
+    // choice anyone made.
+    await app.results.appendPlot(cleanSvg(svg), {
+      title: 'Correspondence biplot',
+      legend: [
+        // Distinguishing word FIRST: the legend column wraps, and "Rows" on line one
+        // reads at a glance where a trailing "(rows)" would be the last thing found.
+        { key: 'rows', label: `Rows: ${labelOf(meta.get(rowName), rowName)}`, color: ROW_COLOR },
+        { key: 'cols', label: `Columns: ${labelOf(meta.get(colName), colName)}`, color: COL_COLOR },
+      ],
+    });
+  }
   await app.results.appendText(
     'Correspondence analysis decomposes the table\'s **inertia** (total χ²/N association) into dimensions, like PCA for categories. In the **biplot**, row and column categories that lie in the same direction from the origin tend to co-occur; categories near the origin are close to the average profile. Keep the first 1–2 dimensions if they capture most of the inertia.',
   );

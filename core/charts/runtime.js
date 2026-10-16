@@ -104,6 +104,12 @@ export function chartSpecOf(kd, model) {
     colorLabel: (typeof kd.colorLabel === 'function' ? kd.colorLabel(model) : kd.colorLabel) || 'Series',
     reorderCategories: !!kd.reorderCategories,
     colorItems: kd.colorItems ? kd.colorItems(model) : [],
+    // Whether those items' COLOURS are the host's to change. False for a figure drawn
+    // in R: the swatches have to keep agreeing with a picture the host cannot repaint,
+    // so the entries stay relabellable and reorderable but lose the colour picker.
+    // Defaults true, so every existing kind is unaffected and a plugin kind that says
+    // nothing keeps its palette.
+    colorEditable: kd.colorEditable !== false,
     // `.filter(Boolean)`: a shared builder returns null when its control does not
     // apply (no palette for a single-colour chart), so kinds can list them flat.
     controls: (kd.controls ? kd.controls(model) : []).filter(Boolean),
