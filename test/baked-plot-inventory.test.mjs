@@ -32,7 +32,6 @@ const BAKED = {
   'builtin-cointegration': 1, // conditional volatility — one series over time
   'builtin-decisions': 1, // decision tree — JS-drawn, deliberately (layout is the figure)
   'builtin-ecology': 1, // NMDS ordination configuration
-  'builtin-inequality': 1, // Lorenz curve
   'builtin-ordination': 2, // CA biplot (arrow field) + MDS perceptual map
   'builtin-sna': 1, // network — force-directed layout
   'builtin-spatial': 1, // choropleth — map projection
@@ -59,8 +58,8 @@ test('the totals TODO.md quotes still hold', () => {
   const counts = actual();
   const sites = Object.values(counts).reduce((a, b) => a + b, 0);
   const plugins = Object.keys(counts).length;
-  assert.equal(sites, 11, `TODO.md says 11 baked sites; found ${sites}`);
-  assert.equal(plugins, 9, `TODO.md says 9 plugins; found ${plugins}`);
+  assert.equal(sites, 10, `TODO.md says 10 baked sites; found ${sites}`);
+  assert.equal(plugins, 8, `TODO.md says 8 plugins; found ${plugins}`);
 
   const todo = readFileSync('TODO.md', 'utf8');
   assert.match(todo, new RegExp(`\\*\\*${sites} sites across ${plugins}\\n?\\s*plugins\\*\\*`),
@@ -78,7 +77,12 @@ test('no migrated chart is still listed as pending work', () => {
   // slice that swept those in would fail on every one of them.
   const at = todo.indexOf('Opt-in, for everything not in Layer 2', head);
   assert.ok(at > head, 'the group list lost its anchor line');
-  const groups = todo.slice(at, todo.indexOf('*Coverage checked', at));
+  // Matched, not indexOf'd: the closing line is re-dated on every re-count ("Coverage
+  // checked" became "Coverage re-checked"), and a missed anchor silently widened the
+  // slice to the rest of the file rather than failing honestly.
+  const end = todo.slice(at).search(/\*Coverage re-?checked/);
+  assert.ok(end > 0, 'the group list lost its closing line');
+  const groups = todo.slice(at, at + end);
   const baked = new Set(Object.keys(actual()).map((d) => d.replace('builtin-', '')));
   // Plugin names appear as `inline code` inside the group lines; parenthesised asides
   // name the MIGRATED ones, so they are excluded before checking.

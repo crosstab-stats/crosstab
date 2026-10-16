@@ -19,7 +19,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, metaMap, unpackR: flat, cleanSvg } = globalThis.ctStd;
+const { fixed: f, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -57,7 +57,9 @@ export const manifest = {
       seeAlso: ['inequality-indices', 'spatial-autocorrelation'],
     },
   ],
-  rPackages: ['ineq', 'svglite'],
+  // No svglite: the Lorenz curve is a chart MODEL now, drawn by the host, so this
+  // plugin asks R for numbers and never for a picture.
+  rPackages: ['ineq'],
   menu: [
     {
       howto: 'inequality-indices',
@@ -81,8 +83,6 @@ export const manifest = {
   ],
 };
 
-const ACCENT = '#2980b9';
-
 // --- Inequality --------------------------------------------------------------
 
 export async function inequality(app, { x: xName }) {
@@ -90,17 +90,13 @@ export async function inequality(app, { x: xName }) {
   await app.webr.installPackages(['ineq']);
   const meta = metaMap(await app.data.getVariableMeta());
   const rCode = `
-    suppressMessages({library(ineq); library(svglite)})
+    suppressMessages(library(ineq))
     v <- as.numeric(x); v <- v[is.finite(v) & v >= 0]
     g <- Gini(v); th <- Theil(v); at <- Atkinson(v, parameter = 0.5); cv <- sd(v) / mean(v)
+    # The curve IS these two vectors. It used to be drawn here and the numbers discarded.
     lc <- Lc(v)
-    .ct_dev <- svgstring(width = 5.2, height = 5, pointsize = 11)
-    par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    plot(lc$p, lc$L, type = "l", lwd = 2, col = "${ACCENT}", xlab = "Cumulative share of population",
-         ylab = "Cumulative share of quantity", asp = 1)
-    abline(0, 1, col = "#cccccc", lty = 2)
-    dev.off(); svg <- .ct_dev()
-    list(gini = g, theil = th, atkinson = at, cv = cv, n = length(v), mean = mean(v), svg = svg)`;
+    list(gini = g, theil = th, atkinson = at, cv = cv, n = length(v), mean = mean(v),
+         lp = as.numeric(lc$p), lq = as.numeric(lc$L))`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -118,8 +114,28 @@ export async function inequality(app, { x: xName }) {
     },
     { caption: `Inequality — ${labelOf(meta.get(xName), xName)} (N = ${r.num1('n')}, mean = ${f(r.num1('mean'), 2)})` },
   );
-  const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Lorenz curve' });
+  // A chart model rather than a baked SVG, so the figure keeps its data: the title,
+  // legend and plot are separately editable layers, the curve can be recoloured or shown
+  // as points, and all of it survives a reload without re-running R.
+  const px = r.nums('lp');
+  const py = r.nums('lq');
+  if (px.length && px.length === py.length) {
+    await app.results.appendChart({
+      kind: 'scatter',
+      title: 'Lorenz curve',
+      points: px.map((xv, i) => ({ x: xv, y: py[i] })),
+      // Not a cloud of observations: these points are one continuous curve, and as dots
+      // the shape — which is the finding — disappears.
+      line: true,
+      // The 45-degree line is what the plot MEANS, not a finding about the data, which is
+      // exactly the distinction `reference` carries (grey, dashed, behind, no equation).
+      reference: { slope: 1, intercept: 0, label: 'Line of equality' },
+      axes: {
+        x: { title: 'Cumulative share of population' },
+        y: { title: 'Cumulative share of quantity' },
+      },
+    });
+  }
   await app.results.appendText(
     'All indices are 0 at perfect equality and rise with inequality (**Gini** 0–1 is the share of the area above the Lorenz curve; **Theil** and **Atkinson** are entropy/welfare-based and decomposable). The **Lorenz curve** plots cumulative quantity against cumulative population — the further it bows below the 45° line, the more unequal.',
   );

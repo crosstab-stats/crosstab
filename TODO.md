@@ -1843,24 +1843,27 @@ bottom; they are the project's memory and are not summarised away.
          + CI band. Validated against local R 4.6.0.
       4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
 
-      What is left is the genuinely hard residue, and it is the right residue: the **11
-      remaining sites across 9 plugins** (re-counted 2026-10-15 — this line used to say 16,
-      the figure from before the four migrations above) are mostly cases where **the
+      What is left is the genuinely hard residue, and it is the right residue: the **10
+      remaining sites across 8 plugins** (re-counted 2026-10-15 — this line used to say 16,
+      the figure from before the four migrations above; the Lorenz curve went on the 16th)
+      are mostly cases where **the
       geometry is the hard part and is not ours** — force-directed network layout, map
       projections, biplot arrow fields, ordination configurations. Each of those needs the
       numbers extracting from R first, which is a per-plugin data question rather than a
       chart-layer one.
 
-      **Noted while re-counting, for the owner's call:** two of the eleven look cheaper
-      than their group suggests. The `scatter` kind already supports `model.line` (draw it
-      as a polyline) and `model.reference` (a meaning line, deliberately distinct from a
-      trend line) — which is exactly the shape of the **Lorenz curve** (cumulative
-      population share against cumulative income share, plus the 45° equality line) and of
-      **conditional volatility** (one series over time). Both already compute every number
-      in R and then ask it for a picture, which is the tell this review was written around.
-      Left alone deliberately: this entry's own judgement is that the marginal-fit charts
-      "weren't worth a Layer-2 model" and that their story is Layer 3b, so overturning that
-      is a decision rather than a tidy-up.
+      5. ~~**Lorenz curve**~~ — done 2026-10-16, the first of the three the re-count
+         flagged. `Lc()` already returns the two vectors the curve IS; the plugin drew
+         them and discarded the numbers. Now a `scatter` model with `line: true` and the
+         45° line as `reference` — which is what that field is for: a reference is what
+         the plot MEANS, as against a trend, which is a finding. **svglite dropped from
+         the plugin entirely**, so Inequality installs one R package instead of two.
+
+      **Still to migrate, same reasoning (owner, 2026-10-16: *"if some charts can migrate
+      already we should do them first"*):** `cointegration` conditional volatility (one
+      series over time) and `timeseries` ARIMA forecast (a mean line plus a CI band —
+      closer to the `steps` kind's band than to `scatter`). Both compute every number in R
+      and then ask it for a picture, which is the tell this review was written around.
 
       5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
          *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
@@ -2071,16 +2074,65 @@ bottom; they are the project's memory and are not summarised away.
         `spatial` choropleth (projection), `ordination` CA biplot (arrow field) and MDS
         map, `ecology` NMDS. These are the real Layer 3b constituency: a re-run is
         defensible because the control would be a parameter the user expects to recompute.
-      - *Appearance wanted, data already in hand — 3:* `inequality` Lorenz,
-        `cointegration` conditional volatility, `timeseries` ARIMA forecast. These compute
-        every number in R and then ask it for a picture. Layer 3b is the wrong tool: hand
-        over the numbers and the whole instant panel comes free. `scatter` already supports
-        `model.line` and `model.reference`, which is the shape of the first two.
+      - *Appearance wanted, data already in hand — 2 left of 3:* `cointegration`
+        conditional volatility and `timeseries` ARIMA forecast. These compute every number
+        in R and then ask it for a picture. Layer 3b is the wrong tool: hand over the
+        numbers and the whole instant panel comes free. **`inequality` Lorenz migrated
+        2026-10-16** and is the worked example.
       - *Multi-panel composites — 2 (+1):* `timeseries` STL decomposition and `var` IRF,
         plus `decisions` tree (deliberately JS-drawn — the layout IS the figure). Worth
         noting: **multi-panel is not unprecedented** — the `sced` kind already stacks one
         panel per case over a shared x axis, which is structurally what STL is
         (trend/seasonal/remainder over shared time). VAR IRF is an n×n grid, which is not.
+
+      **THE DIRECTION (owner, 2026-10-16), and most of it already exists.** *"For those
+      that don't [migrate], I propose we adopt the layered model we already have. Reduce
+      the R call for the 'chart area' plotting and separate out title, legend, and
+      whatever else we can so those are live layers the controls can edit quickly. This
+      won't entirely eliminate the re-invocation steps but will at least minimize the
+      occurrences. And most people will care more about editing the title than the actual
+      plot."*
+
+      That is exactly the architecture the model path already has, and the investigation
+      above missed it. `core/charts/stdlib.js` draws every chart in **three addressable
+      layers** — `LAYERS = ['plot', 'legend', 'title']`, each emitted as
+      `<g class="ct-layer ct-layer--…">` — with `plotSize` to give the title and legend
+      room ("nothing reserves space from the plot any more"), `titleControls` for live
+      title text and size, the legend's own position/size controls, and per-layer offsets
+      persisted in the view.
+
+      **The decisive part: the drag layer is already agnostic about who drew the SVG.**
+      `core/chart-drag.js` says so in its own header — a chart arrives as an opaque string
+      from a kind that may live in a sandboxed plugin, so the host knows nothing about
+      where anything was drawn, and every geometric question is answered by
+      `getBoundingClientRect()` on the `ct-layer` group. Wrap a baked R panel in that
+      group and it becomes draggable and resizable **with no further work**.
+
+      So the job is not "build a layer system for baked plots". It is **make the `plot`
+      layer able to hold a foreign SVG**:
+      - *Nesting passes the sanitiser as-is.* `svg` is in the element allowlist and
+        `viewbox`/`x`/`y`/`width`/`height`/`preserveaspectratio` are all in the attribute
+        allowlist, so R's panel can be embedded as a nested `<svg>` inside the layer `<g>`.
+      - *Scaling is already handled.* `cleanSvg` strips svglite's fixed `width`/`height`
+        and leaves the `viewBox` — which is precisely what makes a foreign panel scale
+        into a host-chosen box. It has been doing this for every baked plot already.
+      - *Per-plugin R changes are small and subtractive:* stop drawing the title and the
+        legend in R (keep `xlab`/`ylab` — those belong to the panel), and pass the legend
+        over as data (`[{label, colour, marker}]`), which the plugin already has because
+        it chose the colours.
+
+      **What this does and does not buy.** Title, caption, legend text and position, the
+      three layers' placement and the plot's size all become instant and survive a reload
+      with no R. Anything that changes the PANEL — a different k, another distance metric,
+      a new forecast horizon — still re-invokes. Which matches the owner's read: most
+      editing is of the furniture, not the plot.
+
+      **One asymmetry worth knowing before building:** on the title specifically the baked
+      path is currently AHEAD. `appendPlot` already gives every baked figure a host-owned,
+      click-to-edit title and caption as plain text outside the SVG (Layer 1,
+      `makeEditable` in `#buildPlotBlock`); model charts instead carry the title inside the
+      SVG as the title layer, edited through the ⚙ panel. Two mechanisms, and a baked plot
+      adopting the layer model should not silently lose the one it has.
 
       **Recommendation.** Do not build Layer 3b as one feature. The three-of-eleven
       appearance group should migrate instead; STL should be weighed against the `sced`
@@ -2094,9 +2146,9 @@ bottom; they are the project's memory and are not summarised away.
       **Re-counted 2026-10-15** — the groups below had kept every chart listed in August,
       the ones since migrated to model kinds included, so this read as 16 plugins of work
       when 7 of those entries no longer call `appendPlot` at all:
-      - *Marginal-fit charts (weren't worth a Layer-2 model) — 4:* `ecology` NMDS,
-        `inequality` Lorenz, `cointegration` volatility, `timeseries` ARIMA forecast.
-        *(`decisions` tornado + CE plane have migrated.)*
+      - *Marginal-fit charts (weren't worth a Layer-2 model) — 3:* `ecology` NMDS,
+        `cointegration` volatility, `timeseries` ARIMA forecast.
+        *(`decisions` tornado + CE plane, and now `inequality` Lorenz, have migrated.)*
       - *New-glyph charts (Tier B — no existing kind) — 2:* `ordination` CA biplot,
         `ordination` MDS map. *(`plots` boxplot, `meta` forest and `survival`
         Kaplan-Meier have migrated — box, forest and steps are kinds now.)*
@@ -2105,7 +2157,7 @@ bottom; they are the project's memory and are not summarised away.
         `var` IRF (multi-panel). *(Word clouds and the Q-Q/residual diagnostics have
         migrated.)*
 
-      *Coverage checked 2026-10-15 by counting the call sites:* **11 sites across 9
+      *Coverage re-checked 2026-10-16 by counting the call sites:* **10 sites across 8
       plugins**, every one of them in a group above — so each remaining chart has a
       recorded disposition, and "still on the old API" is a deliberate outcome rather than
       a backlog. The inventory is now asserted by `test/baked-plot-inventory.test.mjs`,
