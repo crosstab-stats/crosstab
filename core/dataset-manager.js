@@ -25,6 +25,7 @@
  * being built before it's activated). The library autosave relies on this.
  */
 
+import { cleanName } from './text.js';
 import { CoreEvents } from './event-bus.js';
 import { duplicateName } from './copy-to-project.js';
 import { formatVarRef } from './var-ref.js';
@@ -387,7 +388,7 @@ export class DatasetManager {
     if (!ds) return;
     const was = ds.name;
     ds.name = name;
-    this.#log.append(collRename(id, name));
+    this.#log.append(collRename(id, cleanName(name)));
     // Before the UI event, so a listener that re-reads the log sees the re-pointed references
     // rather than the stale ones.
     if (String(was ?? '') !== String(name ?? '')) {

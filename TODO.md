@@ -1806,6 +1806,25 @@ bottom; they are the project's memory and are not summarised away.
 
 ### More analyses (each is just another plugin)
 
+- [ ] **A NUL in an imported column name reaches R as a raw byte (found 2026-10-17).**
+      `rStr` escapes backslash, quote, LF and CR, and passes U+0000 through untouched, so
+      `vars[["a b"]]` goes into R source with a literal NUL. R's parser rejects that —
+      and cannot be made to accept it, because an R character string cannot hold a NUL at
+      all. So this is not a quoting bug to fix in `rStr`; there is no escape to emit.
+
+      **Reachability is the open question.** Names typed in the UI are strictly validated
+      (`varNameError`: must start with a letter, then letters/digits/`_`/`.`), so this is
+      only reachable through IMPORT, where column names are taken as the file gives them.
+      A NUL in a CSV header means the file is damaged or binary. The failure is loud (an R
+      error) rather than silent, which is why it is recorded rather than patched.
+
+      **The decision to make** is whether the import boundary should clean column names
+      at all, and that is a policy question rather than a bug fix: stripping control
+      characters would make a damaged file import quietly instead of failing, which is not
+      obviously the kinder outcome. Related: `cleanName` now bounds PROJECT and DATASET
+      names (2026-10-17) because those become ops in the log; variable names deliberately
+      did not change.
+
 - [ ] **A line-with-uncertainty-ribbon chart kind (raised 2026-10-16).** The one thing
       blocking the last of the three "migrate it instead" charts, and useful well beyond
       it. Nothing currently draws a line with a shaded interval around it.

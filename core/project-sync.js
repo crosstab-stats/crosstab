@@ -14,6 +14,7 @@
  * is safe — a project owns its own copy of every dataset in it.
  */
 
+import { cleanName } from './text.js';
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ASSETS_CHANGED } from './asset-store.js';
@@ -3235,7 +3236,9 @@ export class ProjectSync {
   /** Rename a project. The active project renames in place (and re-saves);
    * another project is renamed on disk. */
   async renameProject(id, name) {
-    name = String(name).trim();
+    // Bounded, not merely trimmed: this name is recorded as an OP, so it is saved on
+    // every change and sent to every collaborator. See `cleanName`.
+    name = cleanName(name);
     if (!name) return;
     try {
       if (id === this.#binding?.id) {

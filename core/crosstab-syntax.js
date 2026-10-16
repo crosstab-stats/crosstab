@@ -272,15 +272,59 @@ function analysisToLine(a) {
 
 // --- value/identifier formatting ---
 
+/**
+ * Escape the body of a quoted token.
+ *
+ * The quote character and the backslash have to be escaped to survive the quoting. The
+ * LINE BREAKS have to be escaped to survive the FILE: this is a line-based language, so
+ * a raw newline inside a name turns one statement into two and the script stops parsing.
+ * That is reachable rather than theoretical — RFC 4180 permits a newline inside a quoted
+ * CSV header field, and imported names never pass through `varNameError`.
+ *
+ * U+2028/U+2029 go too: they are not line breaks to `split('\n')`, but `\s` in the
+ * tokeniser's regexes matches them, so a name containing one failed to parse in a way
+ * nothing on screen could explain.
+ *
+ * Paired with {@link unescapeAt} — the two must agree, so they live next to each other.
+ */
+function escapeBody(s, quote) {
+  let out = '';
+  for (const ch of String(s ?? '')) {
+    if (ch === '\\' || ch === quote) out += '\\' + ch;
+    else if (ch === '\n') out += '\\n';
+    else if (ch === '\r') out += '\\r';
+    else if (ch === '\t') out += '\\t';
+    else if (ch < ' ' || ch === '\u2028' || ch === '\u2029') {
+      out += '\\u' + ch.codePointAt(0).toString(16).padStart(4, '0');
+    } else out += ch;
+  }
+  return out;
+}
+
+/**
+ * Decode one escape. `s[i]` is the character AFTER the backslash.
+ * @returns {[string, number]} the decoded character and how many chars it consumed.
+ */
+function unescapeAt(s, i) {
+  const c = s[i];
+  if (c === 'n') return ['\n', 1];
+  if (c === 'r') return ['\r', 1];
+  if (c === 't') return ['\t', 1];
+  if (c === 'u' && /^[0-9a-fA-F]{4}$/.test(s.slice(i + 1, i + 5))) {
+    return [String.fromCharCode(parseInt(s.slice(i + 1, i + 5), 16)), 5];
+  }
+  return [c, 1]; // \" and \\ and anything else: the character itself
+}
+
 /** A bare identifier, or backtick-quoted if it has spaces/punctuation. */
 function ident(name) {
   const s = String(name ?? '');
-  return /^[A-Za-z_][A-Za-z0-9_.]*$/.test(s) ? s : '`' + s.replace(/`/g, '\\`') + '`';
+  return /^[A-Za-z_][A-Za-z0-9_.]*$/.test(s) ? s : '`' + escapeBody(s, '`') + '`';
 }
 
 /** A double-quoted string literal. */
 function str(s) {
-  return '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  return '"' + escapeBody(s, '"') + '"';
 }
 
 /** A recode/cell VALUE: bare if a finite number, else a quoted string. null → sysmis-ish blank. */
@@ -532,7 +576,12 @@ function takeIdent(s) {
     let out = '';
     let i = 1;
     for (; i < s.length; i++) {
-      if (s[i] === '\\' && i + 1 < s.length) { out += s[++i]; continue; }
+      if (s[i] === '\\' && i + 1 < s.length) {
+        const [ch, used] = unescapeAt(s, i + 1);
+        out += ch;
+        i += used;
+        continue;
+      }
       if (s[i] === '`') { i++; break; }
       out += s[i];
     }
@@ -571,7 +620,12 @@ function readStr(s) {
   if (s[0] !== '"') return s;
   let out = '';
   for (let i = 1; i < s.length; i++) {
-    if (s[i] === '\\' && i + 1 < s.length) { out += s[++i]; continue; }
+    if (s[i] === '\\' && i + 1 < s.length) {
+      const [ch, used] = unescapeAt(s, i + 1);
+      out += ch;
+      i += used;
+      continue;
+    }
     if (s[i] === '"') break;
     out += s[i];
   }
@@ -588,6 +642,12 @@ function splitTop(s, sep) {
   let cur = '';
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
+    // An escaped character is never a delimiter. Without this, `\"` flipped the
+    // in-string flag: with an EVEN number of escaped quotes the flips paired up and it
+    // worked by accident, and with an odd one — a label like `under 5"` — the next comma
+    // split the list mid-label and the value-label map came back with the code and the
+    // label fused into a single key. No error, just wrong data.
+    if (c === '\\' && (inS || inB) && i + 1 < s.length) { cur += c + s[i + 1]; i++; continue; }
     if (c === '"' && !inB) { inS = !inS; cur += c; continue; }
     if (c === '`' && !inS) { inB = !inB; cur += c; continue; }
     if (!inS && !inB) {

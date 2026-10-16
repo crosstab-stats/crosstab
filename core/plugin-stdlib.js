@@ -119,6 +119,32 @@ export function slug(s, { max = 60, fallback = 'crosstab-output' } = {}) {
   return base || fallback;
 }
 
+/**
+ * A user-typed DISPLAY name, bounded and free of control characters.
+ *
+ * Not {@link slug}: that makes a filename, lowercasing and dashing everything. This
+ * keeps the name a person typed — spaces, capitals, punctuation — and only removes what
+ * nothing downstream wants.
+ *
+ * It exists because a name is not just shown. A project or dataset name becomes an
+ * APPENDED OP in the log, which is written on every save and replicated to every
+ * collaborator, so an unbounded one is carried forever by every copy of the project.
+ * `max` is generous enough that no real name meets it and small enough that a pasted
+ * document does not reach the log.
+ *
+ * Control characters go to spaces rather than being dropped, so words either side of a
+ * stray newline do not weld together.
+ */
+export function cleanName(s, { max = 200, fallback = '' } = {}) {
+  const cleaned = String(s ?? '')
+    // C0, DEL + C1, and the two Unicode line separators — which are not line breaks to
+    // `split('\n')` but are whitespace to a regex, so they break tokenisers quietly.
+    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (cleaned.length > max ? cleaned.slice(0, max).trim() : cleaned) || fallback;
+}
+
 /** `slug` plus an extension — the exact function three exporters had written out. */
 export function filenameFor(title, ext, opts) {
   return `${slug(title, opts)}.${ext}`;
