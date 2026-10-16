@@ -6,7 +6,7 @@
 --- id: charts-engine
 Draws the **data-driven** figures in CrossTab — the ones built from numbers a plugin hands over, rather than from a picture. It has no menu of its own.
 
-Fourteen plugins depend on it: [Plots](howto:plots-choosing), Regression, Logistic, Assumptions, Survival, Meta-analysis, SCED, Factor, Time series, Cointegration, Inequality, Text analytics, CAQDAS word clouds and Decisions.
+Most analyses that draw a chart from your data depend on it — [Plots](howto:plots-choosing), Regression, Survival, Meta-analysis, SCED and Time series among them.
 
 **What happens if you switch it off**, which is the reason this page exists:
 

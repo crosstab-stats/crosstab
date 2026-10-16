@@ -65,7 +65,7 @@ export const manifest = {
     'forest plot', 'kaplan-meier', 'survival curve', 'single-case', 'sced'],
   howto:
     'Draws every figure in CrossTab. It has no menu of its own — other plugins compute the numbers and hand them here to be drawn.\n' +
-    'Nine plugins depend on it: Plots, Survival (Kaplan–Meier), Meta-analysis (forest), SCED, Factor, Time series, Text analytics, CAQDAS (word clouds) and Decisions (sensitivity, tornado).\n' +
+    'Most analyses that draw a chart depend on it — Plots, Survival (Kaplan–Meier), Meta-analysis (forest) and SCED among them.\n' +
     'Switch it off and: existing charts still SHOW their saved figure, but their ⚙ Chart options panel goes; and a NEW analysis reports which chart type is missing instead of drawing one. '
     + 'Figures drawn in R are unaffected — their kind lives in core, so they keep their options panel either way.\n' +
     '  • Same rule as everywhere else — a result stays readable without the plugin that made it; you just cannot make or re-style another one.',

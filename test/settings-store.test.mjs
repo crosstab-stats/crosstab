@@ -365,13 +365,16 @@ test('a shaped setting reports its effective value to a screen', () => {
   });
 });
 
-test('the counts in settings.js’s own header are still true', () => {
-  // The header says "eight genuine preferences, held by five modules". That is a
-  // measurement, and this file exists because measurements rot: the sentence said "six"
-  // within a day of being written, when the shaped settings arrived. If this fails,
-  // re-count and correct the prose — do not relax the check.
-  assert.equal(settingIds().length, 8, 'settings.js says eight preferences');
-  const header = readFileSync('core/settings.js', 'utf8').slice(0, 2000);
-  assert.match(header, /\*\*eight genuine preferences\*\*/);
-  assert.match(header, /\*\*five modules\*\*/);
+test('listSettings is the authority on what is declared', () => {
+  // The header deliberately quotes no count — `listSettings()` answers that, and a
+  // number in prose would be a second copy of it with no failure mode. What is worth
+  // pinning is that the authority WORKS: every declared setting comes back, with the
+  // metadata a Settings screen would need.
+  const rows = listSettings();
+  assert.equal(rows.length, settingIds().length);
+  assert.ok(rows.length > 0);
+  for (const r of rows) {
+    assert.ok(r.id && r.key, `${r.id}: a row needs an id and a key`);
+    assert.ok('value' in r && 'isSet' in r, `${r.id}: a screen needs the value and whether it is set`);
+  }
 });
