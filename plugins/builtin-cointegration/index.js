@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, cleanSvg } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -62,7 +62,9 @@ export const manifest = {
       seeAlso: ['cointegration-johansen', 'ts-arima'],
     },
   ],
-  rPackages: ['urca', 'fGarch', 'svglite'],
+  // No svglite: conditional volatility is a chart MODEL now (the only figure this
+  // plugin drew), so it asks R for numbers and never for a picture.
+  rPackages: ['urca', 'fGarch'],
   menu: [
     {
       howto: 'cointegration-johansen',
@@ -97,8 +99,6 @@ export const manifest = {
     },
   ],
 };
-
-const ACCENT = '#2980b9';
 
 // --- Cointegration (Johansen + VECM) ----------------------------------------
 
@@ -171,7 +171,7 @@ export async function garch(app, { series: sName, q, p, dist }) {
   const P = Number.isFinite(p) && p >= 0 ? Math.floor(p) : 1;
   const cd = ['norm', 'std', 'ged'].includes(dist) ? dist : 'norm';
   const rCode = `
-    suppressMessages({library(fGarch); library(svglite)})
+    suppressMessages(library(fGarch))
     x <- as.numeric(series); x <- x[is.finite(x)]
     fit <- garchFit(~ garch(${Q}, ${P}), data = x, trace = FALSE, cond.dist = ${rStr(cd)})
     cf <- fit@fit$matcoef
@@ -179,13 +179,11 @@ export async function garch(app, { series: sName, q, p, dist }) {
     ll <- -fit@fit$value; np <- length(fit@fit$coef); aic <- 2 * np - 2 * ll
     aterms <- rownames(cf)
     persist <- sum(cf[grepl("^alpha", aterms), 1]) + sum(cf[grepl("^beta", aterms), 1])
-    .ct_dev <- svgstring(width = 7, height = 3.6, pointsize = 11)
-    par(mar = c(4, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    plot(vol, type = "l", col = "${ACCENT}", lwd = 1.4, xlab = "Time", ylab = "Conditional SD")
-    dev.off(); svg <- .ct_dev()
     list(terms = aterms, est = as.numeric(cf[, 1]), se = as.numeric(cf[, 2]),
          t = as.numeric(cf[, 3]), p = as.numeric(cf[, 4]),
-         persist = persist, ll = ll, aic = aic, n = length(x), svg = svg)`;
+         persist = persist, ll = ll, aic = aic, n = length(x),
+         # The figure IS this vector — one conditional SD per observation.
+         vol = as.numeric(vol))`;
   const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), est = r.nums('est'), se = r.nums('se'), tv = r.nums('t'), pv = r.nums('p');
 
@@ -209,8 +207,20 @@ export async function garch(app, { series: sName, q, p, dist }) {
     },
     { caption: 'Model Summary' },
   );
-  const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Conditional volatility' });
+  // A chart model rather than a baked SVG: the series keeps its numbers, so the figure
+  // stays editable and survives a reload without re-fitting the model.
+  const vol = r.nums('vol');
+  if (vol.length) {
+    await app.results.appendChart({
+      kind: 'scatter',
+      title: 'Conditional volatility',
+      // Observation index, as `plot(vol, type = "l")` used: the fit is on a bare numeric
+      // vector, so there is no date axis to honour even when the data had one.
+      points: vol.map((y, i) => ({ x: i + 1, y })),
+      line: true,
+      axes: { x: { title: 'Time' }, y: { title: 'Conditional SD' } },
+    });
+  }
   await app.results.appendText(
     'GARCH models **volatility clustering** — periods where large changes follow large changes. **α** is the reaction to recent shocks, **β** the carry-over of past volatility; **persistence (α+β)** near 1 means shocks to volatility die out slowly. The plot shows the estimated conditional standard deviation over time.',
   );
