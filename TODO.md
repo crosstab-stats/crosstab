@@ -1806,6 +1806,30 @@ bottom; they are the project's memory and are not summarised away.
 
 ### More analyses (each is just another plugin)
 
+- [ ] **A line-with-uncertainty-ribbon chart kind (raised 2026-10-16).** The one thing
+      blocking the last of the three "migrate it instead" charts, and useful well beyond
+      it. Nothing currently draws a line with a shaded interval around it.
+
+      **Why neither existing kind will do**, which is the part worth not re-deciding:
+      - `scatter` draws a connected line (`model.line`) but has no band, and a forecast
+        figure without its interval has lost the point of being a forecast.
+      - `steps` has exactly the right band — it was built for Kaplan–Meier — but it is
+        deliberately a STAIRCASE, and its own header gives the statistical reason:
+        joining two estimates with a straight line claims a gradual change between them,
+        which is the opposite of what the KM estimator asserts. A forecast mean *is* a
+        continuous interpolation, so borrowing `steps` would make the same false claim in
+        the other direction. Adding a `mark: 'linear'` option to a kind named `steps`
+        would also blur the one thing it exists to say.
+
+      **Clients, in order of readiness:** `timeseries` ARIMA forecast (history + mean +
+      CI band; the plugin already extracts `point`/`lo`/`hi` for its table and would need
+      to add the history), then any fitted curve with a confidence band, a smoothed trend,
+      or a growth trajectory — all of which currently have no way to show uncertainty.
+
+      **Note when building:** adding a kind means registering it in BOTH the manifest's
+      `charts.kinds` list and `chartKinds()`. The harness asserts this, after `tornado`
+      shipped in only one of them and produced a chart mode nothing could draw.
+
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
       `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
       got no live controls, no palette, no re-editability. Reviewed to find out why.
@@ -2206,10 +2230,23 @@ bottom; they are the project's memory and are not summarised away.
       education level (education)" to "Education" redraws the key while leaving R's
       figure untouched; clearing the box puts the long label back.
 
-      **Still open:** the other eight baked figures have no categorical groups to key —
-      a network, a choropleth, an MDS map and an STL decomposition genuinely have nothing
-      to label. If one grows groups (nodes coloured by community, NMDS sites by
-      treatment), the frame is there and it is a few lines in that plugin.
+  - [ ] **Does any other baked figure want a legend? (open question, 2026-10-16.)**
+        The CA biplot was the one with a real gap. The other eight have **no categorical
+        groups to key**: a network, a choropleth, an MDS perceptual map, an STL
+        decomposition and a VAR impulse-response genuinely have nothing to label, and
+        inventing entries for them would be decoration.
+
+        So this is deliberately NOT a backlog of eight conversions. What would change the
+        answer is a figure growing groups — network nodes coloured by community, NMDS
+        sites by treatment, a choropleth switched from a continuous scale to classed
+        bins. Any of those becomes a few lines in that plugin, because the frame is
+        already there: pass `legend: [{key, label, color}]` to `appendPlot`, state the
+        colours once so the R call and the key cannot drift, and the host draws it.
+
+        The one that is a different problem, not this one: the **choropleth's colour
+        bar**, drawn inside the panel by `sf` (`key.pos = 1`). That is a continuous SCALE,
+        not a row per category, and `legendBlock` has no shape for it. Giving the host a
+        live colour-scale layer would be its own piece of work.
 
       **Recommendation.** Do not build Layer 3b as one feature. The three-of-eleven
       appearance group should migrate instead; STL should be weighed against the `sced`
@@ -2397,7 +2434,7 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Open follow-ups attached to completed entries
 
-Six loose ends live as sub-items under entries that are otherwise **done**, where they
+Seven loose ends live as sub-items under entries that are otherwise **done**, where they
 are easy to miss. They stay there because the reasoning around them is the parent entry's;
 this is the index.
 
@@ -2407,6 +2444,13 @@ this is the index.
 - **Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin note. *(under #162)*
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
+- **Does any other baked figure want a legend?** Eight have no categorical groups; the
+  choropleth's continuous colour bar is a different problem. *(under chart Layer 3b)*
+
+Two chart questions were raised while the baked figures were being standardised
+(2026-10-16). The legend one is above; the other is a first-class item of its own —
+**a line-with-uncertainty-ribbon kind**, under *More analyses*, which is what the ARIMA
+forecast is waiting on.
 
 ## Completed
 
