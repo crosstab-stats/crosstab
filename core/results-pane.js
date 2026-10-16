@@ -28,6 +28,8 @@
 import { sanitizeHtml } from './sanitize-html.js';
 import { downloadFile } from './export-service.js';
 import { describeChart, renderChartAsync, viewFromSpec, getChartKind } from './chart-renderer.js';
+// Registers the core `baked` kind on import — the one every R-drawn figure uses.
+import { bakedModel } from './charts/baked.js';
 import { CoreEvents } from './event-bus.js';
 import { buildChartControls } from './chart-controls.js';
 import { escapeHtml } from './text.js';
@@ -133,27 +135,6 @@ const RESULTS_STYLES = `
      chart body (svglite plot OR model chart). Title/caption are host text, never
      baked into the SVG, so they're renameable + persisted. */
   .results-plot-wrap { max-width: 672px; }
-  .results-plot__title {
-    font: inherit; font-size: 15px; font-weight: 600; color: #222;
-    margin: 0 0 6px; padding: 2px 4px; border-radius: 4px; outline: none; cursor: text;
-  }
-  .results-plot__caption {
-    font: inherit; font-size: 12.5px; font-style: italic; color: #667;
-    margin: 6px 0 0; padding: 2px 4px; border-radius: 4px; outline: none; cursor: text;
-  }
-  .results-plot__title:hover, .results-plot__caption:hover { background: #f2f4f7; }
-  .results-plot__title:focus, .results-plot__caption:focus {
-    background: #eef3f8; box-shadow: 0 0 0 1px var(--accent, #2572a5);
-  }
-  .results-plot__title:empty, .results-plot__caption:empty { min-height: 1em; }
-  /* Empty title/caption is invisible until you hover the block (or focus it), so a
-     titleless plot isn't cluttered with placeholder text. */
-  .results-plot__title:empty:before, .results-plot__caption:empty:before { content: ''; }
-  .results-plot-wrap:hover .results-plot__title:empty:before,
-  .results-plot-wrap:hover .results-plot__caption:empty:before,
-  .results-plot__title:focus:empty:before, .results-plot__caption:focus:empty:before {
-    content: attr(data-placeholder); color: #b0b7bf; font-weight: 400; font-style: italic;
-  }
   .results-empty { color: #727272; font-style: italic; }
   /* Data-driven charts (appendChart): a responsive SVG with an options panel and
      save buttons below it (auto height, so the controls aren't clipped like the
@@ -578,83 +559,22 @@ export class ResultsPane {
    *   insertion (the sanitiser allows a conservative SVG drawing subset).
    */
   appendPlot(svgString, opts = {}) {
-    const item = {
-      kind: 'plot',
+    // A figure R drew is now a CHART whose plot layer holds a foreign SVG, rather than
+    // a second kind of block with its own title mechanism (owner, 2026-10-16: *"the goal
+    // is to standardize as much as possible how a user interacts with charts/plots/
+    // graphs"*). So it gets the ⚙ panel, draggable layers, `plotSize`, persistence and
+    // export from the same code a scatter plot uses — and its title and caption now
+    // travel INSIDE the figure, so they survive an SVG/PNG export, which the old
+    // host-rendered title never did.
+    //
+    // Async where it used to be synchronous: `appendChart` asks the kind to describe
+    // itself. For `baked` — a core kind — that settles on the first microtask, and
+    // every caller already awaits.
+    return this.appendChart(bakedModel({
       svg: sanitizeHtml(svgString),
-      id: 0,
-      // Layer-1 frame: host-owned title/caption (plain text), NOT baked into the SVG,
-      // so they're renameable and persist across save/reload.
       title: typeof opts.title === 'string' ? opts.title : '',
       caption: typeof opts.caption === 'string' ? opts.caption : '',
-    };
-    const block = this.#buildPlotBlock(item, { onRedraw: opts.onRedraw });
-    // Place BEFORE recording: #place is what lazily creates the analysis section, and
-    // that pushes its own `section` entry. Pushing the plot first put it AHEAD of its
-    // own heading in the model — invisible on screen (the DOM nests correctly) but
-    // wrong everywhere the model is the source of truth: exported reports and reopened
-    // projects showed the figure above the analysis it belongs to.
-    this.#place(block);
-    this.#model.push(item);
-    this.#bus?.emit?.('output:written');
-    return item.id;
-  }
-
-  /** Build the DOM block for a `plot` item: the universal Layer-1 frame (editable
-   * title above, caption below) wrapping the fixed resizable SVG box (with the
-   * redraw + SVG/PNG controls). Registers the holder for PNG export and stamps
-   * `item.id`. Shared by {@link ResultsPane#appendPlot} and {@link ResultsPane#restoreModel}. */
-  #buildPlotBlock(item, { onRedraw } = {}) {
-    const block = this.#makeBlock();
-    const wrap = document.createElement('div');
-    wrap.className = 'results-plot-wrap';
-    block.append(wrap);
-
-    wrap.append(
-      makeEditable(item.title || '', 'Add a title…', 'results-plot__title', (t) => {
-        item.title = t;
-        this.#bus?.emit?.('output:written');
-      }),
-    );
-
-    // Resizable box: a lower-right grip scales the plot (vector → crisp).
-    const box = document.createElement('div');
-    box.className = 'results-plot';
-    const holder = document.createElement('div');
-    holder.className = 'results-plot__svg';
-    holder.innerHTML = sanitizeHtml(item.svg || '');
-    box.append(holder);
-
-    const handle = this.#chartHandle(item);
-    block.dataset.chartId = String(handle);
-    this.#plots.set(handle, holder);
-
-    // If the plot knows how to redraw itself (a plugin callback), offer a button that
-    // re-runs it at the box's current dimensions — the only way to change the aspect
-    // ratio without distorting (drag alone just scales).
-    if (typeof onRedraw === 'function') {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'results-plot__redraw';
-      btn.textContent = '⟳ Redraw at this size';
-      btn.title = 'Re-render at the current box size — re-lays-out at the new ratio';
-      btn.addEventListener('click', () => onRedraw(Math.max(1, holder.clientWidth), Math.max(1, holder.clientHeight)));
-      box.append(btn);
-    }
-
-    // "Save this plot": SVG direct (already SVG); PNG rasterised via canvas.
-    const save = document.createElement('div');
-    save.className = 'results-plot__save';
-    save.append(...exportButtons(holder, handle));
-    box.append(save);
-    wrap.append(box);
-
-    wrap.append(
-      makeEditable(item.caption || '', 'Add a caption…', 'results-plot__caption', (c) => {
-        item.caption = c;
-        this.#bus?.emit?.('output:written');
-      }),
-    );
-    return block;
+    }));
   }
 
   /**
@@ -669,9 +589,18 @@ export class ResultsPane {
     const holder = this.#plots.get(handle);
     if (!holder) return;
     const safe = sanitizeHtml(svgString);
-    holder.innerHTML = safe;
-    const item = this.#model.find((m) => m.kind === 'plot' && m.id === handle);
-    if (item) item.svg = safe;
+    // The figure now lives in the MODEL rather than only in the DOM, so a replacement
+    // has to go there too — writing the new picture straight into the holder would
+    // leave a reload, an export or a title edit re-rendering the old one.
+    const item = this.#model.find((m) => m.kind === 'chart' && m.id === handle
+      && m.model && m.model.kind === 'baked');
+    if (!item) { holder.innerHTML = safe; return; }
+    item.model.svg = safe;
+    void renderChartAsync(item.model, item.view).then((svg) => {
+      item.svg = sanitizeHtml(svg);
+      holder.innerHTML = item.svg;
+      this.#bus?.emit?.('output:written');
+    });
   }
 
   /**
@@ -1150,16 +1079,27 @@ export class ResultsPane {
         this.#place(block);
         this.#model.push({ kind: 'text', html: safe, tag });
       } else if (item.kind === 'plot') {
-        // Rebuild through the shared frame so a restored plot keeps its editable
-        // title/caption (Layer 1). No onRedraw on restore — the plugin callback is gone.
+        // A project saved BEFORE baked figures became charts. Converted on the way in
+        // rather than kept alive as a second shape: the title and caption the user typed
+        // are carried into the model, so they survive the upgrade and become editable in
+        // the ⚙ panel like every other chart's.
+        //
+        // `svg` is left empty so the first render composes the figure WITH those layers.
+        // Carrying the old picture through would have painted a figure with no title
+        // until something happened to re-render it — and the old picture never had the
+        // title in it, because that was the whole point of the old mechanism.
         const restored = {
-          kind: 'plot',
-          svg: sanitizeHtml(item.svg || ''),
+          kind: 'chart',
+          model: bakedModel({
+            svg: sanitizeHtml(item.svg || ''),
+            title: typeof item.title === 'string' ? item.title : '',
+            caption: typeof item.caption === 'string' ? item.caption : '',
+          }),
+          view: {},
           id: 0,
-          title: typeof item.title === 'string' ? item.title : '',
-          caption: typeof item.caption === 'string' ? item.caption : '',
+          svg: '',
         };
-        const block = this.#buildPlotBlock(restored);
+        const block = this.#buildChartBlock(restored);
         this.#place(block);
         this.#model.push(restored);
       } else if (item.kind === 'image') {
@@ -1858,33 +1798,6 @@ function tableExportRow(spec, fallbackText) {
     row.append(makeCopyBtn('⧉ Copy', () => copyText(fallbackText())));
   }
   return row;
-}
-
-/** An inline-editable single-line text element (host-owned chart title/caption, the
- * Layer-1 frame). Shows `placeholder` (dimmed, on hover/focus) when empty; commits the
- * trimmed text via `onCommit` on blur or Enter, reverts on Escape. Plain text only —
- * never HTML — so it can't inject into the results DOM. */
-function makeEditable(text, placeholder, className, onCommit) {
-  const el = document.createElement('div');
-  el.className = className;
-  el.contentEditable = 'plaintext-only';
-  el.spellcheck = false;
-  el.setAttribute('role', 'textbox');
-  el.setAttribute('aria-label', placeholder);
-  el.dataset.placeholder = placeholder;
-  el.textContent = text || '';
-  let last = el.textContent;
-  const commit = () => {
-    const t = el.textContent.replace(/\s+/g, ' ').trim();
-    if (t !== el.textContent) el.textContent = t;
-    if (t !== last) { last = t; onCommit(t); }
-  };
-  el.addEventListener('blur', commit);
-  el.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
-    else if (e.key === 'Escape') { e.preventDefault(); el.textContent = last; el.blur(); }
-  });
-  return el;
 }
 
 /**

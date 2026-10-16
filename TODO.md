@@ -2142,12 +2142,40 @@ bottom; they are the project's memory and are not summarised away.
       a new forecast horizon — still re-invokes. Which matches the owner's read: most
       editing is of the furniture, not the plot.
 
-      **One asymmetry worth knowing before building:** on the title specifically the baked
-      path is currently AHEAD. `appendPlot` already gives every baked figure a host-owned,
-      click-to-edit title and caption as plain text outside the SVG (Layer 1,
-      `makeEditable` in `#buildPlotBlock`); model charts instead carry the title inside the
-      SVG as the title layer, edited through the ⚙ panel. Two mechanisms, and a baked plot
-      adopting the layer model should not silently lose the one it has.
+      **FIRST STEP DONE 2026-10-16 — a baked figure IS a chart now.** The asymmetry this
+      paragraph used to describe (baked figures had a click-to-edit title and caption
+      outside the SVG; model charts carry the title inside it and edit it in the ⚙ panel)
+      was resolved in the direction the owner asked for: *"the goal is to standardize as
+      much as possible how a user interacts with charts/plots/graphs. Drop the current
+      baked mechanism and migrate them to the options panel like all the others."*
+
+      `core/charts/baked.js` registers a `baked` chart kind whose **plot layer holds a
+      foreign SVG**. `results.appendPlot` now builds a chart item of that kind, so a
+      figure R drew gets the ⚙ panel, draggable layers, `plotSize`, persistence, restore
+      and SVG/PNG export from the same code a scatter plot uses — one path, not two.
+      `#buildPlotBlock` and `makeEditable` are gone.
+
+      - **Registered in CORE, not in builtin-charts.** A baked figure does not depend on
+        the chart engine and never has; filing it with the other kinds would have made a
+        network diagram lose its title the moment the engine was switched off — a
+        regression aimed squarely at minimal and air-gapped installs.
+      - **The title and caption now travel INSIDE the figure**, so they appear in an SVG
+        or PNG export. The old host-rendered title never did.
+      - **No palette or colour list** is offered: the host did not choose those colours
+        and cannot change them without re-running R, and a control that silently does
+        nothing is worse than no control.
+      - **Projects saved earlier are converted on restore**, carrying the user's typed
+        title and caption into the model. Verified in the browser; a silently dropped
+        caption would be unnoticeable otherwise.
+      - **Verified end to end on a real baked figure** (STL decomposition, a multi-panel
+        R plot): composed into plot + title layers, R's own markup untouched, and PNG
+        export rasterises the nested SVG (29.5 KB, valid header).
+
+      What is still to do from the proposal above: the **legend** layer. No baked figure
+      supplies legend entries as data yet, so there is nothing for the host to draw —
+      that is the per-plugin subtractive R change (stop drawing the legend, pass
+      `[{label, colour, marker}]` instead), and it can be done one plugin at a time now
+      that the frame is there.
 
       **Recommendation.** Do not build Layer 3b as one feature. The three-of-eleven
       appearance group should migrate instead; STL should be weighed against the `sced`
