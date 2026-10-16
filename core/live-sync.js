@@ -60,7 +60,17 @@ const relaySetting = defineSetting({
   id: 'collab.relays',
   key: 'crosstab.relays',
   json: true,
-  coerce: (v) => (Array.isArray(v) && v.length ? v : undefined),
+  // Entries validated, not just the array. These are handed straight to the rendezvous
+  // client as broker URLs, so a non-string or an `http://` entry would reach the network
+  // layer. `ws:` is allowed beside `wss:` because an institution's own broker may be
+  // plain inside its network; anything else is dropped, and a list with nothing left
+  // reads as "not set" so the curated defaults stand.
+  coerce: (v) => {
+    if (!Array.isArray(v)) return undefined;
+    const ok = v.filter((u) => typeof u === 'string' && /^wss?:\/\//i.test(u.trim()))
+      .map((u) => u.trim());
+    return ok.length ? ok : undefined;
+  },
   fallback: DEFAULT_RELAYS, // the same shared array callers have always received
   label: 'Rendezvous relays',
   group: 'Collaboration',

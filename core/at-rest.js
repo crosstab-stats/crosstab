@@ -50,7 +50,20 @@ const policySetting = defineSetting({
   id: 'privacy.encryption',
   key: 'crosstab.encryption-policy',
   json: true,
-  coerce: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? { ...DEFAULTS, ...v } : undefined),
+  // Every target coerced to a REAL boolean, and unknown keys dropped. `shouldEncrypt`
+  // is `!!policy[target]`, so without this a stored `{export: 0}` would silently stop
+  // encrypting exports and `{local: "no"}` would silently start encrypting local
+  // storage — a change of posture with nothing on screen to show for it. A value that
+  // is not a boolean is treated as "not said" rather than guessed at, so the default
+  // for that target stands.
+  coerce: (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    const out = { ...DEFAULTS };
+    for (const target of Object.keys(DEFAULTS)) {
+      if (typeof v[target] === 'boolean') out[target] = v[target];
+    }
+    return out;
+  },
   fallback: () => ({ ...DEFAULTS }),
   label: 'Encrypt at rest',
   group: 'Privacy',

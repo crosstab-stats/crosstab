@@ -378,3 +378,61 @@ test('listSettings is the authority on what is declared', () => {
     assert.ok('value' in r && 'isSet' in r, `${r.id}: a screen needs the value and whether it is set`);
   }
 });
+
+// =============================================================================
+// Stored CONTENTS are validated too, not just the shape
+// =============================================================================
+
+test('a non-boolean in the stored policy does not change the posture', () => {
+  // `shouldEncrypt` is `!!policy[target]`, so before this a stored `{export: 0}`
+  // silently stopped encrypting exports and `{local: "no"}` silently started
+  // encrypting local storage. A value that is not a boolean is "not said", so the
+  // default for that target stands.
+  withStorage(fakeStorage({
+    'crosstab.encryption-policy': JSON.stringify({ export: 0, folder: 'yes', local: 'no' }),
+  }), () => {
+    assert.deepEqual(getEncryptionPolicy(), { export: true, folder: true, local: false });
+  });
+  // A real boolean is still honoured.
+  withStorage(fakeStorage({ 'crosstab.encryption-policy': JSON.stringify({ export: false }) }), () => {
+    assert.equal(getEncryptionPolicy().export, false);
+  });
+});
+
+test('an unknown key in the stored policy is dropped', () => {
+  withStorage(fakeStorage({
+    'crosstab.encryption-policy': JSON.stringify({ local: true, smuggled: true }),
+  }), () => {
+    assert.deepEqual(Object.keys(getEncryptionPolicy()).sort(), ['export', 'folder', 'local']);
+  });
+});
+
+test('relay entries are validated, not just the array', () => {
+  // They go straight to the rendezvous client as broker URLs.
+  withStorage(fakeStorage({
+    'crosstab.relays': JSON.stringify(['wss://ok.example/mqtt', 'http://nope', 42, null]),
+  }), () => {
+    assert.deepEqual(getRelayUrls(), ['wss://ok.example/mqtt']);
+  });
+  // ws: is allowed — an institution's own broker may be plain inside its network.
+  withStorage(fakeStorage({ 'crosstab.relays': JSON.stringify(['ws://intranet:8083/mqtt']) }), () => {
+    assert.deepEqual(getRelayUrls(), ['ws://intranet:8083/mqtt']);
+  });
+});
+
+test('a relay list with nothing valid left falls back to the curated defaults', () => {
+  withStorage(fakeStorage({ 'crosstab.relays': JSON.stringify(['javascript:alert(1)', {}]) }), () => {
+    assert.deepEqual(getRelayUrls(), DEFAULT_RELAYS);
+  });
+});
+
+test('validation happens on READ, so a value stored by an older build is checked', () => {
+  // The property that makes the registry worth having: nothing trusts what is in
+  // storage because it was valid when it was written.
+  withStorage(fakeStorage({ 'crosstab.varlist.sort': 'an-order-this-build-dropped' }), () => {
+    assert.equal(loadVarOrder(), 'file');
+  });
+  withStorage(fakeStorage({ 'crosstab.screen-mode': 'medium' }), () => {
+    assert.equal(storedScreenMode(), null);
+  });
+});
