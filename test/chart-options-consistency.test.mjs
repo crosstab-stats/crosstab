@@ -36,6 +36,10 @@ const MODELS = {
   box: { kind: 'box', title: 'T', groups: grp(2) },
   histogram: { kind: 'histogram', title: 'T', values: [1, 2, 3, 4, 5, 6, 7, 8] },
   steps: { kind: 'steps', title: 'T', curves: [{ key: 'c', label: 'C', points: [{ t: 0, s: 1 }, { t: 1, s: 0.5 }] }] },
+  band: {
+    kind: 'band', title: 'T',
+    series: [{ key: 's', label: 'S', points: [{ x: 0, y: 1, lo: 0.5, hi: 1.5 }, { x: 1, y: 2, lo: 1.6, hi: 2.4 }] }],
+  },
   forest: { kind: 'forest', title: 'T', rows: [{ key: 'r', label: 'R', est: 1, lo: 0, hi: 2 }] },
   sced: { kind: 'sced', title: 'T', cases: [{ key: 'c', label: 'C', phases: [{ key: 'A', label: 'A', points: [{ t: 1, y: 2 }] }] }] },
   wordcloud: { kind: 'wordcloud', title: 'T', words: [{ text: 'a', weight: 3 }, { text: 'b', weight: 1 }] },
@@ -106,7 +110,7 @@ test('a control shared by several kinds is built in ONE place', () => {
   // decision someone makes here, not an accident nobody sees.
   const FROM_A_BUILDER = new Set([
     'mark', 'valueMeasure', 'summary', 'pointSize', 'showPoints',
-    'palette', 'legend', 'gridlines', 'valueLabels',
+    'palette', 'legend', 'gridlines', 'valueLabels', 'lineWidth',
     'valueLabelSize', 'valueLabelBold', 'valueLabelItalic',
     'titleText', 'titleSize', 'titleBold', 'titleItalic',
     'legendSize', 'legendBold', 'legendItalic',

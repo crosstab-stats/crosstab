@@ -94,7 +94,7 @@ export const manifest = {
     // 'tornado' chart", advice nobody could act on, since the only renderer is the one in
     // this same file. Adding a kind means adding it in BOTH places; the harness now
     // asserts that rather than trusting it.
-    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'forest', 'sced', 'tornado', 'wordcloud'],
+    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'forest', 'sced', 'tornado', 'wordcloud'],
   },
 };
 
@@ -121,7 +121,7 @@ export function chartKinds(lib) {
     designBox, scalePlot, titleBlock, layerOpen, LAYER_CLOSE, svgClose,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
-    legendBlock, ordered, svgOpen, svgOpenH, chartAltText,
+    legendBlock, ordered, svgOpen, svgOpenH, chartAltText, lineWidthControl,
     bandFrame, xyFrame, plural, fiveNumber, kde, jitterFor,
   } = lib;
 
@@ -1380,90 +1380,144 @@ export function chartKinds(lib) {
     return `${up.join(' ')} ${down.join(' ')} Z`;
   }
 
-  kinds['steps'] = ({
-    altNoun: 'Step chart',
-    colorLabel: 'Curves',
-    reorderCategories: false,
-    colorItems: (model) => (model.series || []).map((s) => ({ key: s.key, label: s.label || s.key })),
-    baseView: (model) => ({
-      legend: (model.series || []).length > 1 ? 'right' : 'none',
-      confidenceBand: stepsHaveBand(model),
-      censorMarks: true,
-      lineWidth: 2,
-    }),
-    controls: (model) => {
-      const multi = (model.series || []).length > 1;
-      const hasMarks = (model.series || []).some((s) => (s.marks || []).length);
-      return [
-      ...(stepsHaveBand(model)
-        ? [{ id: 'confidenceBand', label: 'Confidence band', type: 'check', group: 'Chart', default: true }]
-        : []),
-      // The mark means "censored" for survival and something else elsewhere, so the
-      // model names it rather than the kind assuming.
-      ...(hasMarks
-        ? [{ id: 'censorMarks', label: model.markLabel || 'Event marks', type: 'check', group: 'Chart', default: true }]
-        : []),
-      { id: 'lineWidth', label: 'Line width', type: 'number', min: 0.25, step: 0.5, group: 'Style', default: 2 },
-      plotSizeControl(),
-      gridlinesControl(),
-      paletteControl(multi),
-      legendControl(multi, 'right'),
-      ...legendFormatControls(multi),
-      ...titleControls(model),
-      ...axisControls('x', model),
-      ...axisControls('y', model),
-      ];
-    },
-    render: (model, view) => {
-      const series = ordered(model.series || [], view.seriesOrder)
-        .map((s) => ({ ...s, points: (s.points || []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)) }))
-        .filter((s) => s.points.length);
-      if (!series.length) return errorSvg('Step chart: no points to plot.');
+  /** A series' points joined straight, point to point. */
+  function linePath(points, { xScale, yScale }) {
+    return points
+      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${r(xScale(p.x))} ${r(yScale(p.y))}`)
+      .join(' ');
+  }
 
-      const xValues = series.flatMap((s) => s.points.map((p) => p.x));
-      const yValues = series.flatMap((s) => s.points.flatMap((p) => [
-        p.y,
-        ...(view.confidenceBand && Number.isFinite(p.lo) ? [p.lo] : []),
-        ...(view.confidenceBand && Number.isFinite(p.hi) ? [p.hi] : []),
-      ]));
-      const f = xyFrame(model, view, { noun: 'Step chart',
-        xValues,
-        yValues,
-        legendItems: view.legend !== 'none' && series.length > 1
-          ? series.map((s, i) => ({ label: s.label || s.key, color: colorFor(view, s.key, i) })) : [],
-        alt: `${plural(series.length, 'curve')}, ${plural(xValues.length, 'step')}.`,
-      });
-
-      series.forEach((s, si) => {
-        const colour = colorFor(view, s.key, si);
-        if (view.confidenceBand) {
-          const band = stepBandPath(s.points, f);
-          if (band) f.out.push(`<path d="${band}" fill="${colour}" fill-opacity="0.15" stroke="none"/>`);
-        }
-        f.out.push(`<path d="${stepPath(s.points, f)}" fill="none" stroke="${colour}" `
-          + `stroke-width="${r(view.lineWidth || 2)}" stroke-linejoin="miter"/>`);
-
-        // Censoring ticks: short verticals ON the curve, the convention readers of
-        // survival curves already know (R's own `mark.time = TRUE` draws the same).
-        if (view.censorMarks !== false) {
-          for (const m of s.marks || []) {
-            if (!Number.isFinite(m.x) || !Number.isFinite(m.y)) continue;
-            const x = f.xScale(m.x);
-            const y = f.yScale(m.y);
-            f.out.push(`<line x1="${r(x)}" y1="${r(y - 4)}" x2="${r(x)}" y2="${r(y + 4)}" stroke="${colour}" stroke-width="${r((view.lineWidth || 2) * 0.8)}"/>`);
-          }
-        }
-      });
-
-      return f.close();
-    },
-  });
+  /** The interval ribbon as a closed polygon: up the highs, back along the lows. */
+  function lineBandPath(points, { xScale, yScale }) {
+    const usable = points.filter((p) => Number.isFinite(p.lo) && Number.isFinite(p.hi));
+    if (usable.length < 2) return '';
+    const up = usable.map((p, i) => `${i === 0 ? 'M' : 'L'} ${r(xScale(p.x))} ${r(yScale(p.hi))}`);
+    const down = [];
+    for (let i = usable.length - 1; i >= 0; i--) {
+      down.push(`L ${r(xScale(usable[i].x))} ${r(yScale(usable[i].lo))}`);
+    }
+    return `${up.join(' ')} ${down.join(' ')} Z`;
+  }
 
   /** Does any point carry a confidence interval? Gates the band control and default. */
   function stepsHaveBand(model) {
     return (model.series || []).some((s) => (s.points || []).some((p) => Number.isFinite(p.lo)));
   }
 
+  /**
+   * The shape shared by `steps` and `band`: one or more series of (x, y) with an
+   * optional interval ribbon, a legend, and the usual frame.
+   *
+   * They differ in exactly two functions — how the curve is drawn between points, and
+   * how the ribbon follows it — and that difference is the whole statistical content of
+   * the distinction, so it is a parameter rather than a copy. A staircase ASSERTS that
+   * nothing happened between two observations (what Kaplan–Meier claims); a straight
+   * join asserts a gradual change (what a forecast mean claims). Drawing either one with
+   * the other's path is a false statement about the data, which is why `steps` could not
+   * simply grow a `mark: 'linear'` option and why this is not two copies of one kind.
+   */
+  function curveKind({ altNoun, noun, pathFor, bandFor, linejoin, unit, marks }) {
+    return {
+      altNoun,
+      colorLabel: 'Curves',
+      reorderCategories: false,
+      colorItems: (model) => (model.series || []).map((s) => ({ key: s.key, label: s.label || s.key })),
+      baseView: (model) => ({
+        legend: (model.series || []).length > 1 ? 'right' : 'none',
+        confidenceBand: stepsHaveBand(model),
+        censorMarks: true,
+        lineWidth: 2,
+      }),
+      controls: (model) => {
+        const multi = (model.series || []).length > 1;
+        const hasMarks = marks && (model.series || []).some((s) => (s.marks || []).length);
+        return [
+          ...(stepsHaveBand(model)
+            ? [{ id: 'confidenceBand', label: 'Confidence band', type: 'check', group: 'Chart', default: true }]
+            : []),
+          // The mark means "censored" for survival and something else elsewhere, so the
+          // model names it rather than the kind assuming.
+          ...(hasMarks
+            ? [{ id: 'censorMarks', label: model.markLabel || 'Event marks', type: 'check', group: 'Chart', default: true }]
+            : []),
+          lineWidthControl(),
+          plotSizeControl(),
+          gridlinesControl(),
+          paletteControl(multi),
+          legendControl(multi, 'right'),
+          ...legendFormatControls(multi),
+          ...titleControls(model),
+          ...axisControls('x', model),
+          ...axisControls('y', model),
+        ];
+      },
+      render: (model, view) => {
+        const series = ordered(model.series || [], view.seriesOrder)
+          .map((s) => ({ ...s, points: (s.points || []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)) }))
+          .filter((s) => s.points.length);
+        if (!series.length) return errorSvg(`${noun}: no points to plot.`);
+
+        const xValues = series.flatMap((s) => s.points.map((p) => p.x));
+        const yValues = series.flatMap((s) => s.points.flatMap((p) => [
+          p.y,
+          ...(view.confidenceBand && Number.isFinite(p.lo) ? [p.lo] : []),
+          ...(view.confidenceBand && Number.isFinite(p.hi) ? [p.hi] : []),
+        ]));
+        const f = xyFrame(model, view, { noun,
+          xValues,
+          yValues,
+          legendItems: view.legend !== 'none' && series.length > 1
+            ? series.map((s, i) => ({ label: s.label || s.key, color: colorFor(view, s.key, i) })) : [],
+          alt: `${plural(series.length, 'curve')}, ${plural(xValues.length, unit)}.`,
+        });
+
+        series.forEach((s, si) => {
+          const colour = colorFor(view, s.key, si);
+          if (view.confidenceBand) {
+            const band = bandFor(s.points, f);
+            if (band) f.out.push(`<path d="${band}" fill="${colour}" fill-opacity="0.15" stroke="none"/>`);
+          }
+          f.out.push(`<path d="${pathFor(s.points, f)}" fill="none" stroke="${colour}" `
+            + `stroke-width="${r(view.lineWidth || 2)}" stroke-linejoin="${linejoin}"/>`);
+
+          // Censoring ticks: short verticals ON the curve, the convention readers of
+          // survival curves already know (R's own `mark.time = TRUE` draws the same).
+          if (marks && view.censorMarks !== false) {
+            for (const m of s.marks || []) {
+              if (!Number.isFinite(m.x) || !Number.isFinite(m.y)) continue;
+              const x = f.xScale(m.x);
+              const y = f.yScale(m.y);
+              f.out.push(`<line x1="${r(x)}" y1="${r(y - 4)}" x2="${r(x)}" y2="${r(y + 4)}" stroke="${colour}" stroke-width="${r((view.lineWidth || 2) * 0.8)}"/>`);
+            }
+          }
+        });
+
+        return f.close();
+      },
+    };
+  }
+
+  kinds['steps'] = curveKind({
+    altNoun: 'Step chart',
+    noun: 'Step chart',
+    pathFor: stepPath,
+    bandFor: stepBandPath,
+    linejoin: 'miter',
+    unit: 'step',
+    marks: true,
+  });
+
+  kinds['band'] = curveKind({
+    altNoun: 'Line chart with intervals',
+    noun: 'Band chart',
+    pathFor: linePath,
+    bandFor: lineBandPath,
+    // Round joins, because a forecast or a fitted curve is continuous — mitred corners
+    // on a dense series read as spikes in the data.
+    linejoin: 'round',
+    unit: 'point',
+    marks: false,
+  });
 
   // --------------------------------------------------------------------------
   // forest

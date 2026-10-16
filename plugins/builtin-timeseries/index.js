@@ -223,11 +223,13 @@ export async function arima(app, { series, h, frequency }) {
     library(forecast)
     fit <- auto.arima(ts1)
     fc <- forecast(fit, h = ${horizon})
-    library(svglite); .d <- svgstring(width = 6.6, height = 4, pointsize = 10); par(mar = c(4, 4, 2, 1))
-    plot(fc, main = ""); dev.off()
+    # The figure IS these vectors. plot(fc) drew them and the numbers were discarded;
+    # the host draws the same shape from the data, so it stays editable and needs no
+    # re-fit to re-render. histY is the half the table never needed.
     list(order = paste(arimaorder(fit), collapse = ", "), aic = fit$aic,
          point = as.numeric(fc$mean), lo = as.numeric(fc$lower[, ncol(fc$lower)]),
-         hi = as.numeric(fc$upper[, ncol(fc$upper)]), svg = .d())`;
+         hi = as.numeric(fc$upper[, ncol(fc$upper)]),
+         histY = as.numeric(x), level = as.numeric(tail(fc$level, 1)))`;
   const r = flat((await app.webr.run(rCode)).result);
   await app.results.appendTable(
     {
@@ -251,7 +253,37 @@ export async function arima(app, { series, h, frequency }) {
     },
     { caption: 'Forecast' },
   );
-  if (/<svg[\s>]/i.test(r.str1('svg'))) await app.results.appendPlot(cleanSvg(r.str1('svg')), { title: `ARIMA forecast — ${label(meta, series)}` });
+  // A `band` model rather than a baked SVG: a line with an uncertainty ribbon, which is
+  // what a forecast figure is. Two series, because the history is OBSERVED and the
+  // forecast is not — drawing them as one line would state that the model fitted the
+  // future as well as the past.
+  const histY = r.nums('histY');
+  if (histY.length && point.length) {
+    const level = Number.isFinite(r.num1('level')) ? r.num1('level') : 95;
+    const n = histY.length;
+    await app.results.appendChart({
+      kind: 'band',
+      title: `ARIMA forecast — ${label(meta, series)}`,
+      series: [
+        {
+          key: 'observed',
+          label: 'Observed',
+          points: histY.map((y, i) => ({ x: i + 1, y })),
+        },
+        {
+          key: 'forecast',
+          label: `Forecast (${f(level, 0)}% interval)`,
+          // Anchored on the last observation so the two series meet instead of leaving
+          // a gap at the join — the forecast starts where the data stops.
+          points: [
+            { x: n, y: histY[n - 1], lo: histY[n - 1], hi: histY[n - 1] },
+            ...point.map((y, i) => ({ x: n + i + 1, y, lo: lo[i], hi: hi[i] })),
+          ],
+        },
+      ],
+      axes: { x: { title: 'Time' }, y: { title: label(meta, series) } },
+    });
+  }
 }
 
 // --- helpers -----------------------------------------------------------------

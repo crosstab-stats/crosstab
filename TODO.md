@@ -1886,7 +1886,7 @@ bottom; they are the project's memory and are not summarised away.
          + CI band. Validated against local R 4.6.0.
       4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
 
-      What is left is the genuinely hard residue, and it is the right residue: the **9
+      What is left is the genuinely hard residue, and it is the right residue: the **8
       remaining sites across 7 plugins** (re-counted 2026-10-15 — this line used to say 16,
       the figure from before the four migrations above; the Lorenz curve went on the 16th)
       are mostly cases where **the
@@ -2133,10 +2133,10 @@ bottom; they are the project's memory and are not summarised away.
         `spatial` choropleth (projection), `ordination` CA biplot (arrow field) and MDS
         map, `ecology` NMDS. These are the real Layer 3b constituency: a re-run is
         defensible because the control would be a parameter the user expects to recompute.
-      - *Appearance wanted, data already in hand — 1 left of 3:* `timeseries` ARIMA
-        forecast, and it is blocked on a line-plus-band kind rather than on effort (see
-        above). **`inequality` Lorenz and `cointegration` conditional volatility migrated
-        2026-10-16**, both to `scatter` with `line: true`.
+      - *Appearance wanted, data already in hand — NONE LEFT.* All three migrated:
+        `inequality` Lorenz and `cointegration` conditional volatility (2026-10-16, to
+        `scatter` with `line: true`), and `timeseries` ARIMA forecast (2026-10-17, to the
+        new `band` kind that was blocking it).
       - *Multi-panel composites — 2 (+1):* `timeseries` STL decomposition and `var` IRF,
         plus `decisions` tree (deliberately JS-drawn — the layout IS the figure). Worth
         noting: **multi-panel is not unprecedented** — the `sced` kind already stacks one
@@ -2279,9 +2279,9 @@ bottom; they are the project's memory and are not summarised away.
       **Re-counted 2026-10-15** — the groups below had kept every chart listed in August,
       the ones since migrated to model kinds included, so this read as 16 plugins of work
       when 7 of those entries no longer call `appendPlot` at all:
-      - *Marginal-fit charts (weren't worth a Layer-2 model) — 2:* `ecology` NMDS and
-        `timeseries` ARIMA forecast. *(`decisions` tornado + CE plane, `inequality` Lorenz
-        and `cointegration` volatility have migrated.)*
+      - *Marginal-fit charts (weren't worth a Layer-2 model) — 1:* `ecology` NMDS.
+        *(`decisions` tornado + CE plane, `inequality` Lorenz, `cointegration` volatility
+        and `timeseries` ARIMA forecast have migrated.)*
       - *New-glyph charts (Tier B — no existing kind) — 2:* `ordination` CA biplot,
         `ordination` MDS map. *(`plots` boxplot, `meta` forest and `survival`
         Kaplan-Meier have migrated — box, forest and steps are kinds now.)*
@@ -2290,7 +2290,7 @@ bottom; they are the project's memory and are not summarised away.
         `var` IRF (multi-panel). *(Word clouds and the Q-Q/residual diagnostics have
         migrated.)*
 
-      *Coverage re-checked 2026-10-16 by counting the call sites:* **9 sites across 7
+      *Coverage re-checked 2026-10-17 by counting the call sites:* **8 sites across 7
       plugins**, every one of them in a group above — so each remaining chart has a
       recorded disposition, and "still on the old API" is a deliberate outcome rather than
       a backlog. The inventory is now asserted by `test/baked-plot-inventory.test.mjs`,

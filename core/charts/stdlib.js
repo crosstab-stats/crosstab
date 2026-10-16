@@ -543,6 +543,15 @@ export function pointSizeControl({ default: dflt = 3, visibleWhen } = {}) {
  *
  * @param {{default?: number}} [opts]
  */
+/**
+ * How thick a drawn curve is. Shared by `steps` and `band`, which are the same chart
+ * with different interpolation — so the control that styles the line belongs here
+ * rather than once in each.
+ */
+export function lineWidthControl({ default: dflt = 2 } = {}) {
+  return { id: 'lineWidth', label: 'Line width', type: 'number', min: 0.25, step: 0.5, group: 'Style', default: dflt };
+}
+
 export function rowHeightControl({ default: dflt = 22 } = {}) {
   return {
     id: 'rowHeight', label: 'Row height', type: 'number', group: 'Style',

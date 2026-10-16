@@ -34,7 +34,7 @@ const BAKED = {
   'builtin-ordination': 2, // CA biplot (arrow field) + MDS perceptual map
   'builtin-sna': 1, // network — force-directed layout
   'builtin-spatial': 1, // choropleth — map projection
-  'builtin-timeseries': 2, // STL decomposition (multi-panel) + ARIMA forecast
+  'builtin-timeseries': 1, // STL decomposition — multi-panel
   'builtin-var': 1, // impulse-response, multi-panel
 };
 
@@ -57,7 +57,7 @@ test('the totals TODO.md quotes still hold', () => {
   const counts = actual();
   const sites = Object.values(counts).reduce((a, b) => a + b, 0);
   const plugins = Object.keys(counts).length;
-  assert.equal(sites, 9, `TODO.md says 9 baked sites; found ${sites}`);
+  assert.equal(sites, 8, `TODO.md says 8 baked sites; found ${sites}`);
   assert.equal(plugins, 7, `TODO.md says 7 plugins; found ${plugins}`);
 
   const todo = readFileSync('TODO.md', 'utf8');
