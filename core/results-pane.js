@@ -552,11 +552,23 @@ export class ResultsPane {
   }
 
   /**
-   * Append a plot supplied as an SVG string. SVG (rather than a raster image) is
-   * preferred so plots stay crisp on high-DPI displays and scale to width.
+   * Append a figure R drew, supplied as an SVG string. SVG (rather than a raster image)
+   * is preferred so figures stay crisp on high-DPI displays and scale to width.
+   *
+   * It builds a CHART of the core `baked` kind, not a block of its own — see the body
+   * and `core/charts/baked.js`.
    *
    * @param {string} svgString - An `<svg>…</svg>` fragment; sanitised before
    *   insertion (the sanitiser allows a conservative SVG drawing subset).
+   * @param {object} [opts]
+   * @param {string} [opts.title]   drawn as the figure's title layer, editable in the panel.
+   * @param {string} [opts.caption] likewise, under the figure.
+   * @param {Array<{key: string, label: string, color: string}>} [opts.legend] entries for
+   *   a host-drawn legend layer. The colours must be the ones R actually drew with: the
+   *   reader can reword an entry but not repaint it, so a wrong colour here is a key that
+   *   lies about the picture beside it.
+   * @returns {Promise<number>} a chart handle. **Async**, where this used to return a
+   *   number directly — `appendChart` asks the kind to describe itself.
    */
   appendPlot(svgString, opts = {}) {
     // A figure R drew is now a CHART whose plot layer holds a foreign SVG, rather than
@@ -581,12 +593,16 @@ export class ResultsPane {
   }
 
   /**
-   * Replace the SVG of a previously appended plot, in place (keeps the box size
-   * and the redraw button). Used by the plot plugin after a "Redraw at this
-   * size" re-render. No-op if the handle is unknown.
+   * Replace the figure of a previously appended baked chart, in place. No-op if the
+   * handle is unknown.
+   *
+   * **Nothing in the repo calls this.** It is part of the `app.results` surface a plugin
+   * could use, and it is kept working, but the caller this doc used to name — builtin-plots
+   * re-rendering after "Redraw at this size" — has not existed since that plugin moved to
+   * model kinds, and the redraw button it mentioned went with `#buildPlotBlock`.
    *
    * @param {number} handle - The id returned by {@link ResultsPane#appendPlot}.
-   * @param {string} svgString - The new plot SVG; sanitised before insertion.
+   * @param {string} svgString - The new figure SVG; sanitised before insertion.
    */
   updatePlot(handle, svgString) {
     const holder = this.#plots.get(handle);
@@ -653,16 +669,20 @@ export class ResultsPane {
   }
 
   /**
-   * Append a **data-driven chart** (`app.results.appendChart`). Unlike
-   * {@link ResultsPane#appendPlot} — which takes a finished SVG baked in R — the
-   * plugin hands a structured {@link ChartModel} (categories + series + values), and
-   * the host renders it to SVG in JS via {@link renderChart}. That's what lets the
-   * chart's interactive controls (order, colour, stacking, legend) re-render it
-   * instantly with no WebR round-trip. The model + view are persisted, so a reopened
-   * chart stays editable.
+   * Append a **data-driven chart** (`app.results.appendChart`). The plugin hands a
+   * structured {@link ChartModel} (categories + series + values) and the host renders it
+   * to SVG in JS via {@link renderChart}, which is what lets the data-driven controls —
+   * order, colour, stacking — re-render instantly with no WebR round trip.
+   *
+   * {@link ResultsPane#appendPlot} comes through here too, as the `baked` kind: the
+   * difference is what the host was given. With a model it owns the geometry; with a
+   * baked SVG it owns only the composition — title, caption, legend, layer placement —
+   * and the data-driven controls are the ones it cannot offer. Both persist their model
+   * and view, so BOTH reopen editable. (This doc used to contrast the two as editable
+   * versus not, which stopped being true when baked figures became charts.)
    *
    * @param {import('./chart-renderer.js').ChartModel} model
-   * @returns {number} a plot handle (usable with {@link ResultsPane#getPlotPng}).
+   * @returns {Promise<number>} a chart handle (usable with {@link ResultsPane#getPlotPng}).
    */
   async appendChart(model) {
     const safeModel = JSON.parse(JSON.stringify(model)); // detach from the plugin's object
@@ -965,9 +985,12 @@ export class ResultsPane {
    * has not activated — a dead-end red message would have been a poor answer to "why is
    * there a step in my History with nothing under it".
    *
-   * The button is live DOM only. On restore the model rebuilds as plain text, exactly as
-   * a restored plot loses its `onRedraw` — the callback belonged to a session that has
-   * ended, and a button that silently does nothing is worse than no button.
+   * The button is live DOM only. On restore the model rebuilds as plain text: the
+   * callback belonged to a session that has ended, and a button that silently does
+   * nothing is worse than no button. (This used to cite a restored plot losing its
+   * `onRedraw` as the parallel case. There is no such callback any more, and a restored
+   * FIGURE now comes back fully editable — so the comparison was not only dead, it
+   * pointed the reader at the opposite of what happens.)
    *
    * @param {string} message      plain text (not HTML — this is never a formatting hook)
    * @param {object} [action]
@@ -1321,8 +1344,8 @@ export class ResultsPane {
    * @returns {Readonly<{
    *   beginSection: (title: string) => void,
    *   appendTable: (html: string) => void,
-   *   appendPlot: (svg: string) => void,
-   *   appendChart: (model: object) => number,
+   *   appendPlot: (svg: string, opts?: object) => Promise<number>,
+   *   appendChart: (model: object) => Promise<number>,
    *   appendText: (md: string) => void,
    *   appendError: (msg: string) => void,
    *   clear: () => void,

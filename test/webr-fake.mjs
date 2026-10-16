@@ -2,10 +2,11 @@
  * @file webr-fake.mjs
  * A plugin-test `app.webr` built from the HOST's own namespace code.
  *
- * Eight test files stub `webr` by hand. When `runOrThrow` landed, five of them broke and
- * the obvious fix — paste the three-line helper into each fake — would have left eight
- * copies of a host behaviour to keep in step with the host. A fake that drifts from the
- * thing it stands in for is worse than no fake: it passes while the app fails.
+ * Six test files stubbed `webr` by hand, eight stubs between them. When `runOrThrow`
+ * landed five test cases broke, and the obvious fix — paste the three-line helper into
+ * each fake — would have left eight copies of a host behaviour to keep in step with the
+ * host. A fake that drifts from the thing it stands in for is worse than no fake: it
+ * passes while the app fails.
  *
  * So the region between `plugin-host.html`'s `webr:start` / `webr:end` markers is lifted
  * and run over the stub's own `run`. Tests get the real wrapper; a change to what

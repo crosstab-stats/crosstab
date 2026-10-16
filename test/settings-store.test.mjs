@@ -22,6 +22,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { defineSetting, listSettings, settingIds } from '../core/settings.js';
 import { loadVarOrder, saveVarOrder, loadVarDisplay, saveVarDisplay } from '../core/var-order.js';
@@ -362,4 +363,15 @@ test('a shaped setting reports its effective value to a screen', () => {
     assert.deepEqual(row.value, { export: true, folder: true, local: true });
     assert.equal(row.group, 'Privacy');
   });
+});
+
+test('the counts in settings.js’s own header are still true', () => {
+  // The header says "eight genuine preferences, held by five modules". That is a
+  // measurement, and this file exists because measurements rot: the sentence said "six"
+  // within a day of being written, when the shaped settings arrived. If this fails,
+  // re-count and correct the prose — do not relax the check.
+  assert.equal(settingIds().length, 8, 'settings.js says eight preferences');
+  const header = readFileSync('core/settings.js', 'utf8').slice(0, 2000);
+  assert.match(header, /\*\*eight genuine preferences\*\*/);
+  assert.match(header, /\*\*five modules\*\*/);
 });

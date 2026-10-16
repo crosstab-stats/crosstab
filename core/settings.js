@@ -4,11 +4,17 @@
  *
  * ## Why
  *
- * Nine core modules reached into `localStorage` independently, and the six that store a
- * genuine *preference* had each rebuilt the same five pieces: a key, the values it
- * accepts, a default, validate-on-read so a hand-edited value cannot poison the app, and
- * a `try/catch` on both sides because storage throws outright in Safari private mode and
- * in a sandboxed frame. Five copies of a rule is where copies drift.
+ * Core reaches into `localStorage` from a dozen-odd places, but most of that is state,
+ * cache or credentials (see the boundary below). The **eight genuine preferences**, held
+ * by **five modules** — `var-order`, `screen-mode`, `debug`, `at-rest`, `live-sync` —
+ * had each rebuilt the same five pieces: a key, the values it accepts, a default,
+ * validate-on-read so a hand-edited value cannot poison the app, and a `try/catch` on
+ * both sides because storage throws outright in Safari private mode and in a sandboxed
+ * frame. Five copies of a rule is where copies drift.
+ *
+ * (Those two numbers are asserted by `test/settings-store.test.mjs`. A count in a comment
+ * is a measurement, and measurements rot — this one already had, within a day of being
+ * written, when the shaped settings arrived and "six" quietly became eight.)
  *
  * The second reason is the one that shaped the design: a single **Settings screen** needs
  * to enumerate what is settable, and no amount of `getItem` wrapping gives it that. So

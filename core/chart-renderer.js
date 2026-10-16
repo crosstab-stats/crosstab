@@ -3,16 +3,24 @@
  * Host-side, data-driven chart renderer — the other half of the plotting model.
  *
  * This file is now the PUBLIC FACE of the chart layer, not its implementation. The
- * runtime lives in ./charts/runtime.js and each chart kind in ./charts/kinds/, one
- * module apiece, each registering itself on import. Everything below is re-exported
- * from here so existing importers are unaffected.
+ * runtime lives in ./charts/runtime.js, the drawing helpers in ./charts/stdlib.js, and
+ * everything below is re-exported from here so existing importers are unaffected.
  *
- * The legacy path (`results.appendPlot`) takes a finished SVG baked in R: by the
- * time the host sees it, it's a picture, so colours, ordering, stacking and the
- * legend can't be changed without re-running R. This module instead renders a
- * **structured chart model** to SVG in plain JS, so a chart can be re-ordered,
- * recoloured and re-stacked *instantly* with no WebR round-trip. (The word cloud
- * already proved this R-computes-data / JS-renders-SVG split works here.)
+ * **Where the kinds actually live:** in the builtin-charts PLUGIN, which declares them
+ * in its manifest and registers them over postMessage (`registerRemoteChartKind`). Core
+ * ships exactly one of its own — `baked`, in ./charts/baked.js — and it is local
+ * because a figure R drew must keep its options panel even with the chart engine
+ * switched off. (This paragraph used to describe a `./charts/kinds/` directory of
+ * one-module-per-kind. There is no such directory and there never was in this layout.)
+ *
+ * `results.appendPlot` takes a finished SVG baked in R. By the time the host sees it the
+ * geometry is a picture, so the data-driven changes — colours, ordering, stacking —
+ * still need R. What the host CAN do is composition: the figure becomes the plot layer
+ * of a `baked` chart, with the title, caption and legend drawn over it as live layers.
+ * This module instead renders a **structured chart model** to SVG in plain JS, so a
+ * chart can be re-ordered, recoloured and re-stacked *instantly* with no WebR round
+ * trip. (The word cloud already proved this R-computes-data / JS-renders-SVG split works
+ * here.)
  *
  * ## Extensibility — the chart-kind registry
  * Chart *kinds* (categorical, scatter, pie, …) are entries in a registry, not a

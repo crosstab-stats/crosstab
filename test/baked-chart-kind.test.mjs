@@ -133,7 +133,10 @@ test('nothing renders a click-to-edit title any more', () => {
   const pane = readFileSync('core/results-pane.js', 'utf8');
   assert.doesNotMatch(pane, /makeEditable/, 'the inline editor should be gone entirely');
   assert.doesNotMatch(pane, /results-plot__title/, 'and its styling with it');
-  assert.doesNotMatch(pane, /#buildPlotBlock/, 'the second block builder should be gone');
+  // The CODE, not the name: a comment may legitimately say what used to be here, and an
+  // assertion that forbids naming the past makes the file harder to explain, not safer.
+  assert.doesNotMatch(pane, /this\.#buildPlotBlock\(/, 'nothing may call the old block builder');
+  assert.doesNotMatch(pane, /^\s*#buildPlotBlock\(/m, 'and it must not still be defined');
 });
 
 test('a project saved before the change is converted, not kept on the old path', () => {
