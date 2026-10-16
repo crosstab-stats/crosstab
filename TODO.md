@@ -2019,6 +2019,77 @@ bottom; they are the project's memory and are not summarised away.
       SVG (full R power) AND declares the alterations it supports
       (`controls: [{ id, label, type, options }]`); the host renders those controls and
       calls back to re-chart on change (generalises the existing `onRedraw` size-recipe).
+      **INVESTIGATED 2026-10-15 (owner asked what the challenge actually is). Read this
+      before scoping it — the entry below was written on two assumptions that do not
+      hold.**
+
+      **Why these charts have no options, structurally.** A model chart (`appendChart`)
+      hands the host `{kind, categories, series, …}`; the host renders the SVG itself in
+      JS, so a control mutates a `ViewState` and re-renders **in-process, instantly, with
+      no plugin and no R** — which is also why a reopened chart is still editable. A baked
+      plot (`appendPlot`) hands over a finished SVG. Colour, order, legend, scale and
+      panel layout are already path data and text nodes by the time the host sees them.
+      So a baked plot is permanently in the `frozen` state that a model chart reaches only
+      when its kind's provider is missing (`chartBlockMode`). The host cannot offer
+      options because it was never given the data — that IS what `appendPlot` means.
+
+      **Assumption 1 that does not hold: "generalises the existing `onRedraw` size-
+      recipe".** `onRedraw` has no callers. `results-pane.js` builds the "⟳ Redraw at this
+      size" button only `if (typeof onRedraw === 'function')`, and nothing passes one —
+      builtin-plots dropped it when it migrated to kinds, and all 11 remaining sites call
+      `appendPlot(svg, {title})` and nothing else. Worse, **a plugin could never have
+      passed one**: the broker dispatches `results.appendPlot` over postMessage, and a
+      function does not survive a structured clone. The recipe this layer was to be built
+      on is dead code describing a shape that cannot cross the boundary it has to cross.
+
+      **What a control on a baked plot would actually require** — three pieces, only the
+      first of which is small:
+      1. *A declaration channel.* `controls: [{id, label, type, options}]` through
+         `appendPlot`'s opts. Data, not a function. The controls panel is already
+         descriptor-driven, so this part is nearly free.
+      2. *A re-invocation path.* Host → plugin → R → new SVG → replace in place. The
+         ingredients exist (`updatePlot(handle, svg)` swaps an SVG in place; the analysis
+         log stores `inputs` + `specs`, the replayable params), but the verb does not:
+         "re-render plot P of run R with these options" is new, and needs the
+         out-of-order guard the chart path already has (`seq`) because a dragged input
+         fires several renders.
+      3. *A degraded state.* All of the above needs the plugin present, its R packages
+         installed and WebR warm. On a reopened project with the plugin off, the controls
+         must vanish and the figure must stay — `staticChartNotice` already does exactly
+         this and is reusable.
+
+      **The cost that decides it.** What makes the ⚙ panel good is that it is *instant*.
+      Every control on a baked plot is a WebR round trip, and these are not cheap
+      analyses: an STL decomposition or an MDS ordination is seconds of compute. A legend
+      dropdown that takes three seconds and spins up R is worse than no dropdown. That
+      argues for **parameter** controls (things a user expects to recompute — k, a
+      distance metric, a forecast horizon) and against **appearance** controls.
+
+      **Assumption 2 that does not hold: that the 11 are one problem.** They split three
+      ways, and each way has a different right answer:
+      - *Geometry genuinely is not ours — 5:* `sna` network (force-directed layout),
+        `spatial` choropleth (projection), `ordination` CA biplot (arrow field) and MDS
+        map, `ecology` NMDS. These are the real Layer 3b constituency: a re-run is
+        defensible because the control would be a parameter the user expects to recompute.
+      - *Appearance wanted, data already in hand — 3:* `inequality` Lorenz,
+        `cointegration` conditional volatility, `timeseries` ARIMA forecast. These compute
+        every number in R and then ask it for a picture. Layer 3b is the wrong tool: hand
+        over the numbers and the whole instant panel comes free. `scatter` already supports
+        `model.line` and `model.reference`, which is the shape of the first two.
+      - *Multi-panel composites — 2 (+1):* `timeseries` STL decomposition and `var` IRF,
+        plus `decisions` tree (deliberately JS-drawn — the layout IS the figure). Worth
+        noting: **multi-panel is not unprecedented** — the `sced` kind already stacks one
+        panel per case over a shared x axis, which is structurally what STL is
+        (trend/seasonal/remainder over shared time). VAR IRF is an n×n grid, which is not.
+
+      **Recommendation.** Do not build Layer 3b as one feature. The three-of-eleven
+      appearance group should migrate instead; STL should be weighed against the `sced`
+      precedent; and what remains is five parameter-driven figures — at which point the
+      honest question is whether five charts justify a new re-invocation verb, or whether
+      "change the parameter and run it again" is already the answer the menu gives.
+
+      Original note follows.
+
       Opt-in, for everything not in Layer 2 where body edits are worth a round-trip.
       **Re-counted 2026-10-15** — the groups below had kept every chart listed in August,
       the ones since migrated to model kinds included, so this read as 16 plugins of work
@@ -2213,6 +2284,42 @@ this is the index.
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **Menu tidying — File's in/out block, and nested groups that read as nested
+      (2026-10-15).** File's three "Export" items sat at orders 10, 31 and 32, with
+      `Export output…` ten slots and four unrelated items away from the other two. A word
+      repeating in three scattered places reads as clutter; in one block it reads as a
+      list. Now 30-33: Import data, Export data, Export output, Export analysis script.
+
+      **Adjacency rather than a submenu**, and the reason is structural: the group cannot
+      grow. Plugins have no way to register a File item — the host files their manifest
+      menu entries under the plugin's own category — so a container would have cost a
+      click on the most-used item to tidy three things that will stay three. `Copy
+      dataset…` stays out: it copies into another CrossTab project and writes no file, so
+      filing it with the exports would state the wrong destination.
+
+      **The nested group.** `Edit ▸ Debugging` is drawn by the same `#renderSubmenu` as a
+      top-level menu and **depth appears nowhere in the markup**, so in the ☰ panel it had
+      identical chrome and read as a sibling of Transform while vanishing when Edit
+      collapsed. The one rule that conveyed nesting indents `.menu__item`, which a nested
+      group is not. Fixed with depth-aware rules keyed on `.menu__flyout` as an ancestor
+      (a top-level toggle is a direct child of the panel, never inside one). Measured in
+      the app afterwards: nested 26px/11px/no-uppercase against top-level 12px/12px/
+      uppercase.
+
+      **Corrected on the way:** the renderer's doc comment claimed "a labelled group with
+      an inline flyout". On a wide screen nothing flies out — the children render inline
+      under an uppercase label. Trusting that comment over the branch is how a submenu
+      came to look like a free way to collapse the File menu, when it would in fact have
+      rendered the three items inline under a heading anyway.
+
+  - [x] **Wide-screen `Edit ▸ Debugging` stays a flat section — DECIDED (owner,
+        2026-10-15).** The open question was whether to make it a real hover flyout.
+        *"Edit>debugging can stay as is for now. The Edit menu is small enough it doesn't
+        cost anything and a hidden flyout is a cost (however small)."* So the inline
+        labelled section is the intended rendering, not an unfinished one — and the
+        general rule it states is worth keeping: hiding something behind a hover is a
+        cost that has to be paid for by a menu long enough to need it.
 
 - [x] **`runR` is now `app.webr.runOrThrow` (2026-10-14).** Eleven plugins each carried
       `async function runR(app, code)` — run it, throw if `result` is null, byte-identical

@@ -71,8 +71,13 @@ test('no migrated chart is still listed as pending work', () => {
   // The specific decay that happened: Layer 3b's groups kept naming plugins that had
   // already moved to a model kind. A name in those groups must still bake something.
   const todo = readFileSync('TODO.md', 'utf8');
-  const at = todo.indexOf('Layer 3b — host-mediated controls for BAKED plots');
-  assert.ok(at > 0, 'the Layer 3b entry moved — this check is blind');
+  const head = todo.indexOf('Layer 3b — host-mediated controls for BAKED plots');
+  assert.ok(head > 0, 'the Layer 3b entry moved — this check is blind');
+  // Just the three group bullets, not the whole entry: the prose around them names
+  // modules and chart KINDS in backticks too (`appendChart`, `sced`, `scatter`), and a
+  // slice that swept those in would fail on every one of them.
+  const at = todo.indexOf('Opt-in, for everything not in Layer 2', head);
+  assert.ok(at > head, 'the group list lost its anchor line');
   const groups = todo.slice(at, todo.indexOf('*Coverage checked', at));
   const baked = new Set(Object.keys(actual()).map((d) => d.replace('builtin-', '')));
   // Plugin names appear as `inline code` inside the group lines; parenthesised asides
