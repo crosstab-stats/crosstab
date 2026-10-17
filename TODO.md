@@ -792,11 +792,44 @@ bottom; they are the project's memory and are not summarised away.
         region. Projected coordinate systems are the user's to reconcile: the failure message says
         so rather than guessing at a datum.
 
-- [ ] **Verify CAQDAS import/export round-trip + legacy-project load.** Runtime
-      regression check (not tied to any one code change): confirm a CAQDAS coding
-      project exports and re-imports losslessly (QDPX / project bundle), and that an
-      older-format saved project still loads and hydrates its coding state. Exercises
-      the workspace-store migration chain (legacy → v2 → v3 → v4) end to end in the app.
+- [ ] **Verify the CAQDAS QDPX round-trip.** Runtime regression check (not tied to any
+      one code change): confirm a coding project exports and re-imports losslessly.
+
+      **RE-SCOPED 2026-10-17 — half of what this entry asked for no longer exists.** It
+      used to also say "confirm an older-format saved project still loads and hydrates
+      its coding state", and that it "exercises the workspace-store migration chain
+      (legacy → v2 → v3 → v4) end to end". Checked before starting, because the whole
+      point of the task was to exercise that chain:
+
+      - **`migrateWorkspaceBlob` is gone**, deleted deliberately in #149 C5 along with the
+        pre-#148 whole-tier blob format. `core/workspace-store.js` says so at the bottom
+        of the class. There is no chain left to exercise.
+      - **No legacy project-manifest field is read anywhere.** `buildManifest` writes
+        `log` and nothing else, the load path reads `manifest.log`, and the only legacy
+        migration on open is the `activePlugins` scalar (#157). Every `manifest.workspaces`
+        in the tree is a PLUGIN manifest declaring its workspace tabs — a different thing
+        with the same spelling, which is what made this look supported.
+
+      So a pre-#148 project does not half-load its codebook; the format simply changed and
+      nothing reads the old one. If that is the intended outcome it should be stated
+      somewhere a user can find it, and if it is not, the task is to WRITE a migration
+      rather than to verify one. Either way it is a decision, not a check, and it is no
+      longer part of this entry.
+
+      **What remains, and is worth doing:** the QDPX round-trip itself. The chooser
+      advertises REFI-QDA export, and nothing has confirmed that what comes back in is
+      what went out. It has to run in the app — `parseQdpx` uses `DOMParser`, which node
+      does not have, so this cannot become an ordinary test.
+
+      *Notes for whoever does it*, gathered while scoping: a fixture can be built from the
+      host without going through the UI — `textRef(text, start, end)` from `core/anchors.js`
+      makes a valid segment anchor, segments are `{doc: rowId, anchor: {ref}}` in the
+      `segments` item collection, codes are in `codes`, and the config blob is
+      `caqdas-coding` with at least `textColumn`. Watch two things the exporter does that
+      a naive comparison would trip over: it exports ONLY coded documents, and positions
+      are **derived at export time** (#166) by resolving each anchor against the text being
+      written, so a byte-compare of offsets is not the right assertion — compare the
+      resolved codings instead.
 
 ### Deferred features (intentionally not built yet)
 
