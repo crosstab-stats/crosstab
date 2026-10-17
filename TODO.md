@@ -1867,7 +1867,7 @@ bottom; they are the project's memory and are not summarised away.
 
 - [ ] **A NUL in an imported column name reaches R as a raw byte (found 2026-10-17).**
       `rStr` escapes backslash, quote, LF and CR, and passes U+0000 through untouched, so
-      `vars[["a b"]]` goes into R source with a literal NUL. R's parser rejects that —
+      `vars[["a\0b"]]` goes into R source with a literal NUL. R's parser rejects that —
       and cannot be made to accept it, because an R character string cannot hold a NUL at
       all. So this is not a quoting bug to fix in `rStr`; there is no escape to emit.
 
@@ -2365,6 +2365,37 @@ bottom; they are the project's memory and are not summarised away.
     bespoke channel — the analysis emits a dataset and the plot just plots it.
 
 ### Nice-to-have / optimisations
+
+- [ ] **A busy project index — baseline measured 2026-10-17, watch it grow.** The owner's
+      call: the dev machine's accumulated test projects stay rather than being swept,
+      because *"this is actually a good stress test for a busy index… I don't think we've
+      ever intentionally tested that it can handle dozens (or hundreds?) of projects."*
+      Correct — nothing ever has. So here is the starting line, to compare against later.
+
+      **At 44 projects** (Chrome, OPFS, dev machine):
+      - `catalog.json` — **30,678 bytes, 697 bytes per project**
+      - reading it: **1.11 ms**; parsing it: **0.06 ms** (parsing is free, the read is not)
+      - enumerating the `projects/` directory: **1.7 ms**
+      - `listProjects()`: **5.1 ms** · `listRecentProjects()`: **5.3 ms**
+
+      Linear projection: **~70 KB at 100 projects, ~350 KB at 500, ~700 KB at 1000**, with
+      `listProjects()` somewhere around 60–120 ms at a thousand. Opening a dialog that
+      takes a tenth of a second is survivable.
+
+      **The cost that is NOT about load times, which is why it is worth writing down.**
+      `ProjectStore#save` reads the WHOLE catalog, rebuilds one entry, and rewrites the
+      WHOLE file — under a lock — on every save. So the price of a busy index is paid by
+      every autosave of every project, including a small one that has nothing to do with
+      the other 999. That is the number to watch, and it is a write rather than a read, so
+      it will degrade faster than the figures above suggest.
+
+      **What makes an entry 697 bytes rather than ~100** is `activePlugins`, carried in the
+      summary so the launcher's rail can seed its picker without loading the project. A
+      real trade, deliberately made (the comment in `save` says so) — but if the index ever
+      does need slimming, that field is where the bytes are, and the question becomes
+      whether the launcher can read it lazily for the handful of rows it actually shows.
+
+      Nothing to fix yet. Re-measure when the dev index passes ~200 and compare.
 
 - [~] **Settings persistence — the STORE is built (2026-10-15); the screen is not.**
       `core/settings.js`. Confirmed with the owner first: *"is this talking about pulling
