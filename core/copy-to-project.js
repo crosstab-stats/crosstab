@@ -55,6 +55,7 @@
  * `#copyDatasetIntoProject` apply it.
  */
 
+import { newOpId } from './merge.js';
 import { liveOps, opIds, orderByHlc, STRUCTURAL_OPS } from './op-log.js';
 import { projectMetaLine } from './project-meta.js';
 import { assetRefDecls, childrenOf, childTravels } from './collections.js';
@@ -162,6 +163,73 @@ export function copyBundle(bundle, id) {
     collabId: null,
     collabSecret: null,
   };
+}
+
+/**
+ * Re-mint every op id in a log, rewriting every reference to one.
+ *
+ * ## Why a FORK re-mints when {@link copyBundle} deliberately does not
+ *
+ * These two sit next to each other on purpose, because they make opposite calls and a
+ * future reader will otherwise "fix" one to match the other.
+ *
+ * Copying a DATASET into another project keeps op ids, because op identity is the merge
+ * key and the two projects may later sync: shared ancestry is the useful outcome.
+ * Duplicating a PROJECT is the other intent — an independent fork — and keeping the ids
+ * would make the two look to the merge layer like one project that had diverged, so
+ * syncing them would silently interleave two separate lines of work. Fresh ids are what
+ * make the fork a different project rather than a second copy of the same one.
+ *
+ * ## What holds an op id
+ *
+ * Four things, and missing any one of them is silent:
+ *  - `op.id` itself;
+ *  - `undo` / `redo` / `retract` carry `payload.opId` — the op they act on;
+ *  - `reorder` carries `payload.order`, an ARRAY of op ids. This is the one the owner
+ *    called out ("yes, even things like step reordering"): miss it and the duplicate's
+ *    steps silently fall back to their original order, with no error and a History panel
+ *    that disagrees with the one it was copied from;
+ *  - a source op's `payload.src.file` is `src_<opId>.parquet`, so the sidecar name has to
+ *    follow the new id or the bytes are written under a name nothing reads.
+ *
+ * `reads[]` is deliberately NOT remapped: it holds TARGETS (`ds:3/…`, `analysis:…`), not
+ * op ids. HLC stamps and `author` are kept — the fork happened at the same moments and
+ * was written by the same people; re-stamping would reorder the log, which is the one
+ * thing a full duplicate must not do.
+ *
+ * Pure: pass `mint` for a deterministic test.
+ *
+ * @param {object[]} log
+ * @param {() => string} [mint]
+ * @returns {object[]} a new log; the input is not touched
+ */
+export function reidentifyLog(log, mint = newOpId) {
+  const ops = Array.isArray(log) ? log : [];
+  // One pass to mint, so a reference to an op that appears LATER still resolves.
+  const fresh = new Map();
+  for (const op of ops) {
+    if (op && typeof op.id === 'string' && !fresh.has(op.id)) fresh.set(op.id, mint());
+  }
+  const idOf = (old) => fresh.get(old) ?? old;
+
+  return ops.map((op) => {
+    if (!op || typeof op !== 'object') return op;
+    const next = { ...op, id: idOf(op.id) };
+
+    if (op.payload && typeof op.payload === 'object') {
+      const p = { ...op.payload };
+      // undo / redo / retract: the op they act on.
+      if (typeof p.opId === 'string') p.opId = idOf(p.opId);
+      // reorder: the whole order, as ids.
+      if (Array.isArray(p.order)) p.order = p.order.map((x) => (typeof x === 'string' ? idOf(x) : x));
+      // a source op's immutable bytes live in a file named after its op id.
+      if (p.src && typeof p.src === 'object' && typeof p.src.file === 'string') {
+        p.src = { ...p.src, file: `src_${next.id}.parquet` };
+      }
+      next.payload = p;
+    }
+    return next;
+  });
 }
 
 /**

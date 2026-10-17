@@ -34,8 +34,7 @@ import { FolderBackend, OpfsBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
 import {
   assetIdsOf, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice,
-  ownerPluginOp, recordSlice, travellingChildren, unionById,
-} from './copy-to-project.js';
+  ownerPluginOp, recordSlice, travellingChildren, unionById, reidentifyLog } from './copy-to-project.js';
 import { itemTarget } from './item-store.js';
 import { ensureCollabIdentity, roomFor, inviteLinkFor } from './live-invite.js';
 
@@ -1113,6 +1112,102 @@ export class ProjectSync {
     const ops = recordSlice(log, payload.targets, payload.assetIds);
     const spec = ownerPluginOp(ref.pluginKey);
     return spec && this.#log ? [...ops, this.#log.mint(spec)] : ops;
+  }
+
+  /**
+   * Duplicate a saved project — a FORK, not a snapshot.
+   *
+   * The owner's spec (2026-10-17): *"fresh opIDs, fork should include current state with
+   * full log (yes, even things like step reordering). Duplicate in my mind means a full
+   * duplicate and not just 'snapshot what it looks like now'."*
+   *
+   * So the whole log travels, undo markers and retractions and reorders included, and the
+   * copy opens with the same History the original has — every step still clickable, still
+   * undoable, still in the order the user put them in. {@link reidentifyLog} re-mints
+   * every op id and every reference to one; see its header for why a fork re-mints where
+   * {@link copyBundle} deliberately does not.
+   *
+   * Three things are deliberately NOT carried over:
+   *  - the **collab identity** (`collabId`/`collabSecret`), because a fork is not the same
+   *    co-authoring room. Carrying it would silently put two different projects in one
+   *    room, which is the hazard the fresh ids exist to avoid, arriving by another door;
+   *  - the **project id**, obviously, and
+   *  - the original's **last-opened** time, which belongs to the original.
+   *
+   * Assets are read from the SOURCE PROJECT ON DISK rather than from the live asset
+   * store: the project being duplicated is picked from a list and is usually not the one
+   * that is open.
+   *
+   * OPFS only. A folder-backed project is one folder = one project, so duplicating it
+   * means asking the user where the copy goes — a different interaction, not built here.
+   *
+   * @param {string} id the project to duplicate
+   * @param {string} name the copy's name (see {@link duplicateName})
+   * @returns {Promise<string|null>} the new project id, or null if it failed
+   */
+  async duplicateProject(id, name) {
+    if (!id) return null;
+    try {
+      // Reads the manifest AND re-attaches every source op's Parquet, which is exactly
+      // what `save` needs on the way back out — the sidecars are rewritten under the new
+      // op ids rather than copied file by file.
+      const src = await this.#opfs.load(id);
+      const log = reidentifyLog(src.bundle?.log ?? []);
+      const newId = await this.#opfs.save({
+        name,
+        savedAt: Date.now(),
+        bundle: {
+          ...src.bundle,
+          log,
+          // Explicit, not inherited: a fork starts outside any room it was forked from.
+          collabId: null,
+          collabSecret: null,
+        },
+      });
+
+      const failed = await this.#copyProjectAssets(id, newId);
+      this.#results.appendText(
+        `Duplicated **${src.name}** as **${name}** — the whole history came with it, `
+        + 'so every step is still there to click back through.'
+        + (failed.length
+          ? ` ${failed.length} attached file${failed.length === 1 ? '' : 's'} could not be copied.`
+          : '')
+        + ' It is in the Projects list.',
+      );
+      this.#bus.emit(PROJECT_CHANGED);
+      return newId;
+    } catch (err) {
+      console.error('[project] duplicate failed', err);
+      this.#results.appendError(`Duplicate failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  /** Copy every asset from one SAVED project to another. Returns the ids that failed.
+   * Distinct from {@link ProjectSync#copyAssets}, which reads the LIVE store — here
+   * neither project need be open. */
+  async #copyProjectAssets(fromId, toId) {
+    const failed = [];
+    let ids = [];
+    try {
+      ids = await this.#opfs.listAssets(fromId);
+    } catch (err) {
+      console.error('[project] could not list assets to duplicate', err);
+      return failed;
+    }
+    for (const assetId of ids) {
+      try {
+        // eslint-disable-next-line no-await-in-loop -- one file at a time, by design
+        const blob = await this.#opfs.readAsset(fromId, assetId);
+        if (!blob) { failed.push(assetId); continue; }
+        // eslint-disable-next-line no-await-in-loop
+        await this.#opfs.writeAsset(toId, assetId, blob);
+      } catch (err) {
+        console.error('[project] asset duplicate failed', assetId, err);
+        failed.push(assetId);
+      }
+    }
+    return failed;
   }
 
   /** Copy the asset bytes a record needs into another project. Content-addressed, so a

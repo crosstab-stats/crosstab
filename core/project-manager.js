@@ -35,6 +35,7 @@
  * duplicating — a label that handed people a fork when they wanted a backup.
  */
 
+import { duplicateName } from './copy-to-project.js';
 import { debug } from './debug.js';
 import { projectMetaLine } from './project-meta.js';
 import { el } from './plugin-stdlib.js';
@@ -69,6 +70,10 @@ export function projectActions(row) {
   // two names for one thing, and the one you can see is the one that lies. The project's
   // own name is edited by opening it.
   if (row.kind === 'opfs') out.push({ id: 'rename', label: 'Rename' });
+  // OPFS only: a folder-backed project is one folder = one project, so duplicating it
+  // means asking where the copy goes — a different interaction, not this one. Offered
+  // only on a CLOSED project, so the copy cannot be taken from under unsaved changes.
+  if (row.kind === 'opfs') out.push({ id: 'duplicate', label: 'Duplicate' });
   out.push({ id: 'forget', label: row.kind === 'opfs' ? 'Delete…' : 'Remove…', danger: true });
   return out;
 }
@@ -174,6 +179,11 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
     let active = TABS.some((t) => t.id === tab) ? tab : 'recents';
 
     /** Re-render the open tab. Every action ends here, so the list is never stale. */
+    /** The rows the body is currently showing. Shared with `act`, which needs the
+     * other projects' names to pick a free "(copy)" — it is a sibling of `render`,
+     * not inside it, so a `let` in there would be out of scope. */
+    let rows = [];
+
     const render = async () => {
       tabBar.replaceChildren();
       for (const t of TABS) {
@@ -189,7 +199,7 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         tabBar.append(b);
       }
       body.replaceChildren(el('div', { class: 'ctpm__loading', text: 'Loading…' }));
-      let rows = [];
+      rows = [];
       try {
         rows = await projects.listProjects();
       } catch (err) {
@@ -224,6 +234,15 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         if (id === 'rename') {
           const next = prompt('Rename project', row.name);
           if (next && next.trim()) await projects.renameProject(row.projectId, next.trim());
+          await render();
+          return;
+        }
+        if (id === 'duplicate') {
+          // Named for the user rather than asked about: the whole point of the verb is
+          // that it needs no decisions. `duplicateName` picks the first free "(copy)".
+          const taken = rows.map((r) => r.name);
+          const name = duplicateName(row.name, taken);
+          await projects.duplicateProject(row.projectId, name);
           await render();
           return;
         }

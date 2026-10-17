@@ -27,7 +27,18 @@ test('the open project cannot be opened again, or deleted from under itself', ()
 });
 
 test('a project that is not open offers open, and removal', () => {
-  assert.deepEqual(projectActions(row()).map((a) => a.id), ['open', 'rename', 'forget']);
+  assert.deepEqual(projectActions(row()).map((a) => a.id), ['open', 'rename', 'duplicate', 'forget']);
+});
+
+test('only a LOCAL project can be duplicated, and only while closed', () => {
+  // A folder-backed project is one folder = one project, so duplicating it means asking
+  // where the copy goes — a different interaction, not this verb.
+  assert.ok(!projectActions(row({ kind: 'folder' })).some((a) => a.id === 'duplicate'));
+  assert.ok(!projectActions(row({ kind: 'dropbox' })).some((a) => a.id === 'duplicate'));
+  // And not on the OPEN one: the copy is taken from what is on disk, so offering it
+  // while there are unsaved changes would quietly fork the older state.
+  assert.ok(!projectActions(row({ isOpen: true })).some((a) => a.id === 'duplicate'));
+  assert.ok(projectActions(row()).some((a) => a.id === 'duplicate'));
 });
 
 test('only a local project can be renamed from the list', () => {

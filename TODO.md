@@ -18,6 +18,14 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
+- **POLICY — no migration for old data formats (owner, 2026-10-17).** *"Lack of migration
+  for old data formats (plugins, projects, whatever) is intentional. This is pre-release
+  software and we aren't bothering with migrating old data yet."* So a format change may
+  simply drop what came before, and "an older save does not load" is not a bug to file.
+  Recorded here because it has now been re-derived twice from the code — see the CAQDAS
+  entry, where half the task was verifying a migration chain that had been deleted on
+  purpose. Revisit at release, not before.
+
 - [~] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
       **BUILT 2026-10-14** (H1–H6). What remains is CONTENT, not mechanism — see #184 — plus
       screenshots, which the renderer supports and nothing yet uses.
@@ -363,24 +371,42 @@ bottom; they are the project's memory and are not summarised away.
       bytes over the wire and is the part most likely to meet a platform limit. Until someone
       runs that, treat live-on-WebKit as unknown rather than supported.
 
-- [ ] **Duplicate a project (carved out of #167, 2026-10-12).** The remaining verb from
-      #167: "fork this project" from the row's menu, alongside Rename and Delete/Remove.
-      Wanted as the natural home for forking a codebook or a half-built analysis without
-      opening it first.
+- [x] **Duplicate a project — DONE (2026-10-17).** "Duplicate" on a closed local
+      project's row menu, beside Rename and Delete.
 
-      **Why it was not done with the rest:** rename and delete already existed and only
-      needed a surface that reaches them from the launcher. Duplicate does not exist
-      anywhere, and it is not a trivial copy — it has to decide what a fork INCLUDES
-      (datasets, the op log, workspace blobs, plugin records) and what a fresh identity
-      means for the log (a duplicated project that keeps the original's op ids is a
-      collaboration hazard, per [[one-true-log-explicit-ops]]). It also wants #166's
-      copy-on-add semantics settled first.
+      **The owner settled the open questions** that had kept this out of #167: *"fresh
+      opIDs, fork should include current state with full log (yes, even things like step
+      reordering). Duplicate in my mind means a full duplicate and not just 'snapshot
+      what it looks like now'."*
 
-      Two things already in place that it should use: `removalOffer`'s pattern of saying
-      plainly what the action will do, and the kind distinction — duplicating an OPFS
-      project means a new OPFS project, while duplicating a FOLDER project has to ask
-      where the copy goes, since the app does not get to pick a directory on the user's
-      disk.
+      So the whole log travels — undo markers, retractions and reorders included — and
+      the copy opens with the History the original has, every step still clickable and
+      still undoable. `reidentifyLog` (in `core/copy-to-project.js`, beside the decision
+      it contrasts with) re-mints every op id and, critically, everything that NAMES one:
+      `payload.opId` on undo/redo/retract, `payload.order` on a reorder (an array — the
+      case the owner called out; missing it would have let the fork's steps silently
+      revert to log order), and the `src_<opId>.parquet` sidecar name, without which the
+      bytes land where nothing reads them. `reads[]` is deliberately left alone: it holds
+      TARGETS, not op ids. HLC stamps and authorship stay, because re-stamping would
+      reorder the log and a full duplicate must not.
+
+      **The contrast to keep:** `copyBundle` PRESERVES op ids when copying a dataset into
+      another project, deliberately — there, shared identity is what lets the two be
+      recognised as common ancestry later. A fork wants the opposite. The two sit next to
+      each other with the reasoning written down, and a test asserts that `copyBundle`
+      still does not re-mint, so making them "agree" breaks loudly instead of quietly.
+
+      Also not carried over: the collab identity. A fork is not the same co-authoring
+      room, and inheriting it would put two different projects in one room — the same
+      hazard the fresh ids exist to prevent, arriving by another door.
+
+      **OPFS only, and only while closed.** A folder-backed project is one folder = one
+      project, so duplicating it means asking where the copy goes — a different
+      interaction, not built. Closed-only because the copy is taken from what is on disk,
+      so offering it on the open project would quietly fork the older state.
+
+      Verified in the app: the fork carried a computed variable and a logged analysis,
+      opened under its own name, and editing it left the original untouched.
 
 - [~] **Stop sharing — BUILT (2026-08-21); the link-revocation half is still open.**
       `core/share-state.js` + File ▸ Sharing…, 612 tests. Needs a browser pass.
