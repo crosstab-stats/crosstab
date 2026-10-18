@@ -32,7 +32,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, rounded: int, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, rounded: int, unpackR: flat, fmtP: fp, coderName: coderOf } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -233,13 +233,6 @@ export async function fromCodings(app, { metric = 'nominal' } = {}) {
       + 'document, not on where the highlight starts. Codes counted: '
       + `${codeIds.map((k) => codes.get(k) || k).slice(0, 12).join(', ')}${codeIds.length > 12 ? ', …' : ''}.`,
   });
-}
-
-/** A coding record's coder — the #148 author stamp, by display name then id. */
-function coderOf(rec) {
-  const a = rec?.author || rec?.fields?.author;
-  if (!a) return null;
-  return String(a.name || a.initials || a.authorId || '').trim() || null;
 }
 
 /** Bind a plain rows×raters matrix into R as `vars` (the shape `compute` expects). */

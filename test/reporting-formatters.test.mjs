@@ -32,8 +32,38 @@ import * as std from '../core/plugin-stdlib.js';
 
 /** The names that must have exactly one implementation. Local alias in parentheses. */
 const SHARED = ['fmtP', 'fmtPInline', 'fixed', 'rounded', 'ci', 'labelOf', 'metaMap', 'rStr'];
-/** What a plugin calls them, which is not always what the stdlib exports them as. */
-const LOCAL = { fixed: 'f', rounded: 'int' };
+/**
+ * What a plugin calls them, which is not always what the stdlib exports them as.
+ *
+ * A LIST per formatter, not one name, because assuming a single alias is what let a
+ * live bug through: `builtin-agreement` bound `fixed: f, rounded: int, …` but called
+ * `fp(p)` in one sentence, and since nothing here had ever heard of `fp`, the scan below
+ * looked for `fmtP(` and found nothing to complain about. Any two-rater agreement run
+ * printed both its tables and then threw `fp is not defined` — found 2026-10-18 by
+ * running the analysis, not by reading it.
+ *
+ * `aliasesOf` adds every alias any plugin actually binds, so the list cannot go stale
+ * the next time someone invents a short form. The seeds below are for the opposite case,
+ * which is the one that bit: an alias NO plugin binds, because the binding is what is
+ * missing.
+ */
+const LOCAL = {
+  fixed: ['f'], rounded: ['int'], fmtP: ['fp'], fmtPInline: ['fpi'],
+};
+
+/** Every name a plugin might call `shared` by: the export, the seeds, and the aliases
+ * the codebase is actually using. */
+function aliasesOf(shared, sources) {
+  const out = new Set([shared, ...(LOCAL[shared] ?? [])]);
+  for (const src of sources) {
+    const bind = /^const \{ ([^}]+) \} = globalThis\.ctStd;$/m.exec(src);
+    for (const part of (bind?.[1] ?? '').split(',')) {
+      const [from, to] = part.split(':').map((x) => x.trim());
+      if (to && from === shared) out.add(to);
+    }
+  }
+  return [...out];
+}
 
 function plugins() {
   const out = [];
@@ -133,7 +163,13 @@ test('the copies that survive are wrappers, not reimplementations', () => {
 test('every plugin that calls a shared formatter binds it', () => {
   // The failure this catches is a ReferenceError at analysis time: the file parses, and
   // the error arrives when a user runs it. `node --check` cannot see it.
+  //
+  // Its reach is the alias table above, which is the limit worth knowing: a plugin that
+  // calls a formatter by a name no plugin binds and no seed lists is still invisible
+  // here. Only a real unbound-identifier check would close that, and this project has
+  // no linter — noted in TODO.md rather than half-built.
   const offenders = [];
+  const all = plugins().map(([, f]) => code(f));
   for (const [name, file] of plugins()) {
     const src = code(file);
     const bind = /^const \{ ([^}]+) \} = globalThis\.ctStd;$/m.exec(src);
@@ -149,15 +185,17 @@ test('every plugin that calls a shared formatter binds it', () => {
     // builtin-plots' `const labelOf = labelMapper(meta, name)` maps a key to a label.
     // Short names collide; what matters here is only whether the name resolves.
     for (const shared of SHARED) {
-      const local = LOCAL[shared] ?? shared;
-      if (new RegExp(`^[ \\t]*(?:const|let|function) ${local}\\s*[=(]`, 'm').test(src)) bound.add(local);
+      for (const local of aliasesOf(shared, all)) {
+        if (new RegExp(`^[ \\t]*(?:const|let|function) ${local}\\s*[=(]`, 'm').test(src)) bound.add(local);
+      }
     }
     for (const shared of SHARED) {
-      const local = LOCAL[shared] ?? shared;
-      const used = new RegExp(`(?<![\\w.$])${local}\\s*\\(`).test(src);
-      // `f` and `int` are short enough to collide with a parameter of the same name.
-      const shadowed = new RegExp(`\\(\\s*(?:[^()]*,\\s*)?${local}\\s*[,)]`).test(src);
-      if (used && !bound.has(local) && !shadowed) offenders.push(`${name}: calls ${local}()`);
+      for (const local of aliasesOf(shared, all)) {
+        const used = new RegExp(`(?<![\\w.$])${local}\\s*\\(`).test(src);
+        // `f` and `int` are short enough to collide with a parameter of the same name.
+        const shadowed = new RegExp(`\\(\\s*(?:[^()]*,\\s*)?${local}\\s*[,)]`).test(src);
+        if (used && !bound.has(local) && !shadowed) offenders.push(`${name}: calls ${local}()`);
+      }
     }
   }
   assert.deepEqual(offenders, [], 'these would throw ReferenceError when the analysis runs');

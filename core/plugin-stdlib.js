@@ -145,6 +145,34 @@ export function cleanName(s, { max = 200, fallback = '' } = {}) {
   return (cleaned.length > max ? cleaned.slice(0, max).trim() : cleaned) || fallback;
 }
 
+/**
+ * Who made a record — the display name for the #148 author stamp.
+ *
+ * Two plugins need this and they must not disagree, because they report on the same
+ * people: `builtin-agreement` names the coders it compares, and the CAQDAS quantitiser
+ * names the per-coder columns it emits. A coder who is "RB" in one and "Rebecca B" in
+ * the other is two coders as far as the reader can tell.
+ *
+ * It reads BOTH places a stamp can sit. The host puts the creating author on the record
+ * envelope (`rec.author`, from the op), while a plugin that stamps its own in-memory
+ * objects puts it in the fields (`rec.fields.author`, or directly on the object the
+ * workspace is holding). Which one a caller has depends on whether the record came back
+ * from `items.list` or is still live in a workspace, and that is not a distinction worth
+ * making at every call site.
+ *
+ * Falls through name → initials → id, because identity is what matters and the display
+ * fields are optional: an unnamed author is still a distinct author.
+ *
+ * @param {object} rec a record, or a plugin's live object
+ * @returns {string|null} null when there is no stamp at all — an UNATTRIBUTED record,
+ *   which is a real state (imported codings are deliberately unstamped) and not an error.
+ */
+export function coderName(rec) {
+  const a = rec?.author ?? rec?.fields?.author;
+  if (!a) return null;
+  return String(a.name || a.initials || a.authorId || '').trim() || null;
+}
+
 /** `slug` plus an extension — the exact function three exporters had written out. */
 export function filenameFor(title, ext, opts) {
   return `${slug(title, opts)}.${ext}`;

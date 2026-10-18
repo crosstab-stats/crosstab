@@ -830,11 +830,75 @@ bottom; they are the project's memory and are not summarised away.
 
       **The four shapes, each pinned to a unit of analysis:**
 
-      - **A — case x code, wide.** One row per document rid, one column per code, 0/1
-        with Absent/Present value labels (count variant optional), carried attributes,
-        and denominators. Feeds crosstabs + chi-square, logistic, LCA, clustering,
-        factor. **This is the default and covers most of what is missing. Being built
-        first.**
+      - **A — case x code, wide. BUILT 2026-10-18.** One row per document rid, one
+        column per code, 0/1 with Absent/Present value labels (count variant optional),
+        carried attributes, and denominators. `Quantitise…` in the coding workspace's
+        toolbar, beside Code frequency; the work is in the pure exported
+        `quantitiseCodings()`, so the whole contract is testable without a DOM.
+        2092 tests (24 new).
+
+        **Two details that decide whether it is usable, not just correct:**
+
+        - **A presence column is a `factor`, not a number.** Crosstabs accepts only
+          factor/string variables, and a code x attribute crosstab is the headline
+          reason to press the button — a numeric 0/1 would not have been offered at all.
+        - **The new dataset is NOT activated.** Switching the active dataset would
+          remount the coding workspace onto a dataset with no codings in it, which is a
+          strange reward for pressing a button in the coding tab. The result says where
+          it went instead.
+
+        **A code nobody used still gets a column of zeros**, so the dataset keeps the
+        codebook's shape as coding proceeds and two exports stay comparable — the absence
+        of a theme is a finding. Everything dropped is counted and named in the output
+        (deleted codes, out-of-scope books, rows past the 10 000 the workspace loads).
+
+        **Verified in the browser**, end to end on a real dataset through the real
+        engine: quantitise -> `Crosstabs` on `Cost x Location` renders
+        `Barriers: Cost (Cost) x Location (site)` with both sets of value labels; the
+        per-coder variant feeds the generic `Scale ▸ Inter-rater agreement…` and returns
+        75% agreement, Cohen's κ 0.467, Krippendorff's α 0.500 on 8 documents with 2
+        disagreements (κ checked by hand: expected agreement 0.531, so
+        (0.75 − 0.531) / (1 − 0.531) = 0.467). That closes the loop on the "additive
+        move" recorded under the agreement decision below.
+
+        **What the browser pass could NOT reach:** the click on the button itself. A
+        workspace pane is an opaque-origin iframe, so its DOM is unreachable from the
+        host, and screenshots of that tab time out while it is backgrounded. The host
+        half was driven for real instead — `showForm` with the exact field spec from the
+        source, returning the five keys the handler reads — and `app.ui` is known to be
+        available in a mounted workspace because builtin-spatial's workspace already
+        uses it.
+
+  - [x] **A live bug the browser pass found: `fp is not defined` in builtin-agreement
+        (fixed 2026-10-18).** Every two-rater agreement run printed both its tables and
+        then threw, losing the κ-against-zero sentence and ending the analysis in an
+        error block. `fp` was referenced in that sentence but never bound — the plugin
+        binds `fixed: f, rounded: int, unpackR: flat` and nothing else.
+
+        **Pre-existing, and nothing in 2068 tests saw it.** Not even
+        `reporting-formatters.test.mjs`, which exists for exactly this failure ("the file
+        parses, and the error arrives when a user runs it") — because its alias table
+        held ONE local name per formatter, `fmtP` was expected to be called `fmtP`, and a
+        plugin that calls it `fp` was therefore invisible. The table now holds a LIST per
+        formatter and also derives every alias any plugin actually binds, so inventing a
+        short form is covered automatically; the seeds are for the opposite case, which
+        is the one that bit — an alias no plugin binds, because the binding is what is
+        missing. Checked by removing the fix and watching the test fail with
+        `builtin-agreement: calls fp()`.
+
+        **Its remaining limit, stated rather than half-closed:** a formatter called by a
+        name that is neither bound anywhere nor seeded is still invisible. Closing that
+        needs a real unbound-identifier check, which is a linter's job and this project
+        has no linter. Worth doing as its own item if this class recurs.
+
+  - [x] **One coder resolver, shared (2026-10-18).** `coderName` moved into
+        `core/plugin-stdlib.js` and `builtin-agreement` dropped its private `coderOf`.
+        The two plugins report on the SAME people — agreement names the coders it
+        compares, the quantitiser names the per-coder columns it emits — and a coder who
+        is "RB" in one and "Rebecca B" in the other reads as two coders. It also reads
+        both places a stamp can sit (`rec.author` from the op envelope,
+        `rec.fields.author` from a plugin's own stamp), which is a distinction no call
+        site should have to make.
       - **B — segment long.** One row per coding: doc, code, theme, coder, the full
         quoted text, modality, and times/offsets where they resolve. Feeds text
         analytics, correspondence analysis (which wants two category VARIABLES and

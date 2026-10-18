@@ -20,6 +20,14 @@
  * document sets (virtualised list), are follow-ups.
  */
 
+/**
+ * The host's general stdlib, read from the sandbox global at module scope — the pure
+ * exported helpers below cannot reach `app`, which only exists inside an invoked
+ * function. `coderName` in particular is shared with `builtin-agreement`, which names
+ * the same coders from the same stamps and must not disagree about what one is called.
+ */
+const { cleanName, uniqueName, coderName } = globalThis.ctStd;
+
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
   id: 'builtin-caqdas',
@@ -549,7 +557,9 @@ export const workspace = {
     const expBtn = el('button', { class: 'caqdas__btn' }); expBtn.textContent = 'Segments → Output';
     const cloudBtn = el('button', { class: 'caqdas__btn' }); cloudBtn.textContent = 'Word cloud';
     cloudBtn.title = 'Word cloud of the coded passages — grouped and coloured by your codebook themes.';
-    bar.append(colLabel, colSel, labelLabel, labelSel, freqBtn, expBtn, cloudBtn);
+    const quantBtn = el('button', { class: 'caqdas__btn' }); quantBtn.textContent = 'Quantitise…';
+    quantBtn.title = 'Turn the codings into a dataset — one row per document, one column per code — so the statistics menu can analyse them (crosstabs, logistic regression, latent class…).';
+    bar.append(colLabel, colSel, labelLabel, labelSel, freqBtn, expBtn, cloudBtn, quantBtn);
 
     // Paint-mode banner (shown while a code is armed).
     const paintBanner = el('div', { class: 'caqdas__paint' });
@@ -2453,6 +2463,144 @@ export const workspace = {
       await app.results.endAnalysis();
     });
 
+
+    // Quantitising: the bridge to the statistics menu (shape A of the plan in TODO.md).
+    // A dataset rather than a cross-plugin call, because a document IS a dataset row —
+    // so the respondent attributes are already beside it — and because the five
+    // judgements below have to land in the log where they can be audited.
+    quantBtn.addEventListener('click', async () => {
+      if (!state.textColumn) { app.results.appendError('Choose a documents column first.'); return; }
+      if (!state.segments.length) { app.results.appendError('No codings yet — code some passages first.'); return; }
+      const form = await app.ui.showForm({
+        title: 'Quantitise codings',
+        hint: 'One row per document, one column per code. Every choice here is reported with the result, '
+          + 'because each is a judgement about the coding rather than a fact in it.',
+        okLabel: 'Create dataset',
+        fields: [
+          {
+            name: 'values', type: 'select', label: 'Cell values',
+            hint: 'Presence is what papers report ("8 of 12 participants raised cost"); a count also measures how much each person talked.',
+            value: 'presence',
+            options: [
+              { value: 'presence', label: 'Present / absent (0-1)' },
+              { value: 'count', label: 'Number of codings' },
+            ],
+          },
+          {
+            name: 'rollup', type: 'select', label: 'A column per', value: 'code',
+            options: [{ value: 'code', label: 'Code' }, { value: 'theme', label: 'Theme' }],
+          },
+          {
+            name: 'coders', type: 'select', label: 'Coders', value: 'pool',
+            hint: 'Separate columns make Scale ▸ Inter-rater agreement usable on this dataset.',
+            options: [
+              { value: 'pool', label: 'All coders together' },
+              { value: 'coder', label: 'A column per coder' },
+            ],
+          },
+          {
+            name: 'scope', type: 'select', label: 'Codes from', value: 'book',
+            options: [
+              { value: 'book', label: 'The open codebook' },
+              { value: 'all', label: 'Every codebook in the project' },
+            ],
+          },
+          {
+            name: 'carry', type: 'select', label: 'Carry across', value: 'all',
+            hint: 'The attributes to crosstab the codes against — they are the other columns of the document’s own row.',
+            options: [
+              { value: 'all', label: 'Every other column of the source' },
+              { value: 'label', label: 'Just the document label' },
+              { value: 'none', label: 'Nothing' },
+            ],
+          },
+        ],
+      });
+      if (!form) return;
+
+      // Carried attributes come from the SOURCE row, which is where a document's
+      // attributes have always lived — so this is a read, not a model.
+      let attrs = [];
+      if (form.carry !== 'none') {
+        const meta = await app.data.getVariableMeta();
+        const wanted = form.carry === 'label'
+          ? meta.filter((m) => m.name === state.labelColumn)
+          : meta.filter((m) => m.name !== state.textColumn && m.name !== state.labelColumn);
+        if (wanted.length) {
+          const rows = await app.data.getRows({
+            variables: wanted.map((m) => m.name), includeRowId: true, limit: MAX_DOCS,
+          });
+          const at = new Map(rows.map((r) => [String(r.__rid), r]));
+          attrs = wanted.map((m) => ({
+            meta: m,
+            values: docs.map((d) => at.get(d.rid)?.[m.name] ?? null),
+          }));
+        }
+      }
+
+      const { variables, columns, report } = quantitiseCodings({
+        docs: docs.map((d) => ({
+          rid: d.rid,
+          label: d.label,
+          chars: d.kind === 'text' ? (d.text ?? '').length : 0,
+          // A row with nothing in it is not a document that declined to mention the
+          // theme, and counting it would deflate every prevalence on the table.
+          isDoc: d.kind === 'media' || String(d.text ?? '').trim() !== '',
+        })),
+        segments: state.segments,
+        codes: state.codes,
+        bookId: state.codebookId,
+        values: form.values,
+        rollup: form.rollup,
+        coders: form.coders,
+        scope: form.scope,
+        attrs,
+        labelColumn: state.labelColumn,
+      });
+
+      if (!report.items.length) { app.results.appendError('No codes in scope — nothing to quantitise.'); return; }
+
+      const name = `Codings — ${form.rollup === 'theme' ? 'themes' : 'codes'} by document`;
+      // NOT activated: switching the active dataset would remount this workspace onto a
+      // dataset with no codings in it, which is a strange reward for pressing a button
+      // in the coding tab. The result says where it went instead.
+      await app.data.create({ name, variables, columns, activate: false });
+
+      await app.results.beginAnalysis('Quantitise codings');
+      await app.results.appendText(
+        `**Dataset created: ${name}.** ${report.nRows} document${report.nRows === 1 ? '' : 's'} × `
+        + `${report.items.length} ${form.rollup === 'theme' ? 'theme' : 'code'} column`
+        + `${report.items.length === 1 ? '' : 's'}, from ${report.nUsed} coding`
+        + `${report.nUsed === 1 ? '' : 's'}. Switch to it in the Data tab to analyse it — `
+        + 'the code columns are categorical, so Crosstabs will offer them.',
+      );
+      await app.results.appendText(
+        '**How this was counted**, because each of these is a judgement and the table '
+        + 'cannot be read without them:\n\n'
+        + `- **Unit:** one row per document${report.nDocs > report.nRows ? ` (${report.nDocs - report.nRows} empty row(s) excluded — a blank row is not a document that stayed silent)` : ''}.\n`
+        + `- **Values:** ${form.values === 'count' ? 'the number of codings — which also measures how much each participant talked, and how finely the coder highlights' : 'present or absent — not how often, because a raw count is confounded by transcript length and coding style'}.\n`
+        + `- **Rollup:** one column per ${form.rollup === 'theme' ? 'theme (the code’s group)' : 'code'}.\n`
+        + `- **Coders:** ${form.coders === 'coder' ? `one column each for ${report.coders.join(', ')}` : 'pooled — a passage coded by two people counts once for presence, twice for a count'}.\n`
+        + `- **Scope:** codes from ${form.scope === 'all' ? 'every codebook' : 'the open codebook'}`
+        + `${report.outOfScope ? `, so ${report.outOfScope} coding(s) of out-of-scope codes were left out` : ''}.\n`
+        + '- **Drift:** unresolved and drifted codings are **included** — a coding belongs to '
+        + 'its row because it anchors to a row id, not to a position, so a quote that no '
+        + 'longer matches still counts for the right document.'
+        + (report.unknownCode ? `\n- ${report.unknownCode} coding(s) referenced a deleted code and were dropped.` : '')
+        + (report.offDoc ? `\n- ${report.offDoc} coding(s) pointed at rows outside the loaded ${MAX_DOCS} and were dropped.` : ''),
+      );
+      await app.results.appendTable({
+        caption: form.values === 'count' ? 'Codings per column' : 'Prevalence',
+        columns: [form.rollup === 'theme' ? 'Theme' : 'Code', 'Variable', 'Documents', '%', 'Codings'],
+        rows: report.items.map((it) => [
+          it.label, it.name, it.present,
+          report.nRows ? `${((it.present / report.nRows) * 100).toFixed(1)}%` : '—',
+          it.total,
+        ]),
+      });
+      await app.results.endAnalysis();
+    });
+
     // A word cloud built FROM the coding: words inside coded passages, grouped and
     // coloured by the codebook's own themes/colours (not auto-detected). This lives
     // here, not in the standalone Text-analytics cloud, because the codebook is this
@@ -3152,6 +3300,233 @@ function codesInBook(state) {
   return state.codes
     .filter((c) => c.codebookId === state.codebookId)
     .sort(byCodeOrder);
+}
+
+// =============================================================================
+// Quantitising: coded data as a dataset
+// =============================================================================
+
+/** The label for codings whose code carries no theme, and for an unstamped coder. */
+const UNTHEMED = 'Unthemed';
+const UNATTRIBUTED = 'Unattributed';
+
+/**
+ * Turn this project's codings into a **case x code dataset** — shape A of the
+ * quantitising plan.
+ *
+ * ## Why a dataset and not a cross-plugin call
+ *
+ * A "document" here is already a dataset ROW (`seg.doc` is a `__ct_rid`), so the
+ * respondent attributes are the other columns of the same row. Emitting a dataset
+ * therefore needs no attribute model, works for every analysis plugin at once including
+ * third-party ones that cannot read these records at all, and — the reason that decides
+ * it — puts the five judgements below in the log, in History and in the do-file, instead
+ * of hiding them inside one analysis run.
+ *
+ * ## The five judgements, which are judgements and not conversions
+ *
+ * Each is an argument, each is reported in the output, and the defaults are the ones
+ * that need no parameter:
+ *
+ *  1. **Unit** — the document. (Segment and interval units are shapes B and D.)
+ *  2. **`values`** — `presence` (did this case raise it at all) or `count`. Presence by
+ *     default, because a raw count is confounded by how much each participant talked and
+ *     by how finely the coder highlights: two coders with identical judgement produce
+ *     different counts. What papers report is "8 of 12 participants raised cost".
+ *  3. **`rollup`** — one column per `code`, or per `theme` (`code.group`, a flat
+ *     one-level string, so this is two levels and no recursive walk).
+ *  4. **`coders`** — `pool` every coder into one column, or one column **per coder**.
+ *     The per-coder form is what makes `Scale ▸ Inter-rater agreement…` usable on coded
+ *     data with a unit model other than the one `fromCodings` picks for you.
+ *  5. **`scope`** — the active codebook or every codebook. Note the existing code
+ *     frequency button counts segments from EVERY book while listing only the active
+ *     book's codes; this asks instead of inheriting that.
+ *
+ * Unresolved and drifted codings are **included**, and that is not a shrug: at document
+ * grain a coding belongs to its row because `doc` is a row id, not a position, so a
+ * quote that no longer matches still counts for the right case. Only offsets need
+ * resolution, and offsets are shape B.
+ *
+ * ## Denominators travel as columns
+ *
+ * `n_segments`, `doc_chars` and `coded_chars` ride along because no downstream plugin
+ * has an exposure input to ask for them — `builtin-countmodels` has no `offset`. A rate
+ * per 1000 words is then one Compute away rather than impossible.
+ *
+ * Pure, so the whole contract is testable without a DOM or a dataset.
+ *
+ * @param {object} arg
+ * @param {Array<{rid: string, label: string, chars: number, isDoc: boolean}>} arg.docs
+ *   every row of the coded dataset, in dataset order. `isDoc` false for a row with
+ *   nothing to code — it is excluded, because a blank row is not a document that
+ *   declined to mention the theme.
+ * @param {Array<{id?: string, doc: string, codeId: string, author?: object, anchor?: object}>} arg.segments
+ * @param {Array<{id: string, name: string, group?: string, codebookId?: string, sort?: number}>} arg.codes
+ * @param {string|null} [arg.bookId] the active codebook, for `scope: 'book'`
+ * @param {'presence'|'count'} [arg.values='presence']
+ * @param {'code'|'theme'} [arg.rollup='code']
+ * @param {'pool'|'coder'} [arg.coders='pool']
+ * @param {'book'|'all'} [arg.scope='book']
+ * @param {Array<{meta: object, values: any[]}>} [arg.attrs] columns carried across,
+ *   aligned to `docs`; their metadata (labels, value labels) is preserved.
+ * @param {string|null} [arg.labelColumn] names the `document` column in the output
+ * @returns {{variables: object[], columns: Object<string, any[]>,
+ *            report: {nDocs: number, nRows: number, nCodings: number, nUsed: number,
+ *                     outOfScope: number, unknownCode: number, offDoc: number,
+ *                     coders: string[], items: Array<{label: string, name: string,
+ *                     present: number, total: number}>}}}
+ */
+export function quantitiseCodings({
+  docs = [], segments = [], codes = [], bookId = null,
+  values = 'presence', rollup = 'code', coders = 'pool', scope = 'book',
+  attrs = [], labelColumn = null,
+}) {
+  const presence = values !== 'count';
+  const codeById = new Map((codes ?? []).map((c) => [c.id, c]));
+  const inScope = (c) => scope === 'all' || !bookId || c.codebookId === bookId;
+
+  // --- which codings count, and why the rest did not --------------------------
+  const rows = (docs ?? []).filter((d) => d.isDoc);
+  const rowAt = new Map(rows.map((d, i) => [d.rid, i]));
+  const tally = { unknownCode: 0, outOfScope: 0, offDoc: 0 };
+  const used = [];
+  for (const s of segments ?? []) {
+    const code = codeById.get(s.codeId);
+    if (!code) { tally.unknownCode += 1; continue; }
+    if (!inScope(code)) { tally.outOfScope += 1; continue; }
+    if (!rowAt.has(String(s.doc))) { tally.offDoc += 1; continue; }
+    used.push({ seg: s, code });
+  }
+
+  // --- the columns ------------------------------------------------------------
+  // Ordered the way the codebook is ordered, so the dataset reads like the book it
+  // came from rather than like the order codings happened to be made in.
+  const byBook = (codes ?? []).filter(inScope).slice()
+    .sort((a, b) => String(a.group ?? '').localeCompare(String(b.group ?? ''))
+      || (typeof a.sort === 'number' && typeof b.sort === 'number' ? a.sort - b.sort : 0)
+      || String(a.name ?? '').localeCompare(String(b.name ?? '')));
+
+  /** A column's identity: what it is of, and how it is labelled. */
+  const items = [];
+  if (rollup === 'theme') {
+    const seen = new Set();
+    for (const c of byBook) {
+      const theme = cleanName(c.group, { max: 120 }) || UNTHEMED;
+      if (seen.has(theme)) continue;
+      seen.add(theme);
+      items.push({ key: theme, label: theme, group: '' });
+    }
+  } else {
+    for (const c of byBook) {
+      items.push({ key: c.id, label: cleanName(c.name, { max: 120, fallback: c.id }), group: cleanName(c.group, { max: 120 }) });
+    }
+  }
+  /** Which column key a coding falls under, under the chosen rollup. */
+  const keyOf = (code) => (rollup === 'theme' ? (cleanName(code.group, { max: 120 }) || UNTHEMED) : code.id);
+
+  const coderList = coders === 'coder'
+    ? [...new Set(used.map(({ seg }) => coderName(seg) || UNATTRIBUTED))].sort()
+    : [null];
+
+  // --- count ------------------------------------------------------------------
+  // cell[key\0coder] = per-row counts. One pass over the codings rather than a
+  // filter per cell, because a big project has far more codings than cells.
+  const cell = new Map();
+  const bucket = (k) => {
+    let b = cell.get(k);
+    if (!b) { b = new Array(rows.length).fill(0); cell.set(k, b); }
+    return b;
+  };
+  const nSegments = new Array(rows.length).fill(0);
+  const codedChars = new Array(rows.length).fill(0);
+  for (const { seg, code } of used) {
+    const i = rowAt.get(String(seg.doc));
+    nSegments[i] += 1;
+    codedChars[i] += quotedLength(seg);
+    const who = coders === 'coder' ? (coderName(seg) || UNATTRIBUTED) : '';
+    bucket(`${keyOf(code)}\u0000${who}`)[i] += 1;
+  }
+
+  // --- assemble ---------------------------------------------------------------
+  const variables = [];
+  const columns = {};
+  const taken = new Set();
+  const add = (base, meta, vals) => {
+    const name = uniqueName(base, taken, { start: 2 });
+    taken.add(name);
+    variables.push({ ...meta, name });
+    columns[name] = vals;
+    return name;
+  };
+
+  add('document', {
+    type: 'string', measurementLevel: 'nominal',
+    label: labelColumn || 'Document',
+  }, rows.map((d, i) => d.label || `Doc ${i + 1}`));
+  // The row id is provenance, not data: it is the only thing tying a quantitised row
+  // back to the document it summarises, and nothing else in the project records it.
+  add('doc_rid', { type: 'string', measurementLevel: 'nominal', label: 'Source row id' },
+    rows.map((d) => d.rid));
+
+  for (const a of attrs ?? []) {
+    const m = a?.meta ?? {};
+    if (!m.name) continue;
+    add(m.name, {
+      type: m.type || 'string', label: m.label || m.name,
+      valueLabels: m.valueLabels, measurementLevel: m.measurementLevel,
+    }, rows.map((d, i) => (a.values ?? [])[i] ?? null));
+  }
+
+  add('n_segments', { type: 'numeric', measurementLevel: 'scale', label: 'Codings on this document' }, nSegments);
+  add('doc_chars', { type: 'numeric', measurementLevel: 'scale', label: 'Document length (characters)' },
+    rows.map((d) => (Number.isFinite(d.chars) ? d.chars : 0)));
+  add('coded_chars', { type: 'numeric', measurementLevel: 'scale', label: 'Coded text (characters)' }, codedChars);
+
+  const report = {
+    nDocs: (docs ?? []).length,
+    nRows: rows.length,
+    nCodings: (segments ?? []).length,
+    nUsed: used.length,
+    ...tally,
+    coders: coders === 'coder' ? coderList.slice() : [],
+    items: [],
+  };
+
+  for (const it of items) {
+    for (const who of coderList) {
+      const counts = cell.get(`${it.key}\u0000${who ?? ''}`) ?? new Array(rows.length).fill(0);
+      const vals = presence ? counts.map((n) => (n > 0 ? 1 : 0)) : counts.slice();
+      const base = who ? `${it.label} (${who})` : it.label;
+      const label = [it.group, it.label].filter(Boolean).join(': ') + (who ? ` — ${who}` : '');
+      const name = add(base, presence
+        // A 0/1 indicator is a FACTOR, not a number: that is what makes it offerable in
+        // Crosstabs, which takes only factor/string — the headline use for this dataset.
+        ? { type: 'factor', measurementLevel: 'nominal', label, valueLabels: { 0: 'Absent', 1: 'Present' } }
+        : { type: 'numeric', measurementLevel: 'scale', label }, vals);
+      report.items.push({
+        label, name,
+        present: counts.reduce((n, c) => n + (c > 0 ? 1 : 0), 0),
+        total: counts.reduce((n, c) => n + c, 0),
+      });
+    }
+  }
+
+  return { variables, columns, report };
+}
+
+/**
+ * How much text a coding covers, from the anchor's own quote selector.
+ *
+ * NOT `seg.quote`, which is truncated to 80 characters for display — the full text is in
+ * the `text-quote` selector, which is persisted. So this needs no anchor RESOLUTION:
+ * length is a property of what was quoted, not of where it now sits.
+ *
+ * A region or time coding quotes no text and contributes 0 rather than a number in some
+ * other unit; mixing characters with seconds in one column would be worse than a zero.
+ */
+function quotedLength(seg) {
+  const sel = (seg?.anchor?.ref?.selectors ?? []).find((x) => x?.kind === 'text-quote');
+  return typeof sel?.exact === 'string' ? sel.exact.length : 0;
 }
 
 /** Fractional sort first, then name — a stable, explainable order either way. */
