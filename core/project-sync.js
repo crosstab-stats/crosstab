@@ -983,6 +983,54 @@ export class ProjectSync {
     return this.#ensureCollab();
   }
 
+  /** Whether this project has ever had a collab identity — i.e. whether there is
+   * anything for {@link ProjectSync#revokeInviteLinks} to revoke. Deliberately does NOT
+   * mint one just to answer: asking the question must not create the thing. */
+  get hasCollabIdentity() {
+    return !!(this.#collabId && this.#collabSecret);
+  }
+
+  /**
+   * Revoke every invite link already handed out, by rotating this project's collab
+   * identity.
+   *
+   * The other half of "stop sharing", and deliberately a separate action: turning
+   * sharing off REFUSES the room the links point at and can be turned back on, while
+   * this makes the links themselves dead and cannot be undone. Conflating a reversible
+   * refusal with an irreversible revocation is what the design note warned against.
+   *
+   * **Both halves rotate, not just the secret.** The room id is derived from `collabId`,
+   * and the secret rides beside it in the link, so rotating only the secret would leave
+   * an old link able to reach the right signalling room and merely fail to decrypt.
+   * Rotating both means the link addresses a room that does not exist.
+   *
+   * Any live session is dropped first: it is running in the room being abandoned, and
+   * leaving it up would mean the revocation had not actually taken effect for the people
+   * currently connected — the same empty gesture `stopCoauthoring` used to be.
+   *
+   * **What it cannot do.** Folder co-holders are not locked out: they receive the new
+   * identity on the next sync and rejoin transparently, because holding the folder IS
+   * the credential. Revoking links is about the links.
+   *
+   * @returns {Promise<boolean>} whether anything was rotated (false if there was no
+   *   identity to revoke).
+   */
+  async revokeInviteLinks() {
+    if (!this.hasCollabIdentity) return false;
+    this.stopCoauthoring();
+    // Cleared rather than overwritten, so `#ensureCollab` mints the new pair through the
+    // one code path that knows how — rather than this method growing its own copy of
+    // "what a collab identity looks like".
+    this.#collabId = null;
+    this.#collabSecret = null;
+    this.#ensureCollab();
+    this.#dirty = true;
+    this.#schedule();
+    await this.#settle();
+    this.#bus.emit(PROJECT_CHANGED);
+    return true;
+  }
+
   /** The full current-state snapshot (flat one-true-log + source bytes + scalars) — the
    * same shape `#save` persists. Public so the `.crosstab` exporter can write a FAITHFUL
    * clone (raw log, preserving op ids + row ids) rather than a lossy re-synthesised

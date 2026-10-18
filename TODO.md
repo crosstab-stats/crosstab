@@ -420,8 +420,9 @@ bottom; they are the project's memory and are not summarised away.
       Verified in the app: the fork carried a computed variable and a logged analysis,
       opened under its own name, and editing it left the original untouched.
 
-- [~] **Stop sharing — BUILT (2026-08-21); the link-revocation half is still open.**
-      `core/share-state.js` + File ▸ Sharing…, 612 tests. Needs a browser pass.
+- [~] **Stop sharing — BUILT (2026-08-21); link revocation added 2026-10-17.**
+      `core/share-state.js` + `core/sharing-settings.js` + File ▸ Sharing…. What remains is
+      the two-peer verification noted below, which needs a second device.
 
       **What shipped.** A `share:project` target carrying `enableSharing` /
       `disableSharing`, folded last-writer-wins by HLC and registered as a projection, so
@@ -449,11 +450,32 @@ bottom; they are the project's memory and are not summarised away.
         project". A modal on open would nag a co-holder about a decision that is not
         theirs to make, and a silent refusal would leave them hunting a bug.
 
-      **STILL OPEN — action 1, revoke outstanding links.** Rotating `collabSecret` (and/or
-      `collabId`) to kill every invite URL already sent. Nothing here does that: stopping
-      sharing refuses the room those links point at, which is a different and weaker
-      promise, and the UI says so in as many words. Note it does NOT stop folder
-      co-holders, who receive the new identity on the next sync and rejoin transparently.
+      **DONE 2026-10-17 — action 1, revoke outstanding links.** `revokeInviteLinks()`
+      rotates the collab identity and `File ▸ Sharing…` offers it as a second, clearly
+      irreversible action.
+
+      **Both halves rotate, not just the secret.** The room id is derived from `collabId`
+      and the secret rides beside it in the link, so rotating only the secret would leave
+      an old link able to reach the right signalling room and merely fail to decrypt.
+      Rotating both means it addresses a room that does not exist — a cleaner promise and
+      an easier one to describe truthfully. Any live session is dropped first, or the
+      revocation would not have taken effect for exactly the people currently connected.
+
+      **The dialog stopped being a `confirm()`**, because a confirm can only offer one
+      verb and this entry's own rule is that the two actions must not be conflated: stop
+      sharing REFUSES the room (reversible), revoking kills the links (not). The old copy
+      had to apologise for the gap in its own text — *"it does not revoke the links
+      themselves"* — which is a dialog describing the button it does not have.
+      `core/sharing-settings.js` now has both, each stating its limit beside itself, and
+      the wording is a pure function so it is testable.
+
+      Still true and still said out loud in the UI: it does NOT stop folder co-holders,
+      who receive the new identity on the next sync and rejoin transparently — holding
+      the folder is itself the credential — and nothing here retracts a copy someone
+      already has.
+
+      Verified in the app: opened from the real menu item, rotated, and the invite link
+      captured beforehand now names a different room from the one the project is in.
 
       **Verification owed:** turn sharing off with a peer live and confirm the session
       drops on both sides; reopen and confirm it is still off; turn it back on and confirm

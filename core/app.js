@@ -9,6 +9,7 @@
  * understand how the pieces fit, read this file top to bottom.
  */
 
+import { showSharingSettings } from './sharing-settings.js';
 import { EventBus, CoreEvents } from './event-bus.js';
 import { DatasetManager, DATASETS_CHANGED } from './dataset-manager.js';
 import { DuckDBManager } from './duckdb-manager.js';
@@ -1578,35 +1579,10 @@ export async function boot(mounts) {
     path: ['File'],
     label: 'Sharing…',
     order: 13,
-    command: async () => {
-      if (projects.sharingDisabled) {
-        if (!confirm(
-          'Sharing is currently OFF for this project.\n\n'
-          + 'Turning it back on lets you go live and invite people again. Existing invite '
-          + 'links still work — they were never revoked, only refused.\n\n'
-          + 'Allow sharing again?',
-        )) return;
-        projects.setSharing(true);
-        results.appendText('**Sharing is on** for this project again.');
-        return;
-      }
-      if (!confirm(
-        'Stop sharing this project?\n\n'
-        + 'It will refuse to go live, refuse invite links, and drop any session running '
-        + 'now. The decision travels with the project, so people syncing it through a '
-        + 'shared folder stop being able to join either.\n\n'
-        + 'What it CANNOT do: take back what people already have. Anyone holding a copy '
-        + 'keeps it, and a folder already sitting in someone else’s Dropbox is beyond '
-        + 'reach. This protects what happens next, not what already happened.',
-      )) return;
-      projects.setSharing(false);
-      results.appendText(
-        '**Sharing is off** for this project. It will not go live or issue an invite link '
-        + 'until you turn sharing back on in File ▸ Sharing…\n\n'
-        + 'This does not retract copies people already hold, and it does not revoke the '
-        + 'links themselves — it refuses the room they point at.',
-      );
-    },
+    // One dialog rather than a two-branch confirm: stopping sharing and REVOKING the
+    // links are separable actions (one reversible, one not) and a confirm can only
+    // offer one verb. See core/sharing-settings.js.
+    command: () => showSharingSettings({ projects, results: results.api ?? results }),
   });
 
   // The .crosstab bundle is a LOCATION, not a menu verb (#181): opening one is a row in
