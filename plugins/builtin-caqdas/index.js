@@ -2497,6 +2497,157 @@ export const workspace = {
     }));
 
 
+
+    /**
+     * Shape D: counts per case per occasion, where an occasion is a DOCUMENT and a case
+     * spans several of them.
+     *
+     * Case and occasion are columns the user nominates rather than a new concept: the
+     * grouping is already in the data (a document is a row), and a second place to
+     * declare it would only drift from the first.
+     */
+    async function quantitiseOccasions() {
+      const meta = await app.data.getVariableMeta();
+      const names = meta.filter((m) => m.name !== state.textColumn);
+      if (names.length < 2) {
+        app.results.appendError(
+          'This shape needs two more columns in the data: one naming the case (the participant '
+          + 'followed across documents) and one giving the occasion (interview 1, 2, 3…).',
+        );
+        return;
+      }
+      const opt = (m) => ({ value: m.name, label: m.label && m.label !== m.name ? `${m.name} — ${m.label}` : m.name });
+      // Guessed from the column names, because these two are usually called what they
+      // are — and a guess that is visible in a select costs nothing to correct.
+      const guess = (re, fallback) => (names.find((m) => re.test(m.name)) || fallback || {}).name || '';
+      const form = await app.ui.showForm({
+        title: 'Quantitise codings — a series across occasions',
+        hint: 'One row per case, occasion and code. This is the shape the single-case design tools read: '
+          + 'case, session, measure, value.',
+        okLabel: 'Create dataset',
+        fields: [
+          {
+            name: 'caseCol', type: 'select', label: 'Case is', value: guess(/^(case|participant|subject|respondent|id|person|child|client)$/i, names.find((m) => m.name === state.labelColumn)),
+            hint: 'The participant or unit followed across documents — one series, and one graph panel, per value.',
+            options: names.map(opt),
+          },
+          {
+            name: 'occCol', type: 'select', label: 'Occasion is', value: guess(/^(session|wave|occasion|visit|round|time|timepoint|day|week|month|interview)$/i),
+            hint: 'Which measurement occasion each document is. Numbers are used as they are; words are ordered by where they first appear in the data.',
+            options: names.map(opt),
+          },
+          {
+            name: 'rollup', type: 'select', label: 'Measures are', value: 'code',
+            options: [{ value: 'code', label: 'Codes' }, { value: 'theme', label: 'Themes' }],
+          },
+          {
+            name: 'scope', type: 'select', label: 'Codes from', value: 'book',
+            options: [
+              { value: 'book', label: 'The open codebook' },
+              { value: 'all', label: 'Every codebook in the project' },
+            ],
+          },
+          {
+            name: 'carry', type: 'select', label: 'Carry across', value: 'all',
+            hint: 'Keep every column if you want a PHASE: the single-case tools require one, and no coding can supply it.',
+            options: [
+              { value: 'all', label: 'Every other column of the source' },
+              { value: 'none', label: 'Nothing' },
+            ],
+          },
+        ],
+      });
+      if (!form) return;
+      if (!form.caseCol || !form.occCol) { app.results.appendError('Both a case column and an occasion column are needed.'); return; }
+      if (form.caseCol === form.occCol) {
+        app.results.appendError('The case and the occasion must be different columns — otherwise every case has exactly one occasion and there is no series.');
+        return;
+      }
+
+      // The two nominated columns ride on the document list itself, so the pure function
+      // never has to know where they came from.
+      const keyed = await app.data.getRows({
+        variables: [form.caseCol, form.occCol], includeRowId: true, limit: MAX_DOCS,
+      });
+      const at = new Map(keyed.map((r) => [String(r.__rid), r]));
+      const withKeys = docRows().map((d) => ({
+        ...d,
+        caseKey: at.get(d.rid)?.[form.caseCol] ?? '',
+        occasion: at.get(d.rid)?.[form.occCol] ?? '',
+      }));
+
+      // The nominated columns are not carried as attributes too — they are already the
+      // `case` and `occasion` columns, and a second copy under its original name is a
+      // column that can disagree with the one beside it.
+      const attrs = (await carriedAttrs(form.carry))
+        .filter((a) => a.meta.name !== form.caseCol && a.meta.name !== form.occCol);
+
+      const { variables, columns, report } = occasionCounts({
+        docs: withKeys,
+        segments: state.segments,
+        codes: state.codes,
+        bookId: state.codebookId,
+        scope: form.scope,
+        rollup: form.rollup,
+        attrs,
+      });
+      if (!report.nRows) {
+        app.results.appendError(
+          'No case-and-occasion pairs were found. Every document needs a value in both columns '
+          + 'to sit in a series.',
+        );
+        return;
+      }
+
+      const noun = form.rollup === 'theme' ? 'themes' : 'codes';
+      const name = 'Codings — per case and occasion';
+      await app.data.create({ name, variables, columns, activate: false });
+      const phaseish = variables.find((v) => /phase|condition|block|stage/i.test(v.name));
+      await app.results.beginAnalysis('Quantitise codings');
+      await app.results.appendText(
+        `**Dataset created: ${name}.** ${report.nRows} rows — ${report.nCases} case`
+        + `${report.nCases === 1 ? '' : 's'} × ${report.nOccasions} occasion`
+        + `${report.nOccasions === 1 ? '' : 's'} × the ${noun} in scope. Switch to it in the Data tab. `
+        + `For a single-case graph use **\`count\`** as the outcome, **\`measure\`**, `
+        + `**\`case\`** and **\`session\`**`
+        + (phaseish ? ` — and \`${phaseish.name}\` looks like your phase column.` : '.'),
+      );
+      await app.results.appendText(
+        '**How this was built:**\n\n'
+        + `- **A case is \`${form.caseCol}\` and an occasion is \`${form.occCol}\`**, both read from each `
+        + 'document’s own row. Nothing in the coding records says which participant or which '
+        + 'interview a document is; those are facts about the data, so they are nominated rather '
+        + 'than invented.\n'
+        + `- **The occasion axis** ${report.numericOccasions
+          ? 'came from the column as numbers.'
+          : 'is not numeric, so `session` numbers the occasions in the order they first appear in the data — the same rule the single-case tools use when no session column is given. The original label is in `occasion`, so the ordering can be checked.'}\n`
+        + `- **Zeros are rows.** ${report.zeros} of ${report.nRows} rows are a code that did not occur `
+        + 'in that occasion, which is an observation rather than a gap — a missing row would have a '
+        + 'line drawn straight through it. Occasions a case does not have are NOT invented: a '
+        + 'participant who stopped after session two has no session three.\n'
+        + '- **A phase is required by the single-case tools and no coding can supply one** — when an '
+        + 'intervention started is a fact about the study design. It has to be one of the carried '
+        + 'columns.\n'
+        + '- **The non-overlap indices take ONE measure at a time.** The graph reads the `measure` '
+        + 'column, but NAP/PND/Tau-U do not, so run against this table as it stands they would pool '
+        + 'every code into one series per case and report a number for nothing. Use Transform ▸ '
+        + 'Select cases to keep a single `measure` first.'
+        + (report.conflicts ? `\n- ${report.conflicts} cell(s) drew a carried value from several documents that disagreed; the first was used. Check your phase column if one of those is it.` : '')
+        + (report.noCase ? `\n- ${report.noCase} document(s) had no case and could not be placed in a series.` : '')
+        + (report.noOccasion ? `\n- ${report.noOccasion} document(s) had no occasion.` : '')
+        + (report.outOfScope ? `\n- ${report.outOfScope} coding(s) of out-of-scope codes were left out.` : '')
+        + (report.unknownCode ? `\n- ${report.unknownCode} coding(s) referenced a deleted code.` : ''),
+      );
+      await app.results.appendTable({
+        caption: 'Codings per occasion',
+        columns: ['Case', 'Occasion', form.rollup === 'theme' ? 'Theme' : 'Code', 'Codings'],
+        rows: columns.case.map((c, i) => [c, columns.occasion[i], columns.measure[i], columns.count[i]])
+          .filter((r) => r[3] > 0)
+          .slice(0, 30),
+      });
+      await app.results.endAnalysis();
+    }
+
     /** Shape C: one row per pair of codes that occur together. */
     async function quantitisePairs() {
       const form = await app.ui.showForm({
@@ -2693,12 +2844,14 @@ export const workspace = {
             { value: 'case', label: 'Document — a column per code (crosstabs, regression, latent class)' },
             { value: 'segment', label: 'Coding — a row per passage (text analytics, correspondence, multilevel)' },
             { value: 'pair', label: 'Pair of codes — which codes occur together (network analysis)' },
+            { value: 'occasion', label: 'Case and occasion — a series across repeated documents (single-case designs, counts over time)' },
           ],
         }],
       });
       if (!shapePick) return;
       if (shapePick.shape === 'segment') { await quantitiseSegments(); return; }
       if (shapePick.shape === 'pair') { await quantitisePairs(); return; }
+      if (shapePick.shape === 'occasion') { await quantitiseOccasions(); return; }
 
       const form = await app.ui.showForm({
         title: 'Quantitise codings — a column per code',
@@ -3887,6 +4040,203 @@ function spanOf(seg) {
     return { unit: 'time', lo: seg.tStart, hi: seg.tEnd > seg.tStart ? seg.tEnd : seg.tStart + 1e-9 };
   }
   return null;
+}
+
+/**
+ * Turn the codings into **counts per case per occasion** — shape D: a long series.
+ *
+ * ## What an occasion is here
+ *
+ * A DOCUMENT, with a case that spans several of them: eight participants interviewed
+ * three times each is twenty-four documents, three occasions, eight cases. The series
+ * runs ACROSS documents.
+ *
+ * The other reading of "occasion" — a slice of time inside one document, so the series
+ * runs within it — is deliberately not this function. It needs a bin width and a
+ * convention for a coding that straddles two bins (momentary, partial-interval or
+ * whole-interval recording, which answer different questions), and that is only
+ * decidable with a real study in hand. See TODO.md.
+ *
+ * ## Case and occasion are nominated columns, not a new concept
+ *
+ * There is no notion of a case spanning documents anywhere in the coding model, and
+ * this does not add one. `seg.doc` is a row id, so "which participant" and "which
+ * interview" are already columns of that row — the same fact shape A rests on. A second
+ * place to declare the grouping would only drift from the first, and nominating a column
+ * lets a case be a participant in one analysis and a site in the next without recoding
+ * anything.
+ *
+ * It also makes explicit something shape A leaves implicit: shape A's unit is the
+ * DOCUMENT, so when cases span documents its prevalence is "how many interviews
+ * mentioned cost", not how many participants. This function is the answer to that.
+ *
+ * ## Long, because that is what reads it
+ *
+ * One row per (case x occasion x code), with the code in a `measure` column — which is
+ * exactly the shape `builtin-sced`'s multi-measure graph takes, and what the count models
+ * and time-series tools want too. No wide variant is needed.
+ *
+ * **`phase` cannot come from the codings.** `builtin-sced` requires it, and when an
+ * intervention started is a fact about the study design rather than about the coding. So
+ * it has to be one of the carried columns; if the project has no phase column, SCED is
+ * out of reach no matter what this emits, and the Output says so rather than letting the
+ * user discover it in the picker.
+ *
+ * ## Zeros are data
+ *
+ * A session where the behaviour never occurred is a real observation, and a gap in the
+ * series would draw a line straight through it. So every code in scope gets a row for
+ * every (case, occasion) that EXISTS — but only those. A participant who dropped out
+ * after session two has no session three, and inventing a zero there would be
+ * fabricating an observation rather than recording an absence.
+ *
+ * @param {object} arg `docs`, `segments`, `codes`, `bookId`, `scope` as elsewhere.
+ *   `docs[].caseKey` and `docs[].occasion` are the nominated values for that document.
+ * @param {'code'|'theme'} [arg.rollup='code']
+ * @param {Array<{meta: object, values: any[]}>} [arg.attrs] carried per-document columns;
+ *   a cell built from several documents takes the first one's value and the conflicts are
+ *   counted.
+ * @returns {{variables: object[], columns: Object<string, any[]>, report: object}}
+ */
+export function occasionCounts({
+  docs = [], segments = [], codes = [], bookId = null, scope = 'book',
+  rollup = 'code', attrs = [],
+}) {
+  const codeById = new Map((codes ?? []).map((c) => [c.id, c]));
+  const inScope = (c) => scope === 'all' || !bookId || c.codebookId === bookId;
+  const rows = (docs ?? []).filter((d) => d.isDoc);
+
+  // --- the cells: which (case, occasion) pairs exist --------------------------
+  const report = {
+    nRows: 0, nCases: 0, nOccasions: 0, zeros: 0, conflicts: 0,
+    noCase: 0, noOccasion: 0, numericOccasions: true,
+    unknownCode: 0, outOfScope: 0, offDoc: 0,
+  };
+  const cellOf = new Map(); // "case|occasion" -> {caseKey, occasion, docs: [index…]}
+  const docCell = new Map(); // rid -> cell key
+  const order = []; // occasion labels in first-appearance order
+  for (let i = 0; i < rows.length; i += 1) {
+    const d = rows[i];
+    const caseKey = cleanName(d.caseKey, { max: 120 });
+    const occasion = cleanName(d.occasion, { max: 120 });
+    // A document with no case or no occasion cannot be placed in a series. Dropped and
+    // counted, because the alternative is a phantom case named "" that silently
+    // collects everything the user forgot to label.
+    if (!caseKey) { report.noCase += 1; continue; }
+    if (!occasion) { report.noOccasion += 1; continue; }
+    const key = `${JSON.stringify(caseKey)}|${JSON.stringify(occasion)}`;
+    if (!cellOf.has(key)) cellOf.set(key, { caseKey, occasion, docs: [] });
+    cellOf.get(key).docs.push(i);
+    docCell.set(d.rid, key);
+    if (!order.includes(occasion)) order.push(occasion);
+  }
+
+  // --- the occasion axis ------------------------------------------------------
+  // SCED wants a NUMERIC session. Real occasion columns are sometimes numbers (1, 2, 3)
+  // and sometimes not ("Pre", "Post", "Follow-up"), and alphabetical order would put
+  // Follow-up first. So: use the numbers when they are numbers, and otherwise fall back
+  // to the order the occasions first appear in the data — which is the user's own row
+  // order, the only non-arbitrary choice available and the same rule SCED itself applies
+  // when the session column is omitted. The original label travels in `occasion` either
+  // way, so nothing is lost and the ordering can be checked.
+  report.numericOccasions = order.every((o) => o !== '' && Number.isFinite(Number(o)));
+  const sessionOf = report.numericOccasions
+    ? (o) => Number(o)
+    : (o) => order.indexOf(o) + 1;
+
+  // --- count, per cell per node -----------------------------------------------
+  const nodes = [...new Set((codes ?? []).filter(inScope)
+    .map((c) => (rollup === 'theme' ? (cleanName(c.group, { max: 120 }) || UNTHEMED)
+      : cleanName(c.name, { max: 120, fallback: c.id }))))].sort();
+  const tally = new Map(); // cellKey -> node -> count
+  for (const s of segments ?? []) {
+    const code = codeById.get(s.codeId);
+    if (!code) { report.unknownCode += 1; continue; }
+    if (!inScope(code)) { report.outOfScope += 1; continue; }
+    const key = docCell.get(String(s.doc));
+    if (!key) { report.offDoc += 1; continue; }
+    const node = rollup === 'theme'
+      ? (cleanName(code.group, { max: 120 }) || UNTHEMED)
+      : cleanName(code.name, { max: 120, fallback: code.id });
+    if (!tally.has(key)) tally.set(key, new Map());
+    const m = tally.get(key);
+    m.set(node, (m.get(node) ?? 0) + 1);
+  }
+
+  // --- assemble ---------------------------------------------------------------
+  const cells = [...cellOf.entries()]
+    .sort((a, b) => String(a[1].caseKey).localeCompare(String(b[1].caseKey))
+      || sessionOf(a[1].occasion) - sessionOf(b[1].occasion));
+  const out = {
+    case: [], session: [], occasion: [], measure: [], count: [], present: [],
+    n_docs: [], doc_chars: [],
+  };
+  const variables = [
+    // Named for the SCED long form, which is the main consumer: case / session /
+    // measure / value. `count` is the value, and `present` sits beside it rather than
+    // behind an option, because naming one column `count` while it held a 0/1 would lie.
+    { name: 'case', type: 'string', measurementLevel: 'nominal', label: 'Case' },
+    { name: 'session', type: 'numeric', measurementLevel: 'scale', label: report.numericOccasions ? 'Occasion (from the column)' : 'Occasion (order of first appearance)' },
+    { name: 'occasion', type: 'string', measurementLevel: 'nominal', label: 'Occasion label' },
+    { name: 'measure', type: 'string', measurementLevel: 'nominal', label: rollup === 'theme' ? 'Theme' : 'Code' },
+    { name: 'count', type: 'numeric', measurementLevel: 'scale', label: 'Codings in this occasion' },
+    // NUMERIC, not the factor shape A uses for the same idea: `builtin-sced` filters its
+    // outcome to numeric variables, and this table exists to feed it. The value labels
+    // keep it readable in the editor.
+    { name: 'present', type: 'numeric', measurementLevel: 'nominal', label: 'Occurred at all', valueLabels: { 0: 'No', 1: 'Yes' } },
+    { name: 'n_docs', type: 'numeric', measurementLevel: 'scale', label: 'Documents in this occasion' },
+    { name: 'doc_chars', type: 'numeric', measurementLevel: 'scale', label: 'Text in this occasion (characters)' },
+  ];
+
+  // Carried columns get their final names BEFORE anything is written, so an attribute
+  // called `case` becomes `case_2` rather than briefly sharing a key with the column
+  // this table is keyed by — which would have destroyed it.
+  const taken = new Set(variables.map((v) => v.name));
+  const carried = (attrs ?? []).filter((a) => a?.meta?.name).map((a) => {
+    const name = uniqueName(a.meta.name, taken, { start: 2 });
+    taken.add(name);
+    return { src: a, name, vals: [] };
+  });
+  const origAt = new Map((docs ?? []).map((d, i) => [d.rid, i]));
+
+  for (const [key, cell] of cells) {
+    const counts = tally.get(key) ?? new Map();
+    const chars = cell.docs.reduce((n, i) => n + (Number.isFinite(rows[i].chars) ? rows[i].chars : 0), 0);
+    for (const node of nodes) {
+      const n = counts.get(node) ?? 0;
+      if (!n) report.zeros += 1;
+      out.case.push(cell.caseKey);
+      out.session.push(sessionOf(cell.occasion));
+      out.occasion.push(cell.occasion);
+      out.measure.push(node);
+      out.count.push(n);
+      out.present.push(n > 0 ? 1 : 0);
+      out.n_docs.push(cell.docs.length);
+      out.doc_chars.push(chars);
+      for (const c of carried) {
+        // One cell can be built from several documents — a participant interviewed twice
+        // in one wave. The first document's value is used and the disagreements are
+        // counted, because a silent pick would make a conflicting phase look settled.
+        const vals = cell.docs.map((i) => (c.src.values ?? [])[origAt.get(rows[i].rid)] ?? null);
+        if (vals.length > 1 && new Set(vals.map((v) => String(v))).size > 1) report.conflicts += 1;
+        c.vals.push(vals[0] ?? null);
+      }
+    }
+  }
+  for (const c of carried) {
+    out[c.name] = c.vals;
+    const m = c.src.meta;
+    variables.push({
+      name: c.name, type: m.type || 'string', label: m.label || m.name,
+      valueLabels: m.valueLabels, measurementLevel: m.measurementLevel,
+    });
+  }
+
+  report.nRows = out.case.length;
+  report.nCases = new Set(cells.map(([, c]) => c.caseKey)).size;
+  report.nOccasions = order.length;
+
+  return { variables, columns: out, report };
 }
 
 /** The label for codings whose code carries no theme, and for an unstamped coder. */

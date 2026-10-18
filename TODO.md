@@ -778,10 +778,15 @@ bottom; they are the project's memory and are not summarised away.
         already exists for undoing a specific action further back. Documented rather
         than changed.
 
-- [~] **CAQDAS → statistics: quantitising coded data.** (Pulled out of #145 — a
-      CAQDAS/#147 concern, not the ownership model. Was "cross-plugin invocation"; the
-      design question it was holding is **answered below** and the first shape is being
-      built.)
+- [x] **CAQDAS → statistics: quantitising coded data — SHAPES A–D ALL BUILT
+      (2026-10-18).** `Quantitise…` in the coding workspace asks which unit of analysis
+      and emits a dataset for it. What remains open is one sub-reading of D (occasions
+      WITHIN a document, which needs an interval convention chosen against a real study)
+      and the ownership question for third-party plugins — both below.
+
+      (Pulled out of #145 — a CAQDAS/#147 concern, not the ownership model. Was
+      "cross-plugin invocation"; the design question it was holding is **answered
+      below**.)
 
       The old entry asked: does the derived dataset contain the coded text segments, the
       source rows, or a frequency table of codes? **The answer is "none of those, as a
@@ -992,13 +997,71 @@ bottom; they are the project's memory and are not summarised away.
         on the result returning 3 nodes, 3 edges, density 1.0000, centralities and the
         network plot. Which also demonstrates the caveat: that density is over the three
         codes PRESENT, not the five in the codebook.
-      - [ ] **D — unit x interval counts.** case, session/interval, code, count,
-        exposure. Feeds SCED, time series, count models. Only meaningful for
-        session/media data — and unlike A–C it needs something the model does not have
-        yet: a notion of which SESSION a document belongs to. Today that would have to be
-        a carried attribute the user nominates (an interview number, a session column),
-        which is probably the right answer, but it is a design question rather than more
-        of the same. Not started.
+      - **D — counts per case per occasion. BUILT 2026-10-18 (the across-documents
+        reading).** `case`, `session`, `occasion`, `measure`, `count`, `present`,
+        `n_docs`, `doc_chars` + carried columns — the long shape `builtin-sced`'s
+        multi-measure graph reads. `occasionCounts()`, 14 new tests.
+
+        **"Occasion" was one word doing two jobs, which is why this waited.** The two
+        readings want the same output and need different machinery:
+
+        - **Across documents (BUILT).** Eight participants interviewed three times is 24
+          documents, 3 occasions, 8 cases; the series runs between documents.
+        - **Within one document (NOT built).** An hour of video binned into minutes; the
+          series runs inside it. Needs a bin width AND a convention for a coding that
+          straddles two bins — momentary, partial-interval or whole-interval recording,
+          which are established names for choices that answer DIFFERENT questions
+          (events vs occupancy). Only decidable with a real continuously-coded study in
+          hand, and it is the only reading where media duration is the natural exposure.
+          Left open deliberately.
+
+        **Case and occasion are nominated COLUMNS, and that is the permanent answer.**
+        There is no concept of a case spanning documents anywhere in the coding model,
+        and this does not add one: `seg.doc` is a row id, so "which participant" and
+        "which interview" are already columns of that row — the same fact shape A rests
+        on. A second place to declare the grouping could only drift from the first, and
+        nominating a column lets a case be a participant in one analysis and a site in
+        the next without recoding anything. The form guesses both from the column names
+        and the guess is visible in a select, so correcting it is free.
+
+        **It also makes explicit something shape A left implicit:** shape A's unit is the
+        DOCUMENT, so when cases span documents its prevalence is "how many interviews
+        mentioned cost", not how many participants. D is the answer to that.
+
+        **Zeros are rows; missing occasions are not.** A session where the behaviour
+        never occurred is an observation, and leaving the row out makes a single-case
+        graph draw its line straight through the gap. But an occasion a case does not
+        HAVE is never invented — a participant who stopped after session two has no
+        session three, and a zero there would be fabricating an observation rather than
+        recording an absence. The two are one line apart in the code and opposite in
+        meaning.
+
+        **A phase is required by the single-case tools and no coding can supply one** —
+        when an intervention started is a fact about the study design. So it has to be a
+        carried column, the Output says so rather than letting the user find out in the
+        picker, and the form's "carry everything" hint says why you would want it. Where
+        one cell is built from several documents that disagree about a carried value, the
+        first is used and the disagreements are COUNTED, because a silent pick would make
+        a conflicting phase look settled.
+
+        **The occasion axis** uses the column's numbers when they are numbers, and
+        otherwise orders occasions by where they first appear in the data — which is the
+        user's own row order, and the same rule `builtin-sced` applies when no session
+        column is given. Alphabetical would put "Follow-up" before "Pre". The original
+        label travels in `occasion` either way, so the ordering can be checked rather
+        than trusted.
+
+        **One trap named in the Output rather than left to bite:** the multiple-baseline
+        GRAPH reads the `measure` column, but the non-overlap indices (NAP, PND, Tau-U,
+        IRD) do not — run against this table as it stands they would pool every code into
+        one series per case and report a number for nothing. The Output says to Select
+        cases down to one measure first. A wrong number that looks right is worse than an
+        error.
+
+        **Verified in the browser:** 2 participants x 6 sessions x 2 codes, baseline for
+        three sessions then intervention, quantitised and then drawn by
+        **Multiple-baseline graph, several measures** — two panels, two measures each, six
+        points per series, phases Baseline/Intervention, no errors.
 
       The code frequency table (code, n, %) is a REPORT, not a payload. We already have
       it; no contract should be built around it.

@@ -20,7 +20,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const { quantitiseCodings, codingTable, cooccurrenceEdges } = await import('../plugins/builtin-caqdas/index.js');
+const { quantitiseCodings, codingTable, cooccurrenceEdges, occasionCounts } = await import('../plugins/builtin-caqdas/index.js');
 const { coderName } = await import('../core/plugin-stdlib.js');
 
 // --- a small coded project ---------------------------------------------------
@@ -654,4 +654,198 @@ test('the first two columns are the edge list, named for what reads them', () =>
   for (const v of out.variables.slice(0, 2)) {
     assert.equal(v.type, 'string', 'Network analysis takes string/factor/numeric endpoints');
   }
+});
+
+// =============================================================================
+// Shape D — a series across occasions
+// =============================================================================
+// Four participants, two interviews each, in the order a real dataset holds them: every
+// case's first wave, then every case's second. Case and occasion are columns of the
+// document's own row, nominated by the user rather than invented here.
+
+const SERIES_DOCS = [
+  { rid: 'd1', label: 'P01 w1', chars: 100, isDoc: true, caseKey: 'P01', occasion: '1' },
+  { rid: 'd2', label: 'P02 w1', chars: 100, isDoc: true, caseKey: 'P02', occasion: '1' },
+  { rid: 'd3', label: 'P01 w2', chars: 200, isDoc: true, caseKey: 'P01', occasion: '2' },
+  { rid: 'd4', label: 'P02 w2', chars: 200, isDoc: true, caseKey: 'P02', occasion: '2' },
+];
+const TWO_CODES = [
+  { id: 'c1', name: 'Cost', group: 'Barriers', codebookId: BOOK, sort: 1 },
+  { id: 'c3', name: 'Trust in staff', group: 'Facilitators', codebookId: BOOK, sort: 2 },
+];
+const SERIES_SEGS = [
+  seg('d1', 'c1', 'money once'),
+  seg('d3', 'c1', 'money again'),
+  seg('d3', 'c1', 'and again'),
+  seg('d3', 'c3', 'the nurse'),
+  seg('d2', 'c3', 'kind staff'),
+];
+const series = (opts = {}) => occasionCounts({
+  docs: SERIES_DOCS, segments: SERIES_SEGS, codes: TWO_CODES, bookId: BOOK, ...opts,
+});
+/** The count for one cell of the grid. */
+const cellAt = (out, caseKey, occasion, measure) => {
+  const i = out.columns.case.findIndex((c, k) => c === caseKey
+    && out.columns.occasion[k] === occasion && out.columns.measure[k] === measure);
+  return i < 0 ? null : { count: out.columns.count[i], present: out.columns.present[i], session: out.columns.session[i] };
+};
+
+test('one row per case, occasion and code', () => {
+  // 2 cases x 2 occasions x 2 codes.
+  const out = series();
+  assert.equal(out.report.nRows, 8);
+  assert.equal(out.report.nCases, 2);
+  assert.equal(out.report.nOccasions, 2);
+  assert.equal(cellAt(out, 'P01', '2', 'Cost').count, 2);
+  assert.equal(cellAt(out, 'P01', '1', 'Cost').count, 1);
+  assert.equal(cellAt(out, 'P02', '1', 'Trust in staff').count, 1);
+});
+
+test('a code that did not occur in an occasion is a ZERO ROW, not a missing one', () => {
+  // A session where the behaviour never happened is an observation. Leave the row out
+  // and a single-case graph draws its line straight through the gap.
+  const out = series();
+  assert.equal(cellAt(out, 'P01', '1', 'Trust in staff').count, 0);
+  assert.equal(cellAt(out, 'P02', '2', 'Cost').count, 0);
+  // P01w1 Trust, P02w1 Cost, and both codes in P02w2.
+  assert.equal(out.report.zeros, 4);
+});
+
+test('an occasion a case does not have is NOT invented', () => {
+  // The difference between recording an absence and fabricating an observation: a
+  // participant who stopped after wave 1 was not measured at wave 2.
+  const docs = [...SERIES_DOCS, { rid: 'd5', label: 'P03 w1', chars: 50, isDoc: true, caseKey: 'P03', occasion: '1' }];
+  const out = occasionCounts({ docs, segments: SERIES_SEGS, codes: TWO_CODES, bookId: BOOK });
+  assert.equal(cellAt(out, 'P03', '1', 'Cost').count, 0);
+  assert.equal(cellAt(out, 'P03', '2', 'Cost'), null, 'P03 has no wave 2');
+  assert.equal(out.report.nRows, 10, '2 cases x 2 waves x 2 codes, plus P03 x 1 wave x 2 codes');
+});
+
+test('`present` sits beside `count` rather than replacing it', () => {
+  // And it is NUMERIC, unlike shape A's factor version of the same idea, because
+  // builtin-sced filters its outcome to numeric variables and this table exists to feed
+  // it. Naming one column `count` while it held a 0/1 would have been the alternative.
+  const out = series();
+  assert.equal(cellAt(out, 'P01', '2', 'Cost').present, 1);
+  assert.equal(cellAt(out, 'P01', '1', 'Trust in staff').present, 0);
+  const v = out.variables.find((x) => x.name === 'present');
+  assert.equal(v.type, 'numeric');
+  assert.deepEqual(v.valueLabels, { 0: 'No', 1: 'Yes' });
+  assert.equal(out.variables.find((x) => x.name === 'count').type, 'numeric');
+});
+
+test('a numeric occasion column is used as it stands', () => {
+  const out = series();
+  assert.equal(cellAt(out, 'P01', '2', 'Cost').session, 2);
+  assert.ok(out.report.numericOccasions);
+});
+
+test('a worded occasion is ordered by first appearance, not alphabetically', () => {
+  // "Pre, Post, Follow-up" sorted alphabetically starts with Follow-up. First
+  // appearance is the user's own row order, and the same rule the single-case tools use
+  // when no session column is given.
+  const docs = [
+    { rid: 'd1', label: 'a', chars: 10, isDoc: true, caseKey: 'P01', occasion: 'Pre' },
+    { rid: 'd2', label: 'b', chars: 10, isDoc: true, caseKey: 'P01', occasion: 'Post' },
+    { rid: 'd3', label: 'c', chars: 10, isDoc: true, caseKey: 'P01', occasion: 'Follow-up' },
+  ];
+  const out = occasionCounts({ docs, segments: [], codes: TWO_CODES, bookId: BOOK });
+  assert.equal(out.report.numericOccasions, false);
+  assert.equal(cellAt(out, 'P01', 'Pre', 'Cost').session, 1);
+  assert.equal(cellAt(out, 'P01', 'Post', 'Cost').session, 2);
+  assert.equal(cellAt(out, 'P01', 'Follow-up', 'Cost').session, 3);
+  // The label travels too, so the ordering can be checked rather than trusted.
+  assert.ok(out.columns.occasion.includes('Follow-up'));
+  assert.match(out.variables.find((v) => v.name === 'session').label, /first appearance/i);
+});
+
+test('a document with no case or no occasion is dropped and counted', () => {
+  // Not collected into a phantom case named '', which would silently gather everything
+  // the user forgot to label.
+  const docs = [
+    ...SERIES_DOCS,
+    { rid: 'd9', label: 'stray', chars: 10, isDoc: true, caseKey: '', occasion: '1' },
+    { rid: 'd8', label: 'stray2', chars: 10, isDoc: true, caseKey: 'P04', occasion: '  ' },
+  ];
+  const out = occasionCounts({ docs, segments: SERIES_SEGS, codes: TWO_CODES, bookId: BOOK });
+  assert.equal(out.report.noCase, 1);
+  assert.equal(out.report.noOccasion, 1);
+  assert.equal(out.report.nCases, 2, 'neither stray became a case');
+  assert.ok(!out.columns.case.includes(''));
+});
+
+test('a coding on an unplaceable document is counted as dropped', () => {
+  const docs = [...SERIES_DOCS, { rid: 'd9', label: 'stray', chars: 10, isDoc: true, caseKey: '', occasion: '' }];
+  const out = occasionCounts({
+    docs, codes: TWO_CODES, bookId: BOOK,
+    segments: [...SERIES_SEGS, seg('d9', 'c1', 'unplaceable')],
+  });
+  assert.equal(out.report.offDoc, 1);
+});
+
+test('two documents in one occasion are one cell, and their text adds up', () => {
+  // A participant interviewed twice in the same wave.
+  const docs = [
+    { rid: 'd1', label: 'a', chars: 100, isDoc: true, caseKey: 'P01', occasion: '1' },
+    { rid: 'd2', label: 'b', chars: 50, isDoc: true, caseKey: 'P01', occasion: '1' },
+  ];
+  const out = occasionCounts({
+    docs, codes: TWO_CODES, bookId: BOOK,
+    segments: [seg('d1', 'c1', 'x'), seg('d2', 'c1', 'y')],
+  });
+  assert.equal(out.report.nRows, 2);
+  assert.equal(cellAt(out, 'P01', '1', 'Cost').count, 2);
+  assert.deepEqual(out.columns.n_docs, [2, 2]);
+  assert.deepEqual(out.columns.doc_chars, [150, 150]);
+});
+
+test('a carried value that disagrees across a cell’s documents is counted', () => {
+  // The phase is the one that matters: two documents in one occasion labelled
+  // differently is a data problem, and silently taking the first would hide it.
+  const docs = [
+    { rid: 'd1', label: 'a', chars: 10, isDoc: true, caseKey: 'P01', occasion: '1' },
+    { rid: 'd2', label: 'b', chars: 10, isDoc: true, caseKey: 'P01', occasion: '1' },
+  ];
+  const attrs = [{ meta: { name: 'phase', type: 'string' }, values: ['Baseline', 'Intervention'] }];
+  const out = occasionCounts({ docs, segments: [], codes: TWO_CODES, bookId: BOOK, attrs });
+  assert.equal(out.report.conflicts, 2, 'once per row of the cell');
+  assert.deepEqual(out.columns.phase, ['Baseline', 'Baseline'], 'the first was used');
+});
+
+test('a carried phase reaches every row of its case and occasion', () => {
+  const attrs = [{ meta: { name: 'phase', type: 'string', label: 'Phase' }, values: ['A', 'A', 'B', 'B'] }];
+  const out = series({ attrs });
+  const phaseFor = (caseKey, occasion) => {
+    const i = out.columns.case.findIndex((c, k) => c === caseKey && out.columns.occasion[k] === occasion);
+    return out.columns.phase[i];
+  };
+  assert.equal(phaseFor('P01', '1'), 'A');
+  assert.equal(phaseFor('P01', '2'), 'B');
+  assert.equal(out.variables.find((v) => v.name === 'phase').label, 'Phase');
+});
+
+test('a carried column named like a built-in does not destroy it', () => {
+  // `case` is what the whole table is keyed by. Resolving the carried names before the
+  // columns are filled is what stops a collision from overwriting it.
+  const attrs = [{ meta: { name: 'case', type: 'string', label: 'Case notes' }, values: ['n1', 'n2', 'n3', 'n4'] }];
+  const out = series({ attrs });
+  assert.deepEqual([...new Set(out.columns.case)], ['P01', 'P02'], 'the case column survives');
+  assert.ok(out.columns.case_2, 'and the carried column gets its own name');
+  assert.equal(out.columns.case_2.length, out.report.nRows);
+});
+
+test('themes can be the measures', () => {
+  const out = series({ rollup: 'theme' });
+  assert.deepEqual([...new Set(out.columns.measure)].sort(), ['Barriers', 'Facilitators']);
+  assert.equal(cellAt(out, 'P01', '2', 'Barriers').count, 2);
+  assert.equal(out.variables.find((v) => v.name === 'measure').label, 'Theme');
+});
+
+test('the columns are named for the single-case long form', () => {
+  // case / session / measure / value is what builtin-sced's multi-measure graph reads,
+  // and `phase` it requires but no coding can supply.
+  const names = series().variables.map((v) => v.name);
+  for (const n of ['case', 'session', 'measure', 'count']) assert.ok(names.includes(n), n);
+  assert.equal(series().variables.find((v) => v.name === 'session').type, 'numeric',
+    'builtin-sced filters the session to numeric variables');
 });
