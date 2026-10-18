@@ -121,7 +121,7 @@ export function chartKinds(lib) {
     designBox, scalePlot, titleBlock, layerOpen, LAYER_CLOSE, svgClose,
     W, H, FONT, AXIS, GRID, errorSvg, text, r, esc, clip, fmtNum,
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
-    legendBlock, ordered, svgOpen, svgOpenH, chartAltText, lineWidthControl,
+    legendBlock, ordered, svgOpen, svgOpenH, chartAltText, lineWidthControl, wrapToWidth,
     bandFrame, xyFrame, plural, fiveNumber, kde, jitterFor,
   } = lib;
 
@@ -1901,34 +1901,6 @@ export function chartKinds(lib) {
    */
 
   /**
-   * Break a caption into at most `maxLines` lines of about `perLine` characters, on word
-   * boundaries. The last line is ellipsised rather than dropped, so an over-long label
-   * degrades to "Acknowledging and Complimenting…" instead of vanishing.
-   */
-  function wrapLabel(s, perLine, maxLines) {
-    const words = String(s ?? '').trim().split(/\s+/).filter(Boolean);
-    if (!words.length) return [];
-    const lines = [];
-    let cur = '';
-    for (const w of words) {
-      const next = cur ? `${cur} ${w}` : w;
-      if (next.length <= perLine || !cur) { cur = next; continue; }
-      lines.push(cur);
-      cur = w;
-      if (lines.length === maxLines) break;
-    }
-    if (lines.length < maxLines && cur) lines.push(cur);
-    if (lines.length === maxLines) {
-      // Anything unplaced gets folded into the final line, then ellipsised to fit.
-      const placed = lines.join(' ').length;
-      if (placed < String(s).trim().length) {
-        lines[maxLines - 1] = clip(`${lines[maxLines - 1]}…`, perLine);
-      }
-    }
-    return lines;
-  }
-
-  /**
    * A rotated caption of one or more lines, centred on `cy`.
    *
    * Under `rotate(-90)` the local +y axis points RIGHT on screen, so successive `dy`
@@ -2183,9 +2155,14 @@ export function chartKinds(lib) {
     const caseLabelAt = view.caseLabel || (panels.length > 1 ? 'axis' : 'panel');
     const LAB_SIZE = 10;
     const labWidth = Math.max(1, Math.floor((panelH - 6) / (LAB_SIZE * 0.56))); // chars per line
-    const contextLines = panels.map((p) => (p.context ? wrapLabel(p.context, labWidth, 3) : []));
-    const caseLines = panels.map((p) => (caseLabelAt === 'axis'
-      ? wrapLabel(p.label || p.key, labWidth, 3) : []));
+    // `wrapToWidth` always yields at least one line, blank if there was no text — the
+    // legend needs that, because an unlabelled entry still has a swatch sitting on its
+    // row. A caption is the opposite: no text means no gutter, since `gutterFor` below
+    // sizes the column from the line COUNT and a blank line would reserve a stripe of
+    // nothing. Which of the two it is, is this site's question to answer.
+    const caption = (t) => (String(t ?? '').trim() ? wrapToWidth(t, labWidth, 3) : []);
+    const contextLines = panels.map((p) => caption(p.context));
+    const caseLines = panels.map((p) => (caseLabelAt === 'axis' ? caption(p.label || p.key) : []));
     const gutterFor = (lineSets) => {
       const n = Math.max(0, ...lineSets.map((l) => l.length));
       return n ? n * (LAB_SIZE * 1.15) + 6 : 0;

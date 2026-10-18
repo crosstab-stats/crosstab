@@ -378,6 +378,46 @@ test('long captions wrap into stacked columns instead of being truncated', () =>
   assert.ok(lines(tall) < lines(svg), 'taller panels fit more per line');
 });
 
+test('a caption too long for its gutter is split rather than left to overflow', () => {
+  // The chart plugin used to wrap captions with its own copy of the stdlib's wrapper,
+  // and that copy let a word with no spaces in it overflow — a single-token behaviour
+  // code ran out of the gutter and across the plot. One wrapper now, which splits.
+  const oneWord = {
+    ...CHART,
+    // One panel, so the spans below belong to one caption.
+    panels: [{ ...CHART.panels[0], label: 'Acknowledging-and-Complimenting-Others' }],
+  };
+  // A lone panel names itself inside the frame by default; the gutter is the subject.
+  const svg = renderChart(oneWord, { ...defaultView(oneWord), caseLabel: 'axis' });
+  const spans = [...svg.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g)].map((m) => m[1]);
+  const caption = spans.filter((x) => x.includes('Acknowledging') || x.includes('limenting'));
+  assert.ok(caption.length >= 2, `expected a split, got ${JSON.stringify(spans)}`);
+  assert.equal(caption.join(''), 'Acknowledging-and-Complimenting-Others', 'nothing lost');
+
+  // And the bound the gutter depends on still holds, because `gutterFor` sizes the
+  // column from the tallest line count: a caption with no end to it stops at three.
+  const huge = { ...CHART, panels: [{ ...CHART.panels[0], label: 'x'.repeat(200) }] };
+  const hugeSvg = renderChart(huge, { ...defaultView(huge), caseLabel: 'axis' });
+  const runs = [...hugeSvg.matchAll(/<tspan[^>]*>(x+…?)<\/tspan>/g)].map((m) => m[1]);
+  assert.equal(runs.length, 3, 'three lines, and no more');
+  assert.equal(runs.filter((x) => x.endsWith('…')).length, 1, 'marked where it was cut');
+});
+
+test('a panel with no caption reserves no gutter', () => {
+  // The two callers of the wrapper want opposite things from empty text: a legend entry
+  // still needs its row (the swatch sits on it), a caption must not take a stripe of the
+  // plot for nothing. `wrapToWidth` answers uniformly and the chart decides — if that
+  // ever flips, the plot silently loses ~17px per blank caption.
+  const blank = { ...CHART, panels: CHART.panels.map((p) => ({ ...p, label: '', key: '' })) };
+  const xOf = (s) => Number(s.match(/<line x1="([\d.]+)" y1="[\d.]+" x2="\1"/)[1]);
+  const named = renderChart(CHART, { ...defaultView(CHART), caseLabel: 'axis' });
+  const anon = renderChart(blank, { ...defaultView(blank), caseLabel: 'axis' });
+  assert.ok(xOf(anon) < xOf(named), 'the empty caption column collapses');
+  // Whitespace is no more a caption than '' is.
+  const spacey = { ...CHART, panels: CHART.panels.map((p) => ({ ...p, label: '   ', key: '' })) };
+  assert.equal(xOf(renderChart(spacey, { ...defaultView(spacey), caseLabel: 'axis' })), xOf(anon));
+});
+
 test('Y tick density is adjustable, and defaults to the 0/20/…/100 convention', () => {
   const pct = {
     ...CHART,

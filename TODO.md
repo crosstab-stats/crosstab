@@ -165,13 +165,43 @@ bottom; they are the project's memory and are not summarised away.
       the moment. One `pluginPickerHost` bundle now, spread at both sites; the tests pin the
       SHAPE of the call rather than the dependency that happened to drift.
 
-- [ ] **Two functions named `wrapLabel` (found 2026-10-08).** `wrapToWidth` in the charts
-      stdlib wraps a legend entry with no ceiling; `wrapLabel` inside builtin-charts wraps
-      the SCED chart's rotated case captions with a `maxLines` and an ellipsis, because
-      those have to fit a panel's height. They are one function with an optional bound.
-      They were left separate deliberately: unifying them changes how the SCED captions
-      break (the stdlib version hard-splits a long word, the plugin's lets it overflow),
-      and the layer change had already touched every kind.
+- [x] **Two functions named `wrapLabel` — UNIFIED 2026-10-18.** One wrapper now:
+      `wrapToWidth(s, perLine, maxLines)` in the chart stdlib, with the bound optional.
+      The plugin's copy is gone and it takes the stdlib's through `lib`, which it was
+      already being handed. 2068 tests (9 new).
+
+      **The entry said "one function with an optional bound", and that was wrong — there
+      were three differences, and only one of them was a requirement.** Reading them
+      apart is most of the work; parameterising all three would have produced a function
+      with three knobs, which is two functions wearing a hat:
+
+      1. **`maxLines` + ellipsis — real, and now the third argument.** A caption sits in a
+         gutter sized from its tallest line count and must fit the panel's height; a
+         legend is a floating layer with nothing below it to push, so it has no ceiling.
+      2. **Letting a long word overflow instead of splitting it — a gap, not a choice.**
+         This is what the old entry feared changing, and it was right that it changes the
+         SCED output: a one-token behaviour code longer than the line used to run out of
+         its gutter and across the plot. It now splits, as the legend's always did, for
+         the same reason (a chemical name has no spaces to break on). Verified in the
+         browser: `Acknowledging-and-Complimenting-Others` draws as two stacked columns.
+      3. **Returning `[]` for empty text vs `['']` — the CALLER's question.** An
+         unlabelled legend entry still needs its row, because the swatch is drawn on it;
+         an absent caption must reserve no gutter at all. Both callers already ask, so
+         the wrapper answers uniformly (always at least one line, possibly blank) and the
+         SCED kind decides. Returning `[]` would have made the legend's
+         `Math.max(...lines.map(…))` `-Infinity` and NaN'd its width.
+
+      **Truncation is applied after wrapping the whole string, not by stopping the loop.**
+      The wrap is greedy and left to right, so line k cannot depend on anything after it
+      and the kept lines are identical either way — which also means a caption occupies
+      the same columns whether or not it happened to be cut. A test asserts that property
+      across every bound rather than trusting the argument.
+
+      Checked live through the real sandbox (not the Node harness, which imports the
+      stdlib directly): the host hands the plugin frame the whole module namespace, so a
+      new export needs no plumbing. Both paths drawn in the app — SCED captions split and
+      bounded, legend entries wrapping unbounded with the blank-labelled entry keeping its
+      swatch row.
 
 - [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
       shipped the project manager and is closed; these rode along inside its entry and

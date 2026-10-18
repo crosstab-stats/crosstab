@@ -154,6 +154,74 @@ test('wrapToWidth survives the degenerate inputs', () => {
   assert.deepEqual(wrapToWidth('ab', NaN), ['a', 'b']);
 });
 
+// --- the optional bound (was a second wrapper) -------------------------------
+// `wrapLabel` inside builtin-charts was the SCED chart's own copy, wrapping rotated case
+// captions into a gutter as tall as the panel. It is gone; the bound it carried is this
+// third argument. The caption tests in sced.test.mjs are the other half of this.
+
+test('wrapToWidth keeps every line when no bound is given', () => {
+  // The legend's case, and the default: a floating layer has nothing below it to push.
+  assert.deepEqual(wrapToWidth('one two three four five six', 9),
+    ['one two', 'three', 'four five', 'six']);
+});
+
+test('a bound keeps the first N lines and marks the cut', () => {
+  const full = wrapToWidth('Acknowledging and Complimenting Others', 22);
+  assert.deepEqual(full, ['Acknowledging and', 'Complimenting Others']);
+  const cut = wrapToWidth('Acknowledging and Complimenting Others', 22, 1);
+  assert.deepEqual(cut, ['Acknowledging and…'], 'the ellipsis says the label continues');
+});
+
+test('the bound does not change WHERE the kept lines break', () => {
+  // The wrap is greedy and left to right, so line k cannot depend on anything after it.
+  // That is why the implementation may wrap the whole string and drop the tail, and why
+  // a caption occupies the same columns whether or not it happened to be truncated.
+  const text = 'alpha beta gamma delta epsilon zeta eta theta';
+  const full = wrapToWidth(text, 14);
+  for (let n = 1; n <= full.length; n += 1) {
+    const kept = wrapToWidth(text, 14, n);
+    assert.equal(kept.length, Math.min(n, full.length));
+    // Every line but the last (which may carry the ellipsis) is untouched.
+    assert.deepEqual(kept.slice(0, -1), full.slice(0, kept.length - 1), `maxLines ${n}`);
+  }
+  assert.deepEqual(wrapToWidth(text, 14, 99), full, 'a bound past the end changes nothing');
+});
+
+test('the ellipsised line still fits the width it was given', () => {
+  // Adding '…' to a line already at the limit would otherwise push it one over, which
+  // for a SCED caption means one character hanging outside its gutter.
+  for (const n of [8, 12, 22]) {
+    for (const line of wrapToWidth('dimethylaminoethanol is a long word indeed', n, 2)) {
+      assert.ok(line.length <= n, `"${line}" (${line.length}) must fit ${n}`);
+    }
+  }
+});
+
+test('a long single word is split under a bound too', () => {
+  // The plugin's copy let it overflow: a one-word caption longer than the line ran past
+  // its gutter and over the plot. Splitting is right in both places, so it is not an
+  // option — the kept part is bounded, and the ellipsis says there was more.
+  assert.deepEqual(wrapToWidth('dimethylaminoethanol', 8, 2), ['dimethyl', 'aminoet…']);
+});
+
+test('a nonsense bound wraps rather than clipping to nothing', () => {
+  const text = 'one two three four';
+  const full = wrapToWidth(text, 9);
+  for (const bad of [NaN, 0, -3, undefined, 'three']) {
+    assert.deepEqual(wrapToWidth(text, 9, bad), full, `maxLines ${String(bad)}`);
+  }
+});
+
+test('there is only ONE label wrapper left', async () => {
+  // The duplicate stood under a name one word away from this one, so the guard is on the
+  // name: no function in the chart plugin wraps anything. It would not catch a copy
+  // called `fitCaption`, and pretending otherwise by banning every word-split in the
+  // file would ban the next legitimate one with it.
+  const plugin = await readFile(new URL('../plugins/builtin-charts/index.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(plugin, /function\s+\w*[Ww]rap/, 'wrapping words is the chart stdlib\'s job');
+  assert.match(plugin, /wrapToWidth,/, 'the plugin takes it from the chart stdlib');
+});
+
 test('a wrapped entry is ONE text node carrying a tspan per line', () => {
   // So an entry stays one addressable thing, and a screen reader reads a phrase
   // rather than three unrelated fragments.

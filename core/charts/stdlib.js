@@ -886,7 +886,8 @@ export function legendLabelOf(view, item) {
 }
 
 /**
- * Break `s` into lines of at most `perLine` characters, on word boundaries.
+ * Break `s` into lines of at most `perLine` characters, on word boundaries, at most
+ * `maxLines` of them.
  *
  * Replaces `clip(label, 26)`, a hard ellipsis that fired at the DEFAULT text size —
  * a 45-character value label lost its tail with 200px of canvas going spare, and no
@@ -896,16 +897,34 @@ export function legendLabelOf(view, item) {
  * A single word longer than the line is split rather than left to overflow, because
  * a chemical name or a URL has no spaces to break on.
  *
- * NOT the same function as `wrapLabel` inside builtin-charts, which wraps the SCED
- * chart's rotated case captions: that one takes a `maxLines` and ellipsises what will
- * not fit, because a caption has to stay inside a panel's height. This one has no
- * ceiling, because a legend is a floating layer with nothing below it to push. The
- * two are one function with an optional bound and should be consolidated — filed in
- * TODO.md rather than done here, because that rewrite lands on the SCED captions and
- * this change had already touched every kind.
+ * ## The bound, and why it is the only argument the two callers disagreed about
+ *
+ * There was a second wrapper, `wrapLabel` inside builtin-charts, for the SCED chart's
+ * rotated case captions. It differed in three ways, not one, and only ONE of them was a
+ * requirement:
+ *
+ *  - **`maxLines` with an ellipsis** — real. A caption lives in a gutter as wide as its
+ *    tallest line count and must stay inside the panel's height; a legend has nothing
+ *    below it to push, so it has no ceiling. Hence this parameter, defaulting to none.
+ *  - **Letting a long word overflow** instead of splitting it — not a requirement, a
+ *    gap. A one-word caption longer than the line ran past its gutter and over the
+ *    plot. Splitting it is right in both places for the same reason, so it is not an
+ *    option here.
+ *  - **Returning `[]` for empty text** rather than `['']` — a *caller's* question, not
+ *    this function's. An unlabelled legend entry still needs its row, because the swatch
+ *    is drawn on it; an absent caption must reserve no gutter at all. Both callers know
+ *    which they are and already ask, so this one answers uniformly: a line, possibly
+ *    blank. Returning `[]` here would make `Math.max(...lines.map(…))` in the legend
+ *    `-Infinity`.
+ *
+ * @param {string} s
+ * @param {number} perLine
+ * @param {number} [maxLines=Infinity] lines to keep; the last is ellipsised if text was
+ *   dropped. Non-finite means no bound, so a mis-typed argument wraps rather than clips.
+ * @returns {string[]} at least one line, blank if there was no text
  */
-export function wrapToWidth(s, perLine) {
-  const str = String(s ?? '');
+export function wrapToWidth(s, perLine, maxLines = Infinity) {
+  const str = String(s ?? '').trim();
   const n = Math.max(1, Math.floor(perLine) || 1);
   if (!str) return [''];
   const lines = [];
@@ -917,7 +936,19 @@ export function wrapToWidth(s, perLine) {
     while (line.length > n) { lines.push(line.slice(0, n)); line = line.slice(n); }
   }
   if (line) lines.push(line);
-  return lines.length ? lines : [''];
+  // Wrap the whole string and then drop the tail, rather than stopping the loop at the
+  // cap: the wrap is greedy and left to right, so line k does not depend on anything
+  // after it, and the kept lines are identical either way.
+  const cap = Math.floor(maxLines);
+  if (cap >= 1 && lines.length > cap) {
+    const kept = lines.slice(0, cap);
+    // The ellipsis says the label continues. Without it a truncated caption reads as a
+    // complete, wrong one — "Acknowledging and" is a different behaviour from
+    // "Acknowledging and Complimenting Others".
+    kept[cap - 1] = clip(`${kept[cap - 1]}…`, n);
+    return kept;
+  }
+  return lines;
 }
 
 /** Map an ordered list of keys back to model items, skipping any missing, then
