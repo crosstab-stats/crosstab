@@ -20,7 +20,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const { quantitiseCodings } = await import('../plugins/builtin-caqdas/index.js');
+const { quantitiseCodings, codingTable } = await import('../plugins/builtin-caqdas/index.js');
 const { coderName } = await import('../core/plugin-stdlib.js');
 
 // --- a small coded project ---------------------------------------------------
@@ -313,4 +313,167 @@ test('builtin-agreement uses that one, not a private copy', async () => {
   const src = await readFile(new URL('../plugins/builtin-agreement/index.js', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /function coderOf/);
   assert.match(src, /coderName: coderOf/);
+});
+
+// =============================================================================
+// Shape B — one row per coding
+// =============================================================================
+// The unit changes and so does what a row can carry: who coded it, what modality it is,
+// where it sits, how long it is, its own text, and where it comes in the document. The
+// positions are the interesting part, because they are resolved rather than stored.
+
+/** A media coding: a time span, which has no text and no character offsets. */
+const timeSeg = (doc, codeId, tStart, tEnd, who = {}) => ({
+  id: `t_${doc}_${codeId}`,
+  doc,
+  codeId,
+  tStart,
+  tEnd,
+  anchor: { kind: 'cell', target: `ds:1/cell:text:${doc}`, ref: { selectors: [{ kind: 'time-span', tStart, tEnd }] } },
+  ...who,
+});
+
+/** A coding with a resolved position, as `resolveAllDocs` leaves it in the session. */
+const placed = (s0, start, end, status = 'exact') => ({ ...s0, start, end, status });
+
+const tableOf = (opts = {}) => codingTable({
+  docs: DOCS, segments: SEGS, codes: CODES, bookId: BOOK, labelColumn: 'participant', ...opts,
+});
+
+test('one row per coding, not per document', () => {
+  const out = tableOf();
+  assert.equal(out.report.nRows, 4);
+  assert.deepEqual(out.columns.document, ['P01', 'P01', 'P01', 'P02']);
+  assert.deepEqual(out.columns.code, ['Cost', 'Cost', 'Trust in staff', 'Cost']);
+});
+
+test('the full coded text travels, and its length with it', () => {
+  // From the anchor's quote selector, so a passage longer than the 80-character display
+  // quote is not silently shortened on the way into a text-analytics corpus.
+  const long = 'y'.repeat(300);
+  const out = codingTable({ docs: [DOCS[0]], segments: [seg('r1', 'c1', long)], codes: CODES, bookId: BOOK });
+  assert.equal(out.columns.text[0], long);
+  assert.deepEqual(out.columns.chars, [300]);
+});
+
+test('code and theme are categorical, so Crosstabs will offer them', () => {
+  // Strings rather than factors: a codebook is an open set that grows while you work,
+  // and Crosstabs takes string as happily as factor.
+  const v = (n) => tableOf().variables.find((x) => x.name === n);
+  assert.equal(v('code').type, 'string');
+  assert.equal(v('code').measurementLevel, 'nominal');
+  assert.equal(v('theme').type, 'string');
+});
+
+test('rows run in document order, then by position within the document', () => {
+  // `seq` is meaningless otherwise, and sequence analysis is the reason it exists.
+  const segs = [
+    placed(seg('r2', 'c1', 'later in P02'), 50, 62),
+    placed(seg('r1', 'c3', 'second in P01'), 30, 43),
+    placed(seg('r2', 'c3', 'earlier in P02'), 5, 19),
+    placed(seg('r1', 'c1', 'first in P01'), 0, 12),
+  ];
+  const out = codingTable({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK });
+  assert.deepEqual(out.columns.text, ['first in P01', 'second in P01', 'earlier in P02', 'later in P02']);
+  assert.deepEqual(out.columns.seq, [1, 2, 1, 2], 'seq restarts at each document');
+  assert.deepEqual(out.columns.char_start, [0, 30, 5, 50]);
+});
+
+test('an unresolved coding sorts last within its document, not first', () => {
+  // It has no position, which is not evidence that it came at the start.
+  const segs = [
+    seg('r1', 'c1', 'no position at all'),
+    placed(seg('r1', 'c3', 'at the end of the document'), 500, 526),
+  ];
+  const out = codingTable({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK });
+  assert.deepEqual(out.columns.char_start, [500, null]);
+  assert.deepEqual(out.columns.seq, [1, 2]);
+});
+
+test('an unresolved position is null and says so, rather than being guessed', () => {
+  const out = tableOf();
+  assert.deepEqual(out.columns.char_start, [null, null, null, null]);
+  assert.deepEqual(out.columns.status, ['unresolved', 'unresolved', 'unresolved', 'unresolved']);
+  assert.equal(out.report.nResolved, 0);
+  // And a resolved one carries both the offsets and the status the workspace gave it.
+  const one = codingTable({ docs: DOCS, segments: [placed(seg('r1', 'c1', 'moved along'), 12, 23, 'moved')], codes: CODES, bookId: BOOK });
+  assert.deepEqual(one.columns.char_start, [12]);
+  assert.deepEqual(one.columns.char_end, [23]);
+  assert.deepEqual(one.columns.status, ['moved']);
+  assert.equal(one.report.nResolved, 1);
+});
+
+test('modality comes from the selector, and times from a media coding', () => {
+  // A real document is text OR media, never both; this one mixes them to cover both
+  // columns in one pass, and the text coding is given a position so the order is defined.
+  const segs = [placed(seg('r1', 'c1', 'spoken aloud'), 0, 12), timeSeg('r1', 'c3', 12.5, 30)];
+  const out = codingTable({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK });
+  assert.deepEqual(out.columns.modality, ['Text', 'Time span']);
+  assert.deepEqual(out.columns.t_start, [null, 12.5]);
+  assert.deepEqual(out.columns.t_end, [null, 30]);
+  assert.deepEqual(out.columns.text, ['spoken aloud', ''], 'a time span quotes no text');
+  assert.deepEqual(out.report.modalities, { Text: 1, 'Time span': 1 });
+});
+
+test('every modality the plugin can write is named', () => {
+  // Four creation sites, one per modality — an unnamed one would read as a data error.
+  const kinds = [
+    ['text-quote', 'Text'],
+    ['rect', 'Image region'],
+    ['time-span', 'Time span'],
+    ['rect-track', 'Region over time'],
+  ];
+  for (const [kind, label] of kinds) {
+    const out = codingTable({
+      docs: [DOCS[0]], codes: CODES, bookId: BOOK,
+      segments: [{ id: 'x', doc: 'r1', codeId: 'c1', anchor: { ref: { selectors: [{ kind, exact: 'q' }] } } }],
+    });
+    assert.deepEqual(out.columns.modality, [label], kind);
+  }
+});
+
+test('the coder is a column, with the unstamped named rather than blank', () => {
+  const out = codingTable({ docs: DOCS, segments: [...SEGS, seg('r2', 'c3', 'imported')], codes: CODES, bookId: BOOK });
+  assert.deepEqual(out.columns.coder, ['Ana', 'Ben', 'Ana', 'Ben', 'Unattributed']);
+  assert.deepEqual(out.report.coders, ['Ana', 'Ben', 'Unattributed']);
+});
+
+test('a document attribute repeats down that document’s codings', () => {
+  // The repetition IS the feature: it is what lets `code` be crosstabbed against `site`.
+  // And the values must align by ROW ID, not by position — `attrs` are aligned to the
+  // original doc list, which still holds the empty row this table drops. Aligning by
+  // position would hand P02's codings P03's attributes.
+  const attrs = [{
+    meta: { name: 'site', type: 'factor', label: 'Location', valueLabels: { 1: 'Clinic', 2: 'Call centre' }, measurementLevel: 'nominal' },
+    values: [1, 2, 9],
+  }];
+  const out = tableOf({ attrs });
+  assert.deepEqual(out.columns.site, [1, 1, 1, 2]);
+  assert.deepEqual(out.variables.find((v) => v.name === 'site').valueLabels, { 1: 'Clinic', 2: 'Call centre' });
+});
+
+test('an attribute named like a built-in column does not overwrite it', () => {
+  const attrs = [{ meta: { name: 'code', type: 'string', label: 'Site code' }, values: ['A', 'B', 'C'] }];
+  const out = tableOf({ attrs });
+  assert.deepEqual(out.columns.code, ['Cost', 'Cost', 'Trust in staff', 'Cost'], 'the coding’s code survives');
+  assert.ok(out.columns.code_2, 'and the attribute gets a name of its own');
+});
+
+test('scope and the dropped codings are reported here too', () => {
+  const segs = [...SEGS, seg('r1', 'c9', 'other book'), seg('r1', 'GONE', 'deleted code'), seg('r9999', 'c1', 'past the cap')];
+  const out = codingTable({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK });
+  assert.equal(out.report.nRows, 4);
+  assert.equal(out.report.outOfScope, 1);
+  assert.equal(out.report.unknownCode, 1);
+  assert.equal(out.report.offDoc, 1);
+  assert.equal(out.report.nCodings, 7, 'and what it started from');
+  const all = codingTable({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK, scope: 'all' });
+  assert.equal(all.report.nRows, 5);
+});
+
+test('an empty table is empty rather than one blank row', () => {
+  const out = codingTable({ docs: DOCS, segments: [], codes: CODES, bookId: BOOK });
+  assert.equal(out.report.nRows, 0);
+  assert.deepEqual(out.columns.code, []);
+  assert.ok(out.variables.length, 'the columns are still declared');
 });

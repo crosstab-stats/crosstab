@@ -104,17 +104,26 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
   const rCode = `
     suppressMessages({library(ca); library(svglite)})
     tab <- table(rowvar, colvar)
+    if (min(dim(tab)) < 2) stop("one of these variables has only a single category, so there is nothing to map")
     cc <- ca(tab)
     iner <- cc$sv^2; tot <- sum(iner); pct <- 100 * iner / tot
-    .ct_dev <- svgstring(width = 6, height = 5.4, pointsize = 11)
-    par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-    # Colours stated rather than left to ca's defaults, because the host draws the key
-    # beside this figure and the two have to agree. col[1] is the row categories,
-    # col[2] the column categories.
-    plot(cc, col = c("${ROW_COLOR}", "${COL_COLOR}"))
-    dev.off(); svg <- .ct_dev()
+    # A table with k categories on one side has min(r, c) - 1 dimensions, so a two-level
+    # variable yields ONE — and plot(cc) then indexes a second axis that is not there
+    # ("subscript out of bounds", which reached a user). The inertia table below is still
+    # valid in that case, so the analysis stands and only the map is skipped.
+    svg <- ""
+    if (length(cc$sv) >= 2) {
+      .ct_dev <- svgstring(width = 6, height = 5.4, pointsize = 11)
+      par(mar = c(4.2, 4.2, 2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
+      # Colours stated rather than left to ca's defaults, because the host draws the key
+      # beside this figure and the two have to agree. col[1] is the row categories,
+      # col[2] the column categories.
+      plot(cc, col = c("${ROW_COLOR}", "${COL_COLOR}"))
+      dev.off(); svg <- .ct_dev()
+    }
     list(dim = seq_along(iner), sv = cc$sv, inertia = iner, pct = pct, cum = cumsum(pct),
          totalInertia = tot, chisq = tot * sum(tab), n = sum(tab), svg = svg,
+         nrows = nrow(tab), ncols = ncol(tab),
          rowLevels = rownames(tab), colLevels = colnames(tab))`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
@@ -130,6 +139,18 @@ export async function correspondence(app, { rowvar: rowName, colvar: colName }) 
     { caption: `Correspondence Analysis — ${labelOf(meta.get(rowName), rowName)} × ${labelOf(meta.get(colName), colName)} (total inertia = ${f(r.num1('totalInertia'), 4)})` },
   );
   const svg = r.str1('svg');
+  if (!(svg && /<svg[\s>]/i.test(svg)) && dim.length < 2) {
+    // Said here rather than left as an absent figure, because "where is my biplot" is
+    // the obvious next question and the answer is a property of the table, not a failure.
+    const smaller = Math.min(r.num1('nrows'), r.num1('ncols'));
+    await app.results.appendText(
+      `**No biplot for this table.** A correspondence map needs two dimensions, and a `
+      + `table yields one fewer than its smaller side — ${smaller} categories here, so `
+      + 'one dimension. The inertia above is still the whole of the association; with one '
+      + 'dimension it is a single ordering rather than a map, and a crosstab of the two '
+      + 'variables shows it more directly.',
+    );
+  }
   if (svg && /<svg[\s>]/i.test(svg)) {
     // The key this figure never had. `plot(cc)` draws row and column categories in two
     // colours and says nowhere which is which — the reader had to know that ca puts rows

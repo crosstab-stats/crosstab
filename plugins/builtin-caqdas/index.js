@@ -2464,6 +2464,110 @@ export const workspace = {
     });
 
 
+
+    /**
+     * The attributes to carry across, read from the documents' own rows.
+     *
+     * Shared by both shapes because it is the same question with the same answer: a
+     * document's attributes are the other columns of its row, and which of them travel
+     * is the user's choice, not the shape's.
+     */
+    async function carriedAttrs(carry) {
+      if (carry === 'none') return [];
+      const meta = await app.data.getVariableMeta();
+      const wanted = carry === 'label'
+        ? meta.filter((m) => m.name === state.labelColumn)
+        : meta.filter((m) => m.name !== state.textColumn && m.name !== state.labelColumn);
+      if (!wanted.length) return [];
+      const rows = await app.data.getRows({
+        variables: wanted.map((m) => m.name), includeRowId: true, limit: MAX_DOCS,
+      });
+      const at = new Map(rows.map((r) => [String(r.__rid), r]));
+      return wanted.map((m) => ({ meta: m, values: docs.map((d) => at.get(d.rid)?.[m.name] ?? null) }));
+    }
+
+    /** The document list in the shape the pure functions take. */
+    const docRows = () => docs.map((d) => ({
+      rid: d.rid,
+      label: d.label,
+      chars: d.kind === 'text' ? (d.text ?? '').length : 0,
+      // A row with nothing in it is not a document that declined to mention the theme,
+      // and counting it would deflate every prevalence on the table.
+      isDoc: d.kind === 'media' || String(d.text ?? '').trim() !== '',
+    }));
+
+    /** Shape B: one row per coding. */
+    async function quantitiseSegments() {
+      const form = await app.ui.showForm({
+        title: 'Quantitise codings — a row per passage',
+        hint: 'One row per coding, with its text, coder, modality, position and the order it comes in. '
+          + 'The document attributes repeat down its codings, which is what lets a code be crosstabbed '
+          + 'against one.',
+        okLabel: 'Create dataset',
+        fields: [
+          {
+            name: 'scope', type: 'select', label: 'Codes from', value: 'book',
+            options: [
+              { value: 'book', label: 'The open codebook' },
+              { value: 'all', label: 'Every codebook in the project' },
+            ],
+          },
+          {
+            name: 'carry', type: 'select', label: 'Carry across', value: 'all',
+            hint: 'The attributes to crosstab the codes against — they are the other columns of the document’s own row.',
+            options: [
+              { value: 'all', label: 'Every other column of the source' },
+              { value: 'label', label: 'Just the document label' },
+              { value: 'none', label: 'Nothing' },
+            ],
+          },
+        ],
+      });
+      if (!form) return;
+      const { variables, columns, report } = codingTable({
+        docs: docRows(),
+        segments: state.segments,
+        codes: state.codes,
+        bookId: state.codebookId,
+        scope: form.scope,
+        attrs: await carriedAttrs(form.carry),
+        labelColumn: state.labelColumn,
+      });
+      if (!report.nRows) { app.results.appendError('No codings in scope — nothing to put in a table.'); return; }
+
+      const name = 'Codings — one row per passage';
+      await app.data.create({ name, variables, columns, activate: false });
+      await app.results.beginAnalysis('Quantitise codings');
+      await app.results.appendText(
+        `**Dataset created: ${name}.** ${report.nRows} coding${report.nRows === 1 ? '' : 's'} across `
+        + `${report.nDocs} document${report.nDocs === 1 ? '' : 's'}. Switch to it in the Data tab — `
+        + '`code` and `theme` are categorical, so Crosstabs and Correspondence analysis will offer them, '
+        + 'and `text` is the column for Text analytics.',
+      );
+      await app.results.appendText(
+        '**How to read it:**\n\n'
+        + '- **The unit is the coding, not the participant.** A document with eleven codings '
+        + 'contributes eleven rows, so a test run on this table is a test about passages. For a '
+        + 'test about people, quantitise by document instead.\n'
+        + `- **Positions are resolved, not stored** — ${report.nResolved} of ${report.nRows} `
+        + 'coding(s) have character offsets. The rest are media codings, which have times instead, '
+        + 'or quotes that no longer match their document; both say so in `status` rather than '
+        + 'guessing a position.\n'
+        + `- **\`seq\`** numbers the codings in the order they occur within each document.\n`
+        + `- **Scope:** codes from ${form.scope === 'all' ? 'every codebook' : 'the open codebook'}`
+        + `${report.outOfScope ? `, leaving out ${report.outOfScope} coding(s) of out-of-scope codes` : ''}.`
+        + (report.unknownCode ? `\n- ${report.unknownCode} coding(s) referenced a deleted code and were dropped.` : '')
+        + (report.offDoc ? `\n- ${report.offDoc} coding(s) pointed at rows outside the loaded ${MAX_DOCS} and were dropped.` : ''),
+      );
+      await app.results.appendTable({
+        caption: 'What is in the table',
+        columns: ['Kind of coding', 'Rows'],
+        rows: Object.entries(report.modalities).map(([k, v]) => [k, v])
+          .concat([['Coders', report.coders.join(', ')]]),
+      });
+      await app.results.endAnalysis();
+    }
+
     // Quantitising: the bridge to the statistics menu (shape A of the plan in TODO.md).
     // A dataset rather than a cross-plugin call, because a document IS a dataset row —
     // so the respondent attributes are already beside it — and because the five
@@ -2471,8 +2575,30 @@ export const workspace = {
     quantBtn.addEventListener('click', async () => {
       if (!state.textColumn) { app.results.appendError('Choose a documents column first.'); return; }
       if (!state.segments.length) { app.results.appendError('No codings yet — code some passages first.'); return; }
-      const form = await app.ui.showForm({
+
+      // The SHAPE is asked first, in its own step, because the options that follow only
+      // make sense once it is known: `values`/`rollup`/`coders` belong to the case table
+      // and mean nothing for a segment list. `showForm` cannot hide a field, so the
+      // alternative was one dialog of seven selects, most of them inert — or a toolbar
+      // button per shape, which is how a toolbar grows a button every time the feature
+      // does. Two small questions beat both.
+      const shapePick = await app.ui.showForm({
         title: 'Quantitise codings',
+        hint: 'Coded data as a dataset, so the statistics menu can analyse it. Which unit of analysis?',
+        okLabel: 'Next…',
+        fields: [{
+          name: 'shape', type: 'select', label: 'One row per', value: 'case',
+          options: [
+            { value: 'case', label: 'Document — a column per code (crosstabs, regression, latent class)' },
+            { value: 'segment', label: 'Coding — a row per passage (text analytics, correspondence, multilevel)' },
+          ],
+        }],
+      });
+      if (!shapePick) return;
+      if (shapePick.shape === 'segment') { await quantitiseSegments(); return; }
+
+      const form = await app.ui.showForm({
+        title: 'Quantitise codings — a column per code',
         hint: 'One row per document, one column per code. Every choice here is reported with the result, '
           + 'because each is a judgement about the coding rather than a fact in it.',
         okLabel: 'Create dataset',
@@ -2518,35 +2644,8 @@ export const workspace = {
       });
       if (!form) return;
 
-      // Carried attributes come from the SOURCE row, which is where a document's
-      // attributes have always lived — so this is a read, not a model.
-      let attrs = [];
-      if (form.carry !== 'none') {
-        const meta = await app.data.getVariableMeta();
-        const wanted = form.carry === 'label'
-          ? meta.filter((m) => m.name === state.labelColumn)
-          : meta.filter((m) => m.name !== state.textColumn && m.name !== state.labelColumn);
-        if (wanted.length) {
-          const rows = await app.data.getRows({
-            variables: wanted.map((m) => m.name), includeRowId: true, limit: MAX_DOCS,
-          });
-          const at = new Map(rows.map((r) => [String(r.__rid), r]));
-          attrs = wanted.map((m) => ({
-            meta: m,
-            values: docs.map((d) => at.get(d.rid)?.[m.name] ?? null),
-          }));
-        }
-      }
-
       const { variables, columns, report } = quantitiseCodings({
-        docs: docs.map((d) => ({
-          rid: d.rid,
-          label: d.label,
-          chars: d.kind === 'text' ? (d.text ?? '').length : 0,
-          // A row with nothing in it is not a document that declined to mention the
-          // theme, and counting it would deflate every prevalence on the table.
-          isDoc: d.kind === 'media' || String(d.text ?? '').trim() !== '',
-        })),
+        docs: docRows(),
         segments: state.segments,
         codes: state.codes,
         bookId: state.codebookId,
@@ -2554,7 +2653,7 @@ export const workspace = {
         rollup: form.rollup,
         coders: form.coders,
         scope: form.scope,
-        attrs,
+        attrs: await carriedAttrs(form.carry),
         labelColumn: state.labelColumn,
       });
 
@@ -3305,6 +3404,189 @@ function codesInBook(state) {
 // =============================================================================
 // Quantitising: coded data as a dataset
 // =============================================================================
+
+/**
+ * Turn the codings into a **segment table** — shape B: one row per coding.
+ *
+ * Shape A asks "did this case raise the theme"; this asks about the codings themselves.
+ * The unit is the passage, so it carries the things a passage has and a case does not:
+ * who coded it, what modality it is, where it sits, how long it is, and its own text.
+ *
+ * ## What it is for
+ *
+ * - **Correspondence analysis** and crosstabs of `code` against a carried attribute —
+ *   both take two category VARIABLES and tabulate internally, so a long table is what
+ *   they want, not a matrix.
+ * - **Text analytics** on the `text` column: the words inside everything coded X.
+ * - **Multilevel models** with `doc_rid` as the cluster — codings are nested in
+ *   documents, and treating them as independent overstates the evidence.
+ * - **Sequence work** via `seq`, which numbers the codings in the order they occur
+ *   WITHIN each document. Nothing in CrossTab does lag-sequential analysis yet; this is
+ *   the column it would need, and the order is a fact about the data either way.
+ *
+ * ## Why this is not "Segments → Output" again
+ *
+ * That button writes a five-column table you read. This writes a dataset you analyse,
+ * and it is the same distinction as Code frequency beside shape A: a report answers a
+ * question, a dataset lets you ask one. The columns bear it out — coder, modality,
+ * times, offsets, resolution status, sequence and the carried attributes are all absent
+ * from the readable version, because a reader does not want them.
+ *
+ * ## Offsets are the one thing that needs the workspace
+ *
+ * `char_start`/`char_end`/`status` are not stored: they are the RESOLUTION of an anchor
+ * against the text as it is now (see `persistableSegment`). This function therefore
+ * reads them off the live session objects, where `resolveAllDocs` has already put them,
+ * and leaves them null where a coding did not resolve — rather than inventing a position
+ * or dropping the row. `exportQdpx` drops unresolvable codings because a QDPX file has
+ * nowhere to say "somewhere in this document"; a dataset column can simply say nothing.
+ *
+ * Pure, like the others, so the column contract is testable without a DOM.
+ *
+ * @param {object} arg see {@link quantitiseCodings} for `docs`, `segments`, `codes`,
+ *   `bookId`, `scope`, `attrs` and `labelColumn` — identical in meaning.
+ * @returns {{variables: object[], columns: Object<string, any[]>,
+ *            report: {nRows: number, nCodings: number, nDocs: number, nResolved: number,
+ *                     modalities: Object<string, number>, coders: string[],
+ *                     outOfScope: number, unknownCode: number, offDoc: number}}}
+ */
+export function codingTable({
+  docs = [], segments = [], codes = [], bookId = null, scope = 'book',
+  attrs = [], labelColumn = null,
+}) {
+  const codeById = new Map((codes ?? []).map((c) => [c.id, c]));
+  const inScope = (c) => scope === 'all' || !bookId || c.codebookId === bookId;
+  const rows = (docs ?? []).filter((d) => d.isDoc);
+  const rowAt = new Map(rows.map((d, i) => [d.rid, i]));
+
+  const tally = { unknownCode: 0, outOfScope: 0, offDoc: 0 };
+  const used = [];
+  for (const s of segments ?? []) {
+    const code = codeById.get(s.codeId);
+    if (!code) { tally.unknownCode += 1; continue; }
+    if (!inScope(code)) { tally.outOfScope += 1; continue; }
+    if (!rowAt.has(String(s.doc))) { tally.offDoc += 1; continue; }
+    used.push({ seg: s, code, at: rowAt.get(String(s.doc)) });
+  }
+
+  // Document order, then position within the document — which is what makes `seq` mean
+  // anything. A coding with no position sorts last within its document rather than
+  // first, because an unresolved quote is not evidence that it came at the start.
+  const posOf = ({ seg }) => {
+    const n = typeof seg.start === 'number' ? seg.start
+      : typeof seg.tStart === 'number' ? seg.tStart : null;
+    return n == null ? Number.POSITIVE_INFINITY : n;
+  };
+  used.sort((a, b) => a.at - b.at || posOf(a) - posOf(b));
+
+  const out = {
+    document: [], doc_rid: [], seq: [], theme: [], code: [], coder: [],
+    modality: [], text: [], chars: [], t_start: [], t_end: [],
+    char_start: [], char_end: [], status: [],
+  };
+  const report = {
+    nRows: used.length,
+    nCodings: (segments ?? []).length,
+    nDocs: new Set(used.map((u) => u.at)).size,
+    nResolved: 0,
+    modalities: {},
+    coders: [],
+    ...tally,
+  };
+  const coders = new Set();
+  let seqAt = -1;
+  let seqN = 0;
+  for (const { seg, code, at } of used) {
+    if (at !== seqAt) { seqAt = at; seqN = 0; }
+    seqN += 1;
+    const d = rows[at];
+    const quote = quotedText(seg);
+    const mode = modalityOf(seg);
+    const who = coderName(seg) || UNATTRIBUTED;
+    coders.add(who);
+    report.modalities[mode] = (report.modalities[mode] ?? 0) + 1;
+    if (typeof seg.start === 'number') report.nResolved += 1;
+    out.document.push(d.label || `Doc ${at + 1}`);
+    out.doc_rid.push(d.rid);
+    out.seq.push(seqN);
+    out.theme.push(cleanName(code.group, { max: 120 }) || UNTHEMED);
+    out.code.push(cleanName(code.name, { max: 120, fallback: code.id }));
+    out.coder.push(who);
+    out.modality.push(mode);
+    out.text.push(quote);
+    out.chars.push(quote.length);
+    out.t_start.push(typeof seg.tStart === 'number' ? seg.tStart : null);
+    out.t_end.push(typeof seg.tEnd === 'number' ? seg.tEnd : null);
+    out.char_start.push(typeof seg.start === 'number' ? seg.start : null);
+    out.char_end.push(typeof seg.end === 'number' ? seg.end : null);
+    // `status` is session state and absent on a coding that was never resolved — for a
+    // media coding there is nothing to resolve, so it says so rather than claiming
+    // 'exact' on the strength of a default.
+    out.status.push(typeof seg.status === 'string' ? seg.status : 'unresolved');
+  }
+  report.coders = [...coders].sort();
+
+  const variables = [
+    { name: 'document', type: 'string', measurementLevel: 'nominal', label: labelColumn || 'Document' },
+    { name: 'doc_rid', type: 'string', measurementLevel: 'nominal', label: 'Source row id' },
+    { name: 'seq', type: 'numeric', measurementLevel: 'scale', label: 'Order within the document' },
+    // Theme and code are STRINGS rather than factors: a code is an open set that grows
+    // as coding proceeds, and Crosstabs takes string as happily as factor.
+    { name: 'theme', type: 'string', measurementLevel: 'nominal', label: 'Theme' },
+    { name: 'code', type: 'string', measurementLevel: 'nominal', label: 'Code' },
+    { name: 'coder', type: 'string', measurementLevel: 'nominal', label: 'Coder' },
+    { name: 'modality', type: 'string', measurementLevel: 'nominal', label: 'Kind of coding' },
+    { name: 'text', type: 'string', measurementLevel: 'nominal', label: 'Coded text' },
+    { name: 'chars', type: 'numeric', measurementLevel: 'scale', label: 'Length (characters)' },
+    { name: 't_start', type: 'numeric', measurementLevel: 'scale', label: 'Start (seconds)' },
+    { name: 't_end', type: 'numeric', measurementLevel: 'scale', label: 'End (seconds)' },
+    { name: 'char_start', type: 'numeric', measurementLevel: 'scale', label: 'Start (character)' },
+    { name: 'char_end', type: 'numeric', measurementLevel: 'scale', label: 'End (character)' },
+    { name: 'status', type: 'string', measurementLevel: 'nominal', label: 'Anchor resolution' },
+  ];
+
+  // Attributes are per DOCUMENT and this table is per coding, so they repeat down the
+  // rows of a document. That repetition is the point — it is what lets `code` be
+  // crosstabbed against `site` — but it also means a test of an attribute here is a
+  // test of codings, not of participants, and the report says so.
+  const taken = new Set(variables.map((v) => v.name));
+  // `attrs` are aligned to the ORIGINAL doc list, which includes the rows this table
+  // excludes — so the lookup is by rid, built once rather than searched per coding.
+  const origAt = new Map((docs ?? []).map((d, i) => [d.rid, i]));
+  for (const a of attrs ?? []) {
+    const m = a?.meta ?? {};
+    if (!m.name) continue;
+    const name = uniqueName(m.name, taken, { start: 2 });
+    taken.add(name);
+    variables.push({
+      name, type: m.type || 'string', label: m.label || m.name,
+      valueLabels: m.valueLabels, measurementLevel: m.measurementLevel,
+    });
+    out[name] = used.map(({ at }) => (a.values ?? [])[origAt.get(rows[at].rid)] ?? null);
+  }
+
+  return { variables, columns: out, report };
+}
+
+/** The full coded text, from the anchor's own quote selector — see {@link quotedLength}. */
+function quotedText(seg) {
+  const sel = (seg?.anchor?.ref?.selectors ?? []).find((x) => x?.kind === 'text-quote');
+  return typeof sel?.exact === 'string' ? sel.exact : '';
+}
+
+/**
+ * What kind of coding this is, read from the anchor's selector rather than from which
+ * fields happen to be set — the selector kind IS the modality, and the plugin already
+ * writes exactly one per coding.
+ */
+function modalityOf(seg) {
+  const kinds = (seg?.anchor?.ref?.selectors ?? []).map((x) => x?.kind);
+  if (kinds.includes('text-quote')) return 'Text';
+  if (kinds.includes('rect-track')) return 'Region over time';
+  if (kinds.includes('rect')) return 'Image region';
+  if (kinds.includes('time-span')) return 'Time span';
+  return 'Unknown';
+}
 
 /** The label for codings whose code carries no theme, and for an unstamped coder. */
 const UNTHEMED = 'Unthemed';

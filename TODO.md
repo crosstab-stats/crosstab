@@ -899,10 +899,58 @@ bottom; they are the project's memory and are not summarised away.
         both places a stamp can sit (`rec.author` from the op envelope,
         `rec.fields.author` from a plugin's own stamp), which is a distinction no call
         site should have to make.
-      - **B — segment long.** One row per coding: doc, code, theme, coder, the full
-        quoted text, modality, and times/offsets where they resolve. Feeds text
-        analytics, correspondence analysis (which wants two category VARIABLES and
-        tabulates itself), multilevel models, sequence work.
+      - **B — segment long. BUILT 2026-10-18.** One row per coding: document, rid,
+        `seq`, theme, code, coder, modality, the full quoted text, length, times,
+        character offsets, resolution status, and the carried attributes repeating down
+        each document's codings. `codingTable()`, 13 new tests.
+
+        **Not a second "Segments → Output".** That button writes five columns you read;
+        this writes a dataset you analyse, which is the same distinction as Code
+        frequency beside shape A. The extra columns are the proof: coder, modality,
+        times, offsets, status, sequence and attributes are all absent from the readable
+        version because a reader does not want them.
+
+        **`seq` numbers the codings in the order they occur within each document**, which
+        is the column lag-sequential analysis would need — and we have none, so the order
+        is recorded while it is free. A coding with no resolved position sorts LAST within
+        its document rather than first: having no position is not evidence of coming
+        first.
+
+        **Offsets are read off the live session objects**, where `resolveAllDocs` has put
+        them, and left null where a coding did not resolve — with `status` saying which.
+        That is the one thing in the plan that genuinely needs the workspace, and the
+        reason this is a workspace button rather than a menu analysis.
+
+        **The attribute alignment is by ROW ID, not position**, because `attrs` are
+        aligned to the full document list while the table drops empty rows — aligning by
+        position would hand one participant's codings another's attributes. Tested
+        directly, since it is the kind of off-by-one that produces plausible wrong
+        answers rather than an error.
+
+        **Verified in the browser:** 5 codings across 3 documents, ordered by document
+        then position with `seq` restarting (1,2,3 / 1 / 1), `site` repeating correctly
+        down one document's three codings and not shifted by the excluded empty row, then
+        `Correspondence analysis` on `code × site` returning a real inertia
+        decomposition and a biplot.
+
+  - [x] **A crash the shape-B pass found in builtin-ordination (fixed 2026-10-18).**
+        Correspondence analysis of `code × site` with TWO sites died with
+        `Error in x[, dim]: subscript out of bounds` — an R error, reaching the user, from
+        inside `plot(cc)`. A contingency table has one fewer dimension than its smaller
+        side, so a two-level variable yields one, and a biplot indexes a second axis that
+        is not there.
+
+        **The analysis was never the problem, only the map.** A one-dimensional solution
+        has a perfectly valid inertia table — it is a single ordering rather than a plane
+        — so the fix keeps the analysis, skips the figure, and says why in a sentence
+        that names the cause ("a table yields one fewer than its smaller side — 2
+        categories here"). Refusing the whole analysis would have thrown away a correct
+        answer to avoid an undrawable picture. A constant variable still stops with a
+        plain message, because then there is genuinely nothing to decompose.
+
+        Found by running the thing on realistic data, which is also how the `fp` bug
+        turned up. Two live crashes in two browser passes, in plugins nobody had reason
+        to suspect.
       - **C — code-pair edge list.** `code_a, code_b, n, jaccard` — three columns, which
         is exactly what `builtin-sna` eats (an edge list, not a matrix). Needs an
         explicit co-occurrence rule; default "same document", because it is the only one
