@@ -778,13 +778,153 @@ bottom; they are the project's memory and are not summarised away.
         already exists for undoing a specific action further back. Documented rather
         than changed.
 
-- [ ] **CAQDAS cross-plugin invocation.** (Pulled out of #145 — a CAQDAS/#147
-      concern, not the ownership model.) The coding workspace should be able to run
-      analysis plugins on coded-theme subsets (e.g. run frequencies on all segments
-      coded "anxiety"). Needs design thought on: does the derived dataset contain the
-      coded text segments, the source rows, or a frequency table of codes? Different
-      analyses want different shapes. The `app.run.analysis` plumbing is ready — this
-      is a CAQDAS design question, not an infrastructure one.
+- [~] **CAQDAS → statistics: quantitising coded data.** (Pulled out of #145 — a
+      CAQDAS/#147 concern, not the ownership model. Was "cross-plugin invocation"; the
+      design question it was holding is **answered below** and the first shape is being
+      built.)
+
+      The old entry asked: does the derived dataset contain the coded text segments, the
+      source rows, or a frequency table of codes? **The answer is "none of those, as a
+      payload" — it is a dataset, and there are four of them, one per unit of analysis.**
+
+      **Is this a real practice?** Yes, and it is what every competitor ships. Named
+      traditions: *quantitizing* in the mixed-methods literature (Sandelowski and
+      colleagues), content analysis where counting IS the method (Krippendorff,
+      Neuendorf), and behavioural/interaction coding where codes per session become rates
+      (the Bakeman & Gottman line). Market evidence is stronger than the citations: NVivo
+      has matrix coding queries and coding comparison, MAXQDA a Crosstab and a Stats
+      module, ATLAS.ti a code-document table and a code co-occurrence table, Dedoose is
+      built around descriptor x code tables. Four competitors shipping the same four
+      features is demand.
+
+      **But the defensible form is prevalence, not raw counts.** What papers report is
+      "8 of 12 participants raised cost", not "cost was coded 31 times" — raw segment
+      counts are confounded by how much each participant talked and by how finely the
+      coder highlights, so two coders with identical judgement produce different counts.
+      There is also a real methodological objection (frequency is not importance; one
+      articulate account can outweigh ten mentions) which we should not argue with and
+      must not force. Hence: **presence/absence per case is the default, counts are the
+      opt-in, and a denominator travels with them.**
+
+      **Why a dataset and not `app.run.analysis`.** Three facts decide it:
+
+      - **A "document" is already a dataset row.** `segment.fields.doc` holds a
+        `__ct_rid` (declared in `rowRefs`), and there is no source or case record at all —
+        so the attributes are the OTHER COLUMNS OF THE SAME ROW. Age, site, condition are
+        already sitting beside the text column, which means quantitising needs no
+        attribute model, only a key.
+      - **Only built-ins can read the coding records.** `app.items` is owner-scoped and
+        every built-in shares the `'builtin'` token, which is why `builtin-agreement`
+        can reach in today. A third-party plugin cannot, so an RPC contract would need a
+        new host-mediated surface built first. A dataset needs nothing: every plugin
+        reads datasets, including third-party ones.
+      - **The decisions must be auditable.** Quantitising is five judgements (below), not
+        a conversion. Inside an analysis run they are invisible; as a dataset-creating op
+        they land in the log, in History and in the do-file, which is this project's own
+        rule that output outlives its maker. `data.create` already takes a `producedBy`
+        provenance stamp, and `Transform ▸ Join with another dataset…` is a logged op for
+        bringing more attributes in later.
+
+      `app.run.analysis` stays available as sugar afterwards ("…and run Crosstabs on
+      it") — it is just no longer the contract.
+
+      **The four shapes, each pinned to a unit of analysis:**
+
+      - **A — case x code, wide.** One row per document rid, one column per code, 0/1
+        with Absent/Present value labels (count variant optional), carried attributes,
+        and denominators. Feeds crosstabs + chi-square, logistic, LCA, clustering,
+        factor. **This is the default and covers most of what is missing. Being built
+        first.**
+      - **B — segment long.** One row per coding: doc, code, theme, coder, the full
+        quoted text, modality, and times/offsets where they resolve. Feeds text
+        analytics, correspondence analysis (which wants two category VARIABLES and
+        tabulates itself), multilevel models, sequence work.
+      - **C — code-pair edge list.** `code_a, code_b, n, jaccard` — three columns, which
+        is exactly what `builtin-sna` eats (an edge list, not a matrix). Needs an
+        explicit co-occurrence rule; default "same document", because it is the only one
+        needing no parameter — the same reasoning `fromCodings` already used.
+      - **D — unit x interval counts.** case, session/interval, code, count, exposure.
+        Feeds SCED, time series, count models. Only meaningful for session/media data.
+
+      The code frequency table (code, n, %) is a REPORT, not a payload. We already have
+      it; no contract should be built around it.
+
+      **What this unlocks that we cannot do at all today** — the coding workspace
+      computes a flat code frequency, a segment dump, a themed word cloud and
+      in-workspace retrieval, and nothing else: no code x document matrix, no
+      code x attribute crosstab, no co-occurrence, no boolean/proximity query. With
+      shape A alone: theme x attribute crosstabs with chi-square (the headline
+      mixed-methods output, impossible now), logistic regression on whether a case raised
+      a theme, LCA of coding patterns into participant typologies, code similarity
+      clustering, and Poisson/negbin on counts per transcript. Shapes B–D add
+      correspondence analysis, code networks, and SCED from behavioural coding.
+
+      Genuinely absent from the whole app, so quantitising will not reach them:
+      **QCA** truth tables (Ragin — whose input is literally case x condition presence,
+      so shape A would hand it its data), **lag-sequential / transition analysis**, and
+      Jaccard-type similarity. Also: `builtin-countmodels` has no exposure/offset input,
+      which is exactly why denominators must arrive as COLUMNS.
+
+      **The five decisions each run must record in its own output**, because they are
+      judgements and not facts — the standard `builtin-agreement.fromCodings` set by
+      stating its unit model in its own result:
+      1. **Unit** — document/case, segment, or interval.
+      2. **Presence vs count** — presence by default.
+      3. **Rollup** — by code or by theme. `code.group` is a flat one-level string, so
+         this is two levels and no recursive walk.
+      4. **Coder reconciliation** — pooled (double-counts), one coder, or
+         union/intersection.
+      5. **Scope** — which codebook, and whether unresolved codings are included.
+
+      Two warts to fix in passing: **code frequency counts segments from every codebook
+      while listing only the active book's codes** (`index.js:2428` vs `:2432`), and
+      **the dataset id is on no segment record** — it is only inside
+      `anchor.target` (`ds:<dsId>/cell:<col>:<rid>`), so a consumer outside the workspace
+      must parse it out or be handed it.
+
+  - [x] **Are the unpersisted offsets a gap? NO — answered 2026-10-18.** Raised because
+        "offsets aren't persisted" sounds like data loss. It is not: `textRef()` writes
+        **both** selectors into the anchor, and both are saved —
+        `{kind:'text-quote', exact, prefix, suffix}` AND
+        `{kind:'text-position', start, end}`. What `persistableSegment` strips is the
+        top-level `start`/`end`/`status`/`reason`, which are the RESOLUTION RESULT: where
+        the quote sits in the text *as it is now*, and how confident the match was.
+
+        Those are a pure function of the current cell, so persisting them would be
+        caching a value that silently rots the moment anyone edits the document —
+        precisely the bug class the anchor design exists to prevent (P1 in
+        `docs/ARCHITECTURE-coding-anchors.md`: *"Store what a coding quotes, not where it
+        sits"*, and the position selector is labelled a cache, never truth).
+
+        It also turns out not to constrain quantitising, because `text-quote.exact`
+        holds the **full** coded text — unlike `fields.quote`, which is truncated to 80
+        characters for display. So segment length and segment text need no resolution at
+        all. And at document grain, drift is irrelevant by construction: a coding belongs
+        to its row because `doc` is a rid, not a position, so a drifted coding still
+        counts for the right case. Only shape B's offsets need resolving, and shape B is
+        built inside the workspace where `resolveAllDocs()` has already run.
+
+        If a consumer outside the workspace ever needs current positions, the fix is a
+        host read surface that resolves on demand — not stored offsets. Same surface a
+        third-party plugin would need, so it belongs with the ownership question above.
+
+  - [x] **Should `builtin-agreement.fromCodings` be reworked onto the dataset route?
+        NO — decided 2026-10-18, and not for the "keep it as an example" reason.** The
+        substantive reason: **agreement's unit is not the analysis unit.** Shape A
+        answers "did this case raise theme X" AFTER reconciling coders — collapsing them
+        is decision 4 — which is exactly the information agreement needs kept. Routing it
+        through a dataset would mean emitting per-coder columns, which agreement would
+        then have to pivot back to the wide-per-coder matrix it already builds in twenty
+        lines from the source. A materialisation step, a dataset to manage, and nothing
+        gained.
+
+        **The additive move instead:** let the quantitiser optionally emit **one column
+        per coder**. Then the generic `Scale ▸ Inter-rater agreement…` (rater columns)
+        becomes usable on coded data, which gives the user the alternative unit models
+        `fromCodings`' own header calls "defensible for a specific study" but refuses to
+        pick silently — character-overlap and segment-matching agreement. That extends
+        agreement rather than rerouting it, and `fromCodings` keeps being the
+        no-setup default.
 
 - [ ] **Spatial workspace features (post-verb).** Pulled out of #145's space-verb
       item — these are `builtin-spatial` features, unrelated to verb dispatch.
