@@ -20,7 +20,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const { quantitiseCodings, codingTable } = await import('../plugins/builtin-caqdas/index.js');
+const { quantitiseCodings, codingTable, cooccurrenceEdges } = await import('../plugins/builtin-caqdas/index.js');
 const { coderName } = await import('../core/plugin-stdlib.js');
 
 // --- a small coded project ---------------------------------------------------
@@ -476,4 +476,182 @@ test('an empty table is empty rather than one blank row', () => {
   assert.equal(out.report.nRows, 0);
   assert.deepEqual(out.columns.code, []);
   assert.ok(out.variables.length, 'the columns are still declared');
+});
+
+// =============================================================================
+// Shape C — which codes occur together
+// =============================================================================
+// An edge list, because that is what builtin-sna reads: two columns naming each tie's
+// endpoints. The interesting part is what counts as "together", and what the network
+// cannot say.
+
+const edges = (opts = {}) => cooccurrenceEdges({
+  docs: DOCS, segments: SEGS, codes: CODES, bookId: BOOK, ...opts,
+});
+/** The row for one pair, whichever order it was emitted in. */
+const edge = (out, a, b) => {
+  const i = out.columns.code_a.findIndex((x, k) => (x === a && out.columns.code_b[k] === b)
+    || (x === b && out.columns.code_b[k] === a));
+  return i < 0 ? null : {
+    both: out.columns.docs_both[i], either: out.columns.docs_either[i],
+    jaccard: out.columns.jaccard[i], overlaps: out.columns.overlaps[i],
+  };
+};
+
+test('a pair appears once, not once per direction', () => {
+  // An undirected tie listed twice doubles every degree in the network.
+  const out = edges();
+  assert.equal(out.report.nRows, 1);
+  assert.deepEqual([out.columns.code_a[0], out.columns.code_b[0]], ['Cost', 'Trust in staff']);
+});
+
+test('jaccard is both over either, counted in documents', () => {
+  // P01 has Cost and Trust; P02 has Cost only. So both = 1, either = 2.
+  const e = edge(edges(), 'Cost', 'Trust in staff');
+  assert.equal(e.both, 1);
+  assert.equal(e.either, 2);
+  assert.equal(e.jaccard, 0.5);
+});
+
+test('a code that was applied but never alongside another is reported, not a row', () => {
+  // An edge list cannot carry an isolate, so saying so is the only way it is visible —
+  // and a density figure is computed over the codes that ARE present.
+  const segs = [seg('r2', 'c2', 'the bus never comes')];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: [...SEGS, ...segs], codes: CODES, bookId: BOOK });
+  assert.ok(!out.columns.code_a.includes('Transport'));
+  assert.deepEqual(out.report.isolated, [], 'Transport shares P02 with Cost, so it is linked');
+  const alone = cooccurrenceEdges({
+    docs: DOCS, codes: CODES, bookId: BOOK,
+    segments: [seg('r1', 'c1', 'money'), seg('r1', 'c3', 'staff'), seg('r2', 'c2', 'buses')],
+  });
+  assert.deepEqual(alone.report.isolated, ['Transport']);
+});
+
+test('a code nobody has applied is NOT called "occurs with nothing"', () => {
+  // Different findings: one is a result about the coding, the other a fact about the
+  // codebook, and dressing the second as the first would overstate it.
+  const out = edges();
+  assert.deepEqual(out.report.unused, ['Transport']);
+  assert.deepEqual(out.report.isolated, []);
+});
+
+test('the overlap rule needs them to actually intersect, not merely touch', () => {
+  // The surprise for a user: coders often highlight adjacent passages, and adjacency is
+  // not overlap. If it counted, every consecutive pair in a transcript would be a tie.
+  const touching = [
+    { ...seg('r1', 'c1', 'money'), start: 0, end: 10, status: 'exact' },
+    { ...seg('r1', 'c3', 'staff'), start: 10, end: 20, status: 'exact' },
+  ];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: touching, codes: CODES, bookId: BOOK, rule: 'overlap' });
+  assert.equal(out.report.nRows, 0);
+  const overlapping = [
+    { ...seg('r1', 'c1', 'money'), start: 0, end: 12, status: 'exact' },
+    { ...seg('r1', 'c3', 'staff'), start: 10, end: 20, status: 'exact' },
+  ];
+  const yes = cooccurrenceEdges({ docs: DOCS, segments: overlapping, codes: CODES, bookId: BOOK, rule: 'overlap' });
+  assert.equal(yes.report.nRows, 1);
+  assert.equal(edge(yes, 'Cost', 'Trust in staff').overlaps, 1);
+});
+
+test('both counts are emitted under either rule, so they can be compared', () => {
+  // Codes that share documents but never overlap are discussed in the same interview,
+  // not in the same breath — and that difference is only visible if both are there.
+  const segs = [
+    { ...seg('r1', 'c1', 'money'), start: 0, end: 10, status: 'exact' },
+    { ...seg('r1', 'c3', 'staff'), start: 50, end: 60, status: 'exact' },
+  ];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK });
+  const e = edge(out, 'Cost', 'Trust in staff');
+  assert.equal(e.both, 1, 'they share the document');
+  assert.equal(e.overlaps, 0, 'and never overlap');
+});
+
+test('the overlap rule says how many codings had no position to compare', () => {
+  // Positions are resolved, not stored, so a quote that no longer matches has none and
+  // can overlap nothing. Silently treating that as "no co-occurrence" would understate.
+  const out = cooccurrenceEdges({ docs: DOCS, segments: SEGS, codes: CODES, bookId: BOOK, rule: 'overlap' });
+  assert.equal(out.report.unpositioned, 4);
+  assert.equal(out.report.nRows, 0);
+});
+
+test('a code does not tie to itself, and the self-pairs are counted', () => {
+  // igraph would draw a self-loop and inflate that code's degree.
+  const segs = [
+    { ...seg('r1', 'c1', 'money'), id: 'x1', start: 0, end: 12, status: 'exact' },
+    { ...seg('r1', 'c1', 'money again'), id: 'x2', start: 10, end: 20, status: 'exact' },
+  ];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK, rule: 'overlap' });
+  assert.equal(out.report.nRows, 0);
+  assert.equal(out.report.selfPairs, 1);
+});
+
+test('under theme rollup, two codes of one theme are not a tie either', () => {
+  // This is where the self-pair exclusion does real work: Cost and Transport are both
+  // Barriers, so an overlap between them would otherwise tie Barriers to itself.
+  const segs = [
+    { ...seg('r1', 'c1', 'money'), start: 0, end: 12, status: 'exact' },
+    { ...seg('r1', 'c2', 'buses'), start: 10, end: 20, status: 'exact' },
+  ];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK, rule: 'overlap', rollup: 'theme' });
+  assert.equal(out.report.nRows, 0);
+  assert.equal(out.report.selfPairs, 1);
+});
+
+test('themes are the nodes when asked for', () => {
+  const out = edges({ rollup: 'theme' });
+  assert.deepEqual([out.columns.code_a[0], out.columns.code_b[0]], ['Barriers', 'Facilitators']);
+  assert.equal(out.variables.find((v) => v.name === 'code_a').label, 'Theme (from)');
+});
+
+test('a character span never overlaps a time span', () => {
+  // 12-30 seconds and characters 12-30 are not the same interval. A document is text or
+  // media in practice, so this is about the answer being "no comparison" rather than a
+  // confident wrong one the one time it is not.
+  const segs = [
+    { ...seg('r1', 'c1', 'money'), start: 12, end: 30, status: 'exact' },
+    timeSeg('r1', 'c3', 12, 30),
+  ];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK, rule: 'overlap' });
+  assert.equal(out.report.nRows, 0);
+});
+
+test('two media codings at the same instant do overlap', () => {
+  // A video keyframe is a zero-length mark; it must be able to coincide with another.
+  const segs = [timeSeg('r1', 'c1', 8, 8), timeSeg('r1', 'c3', 8, 8)];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK, rule: 'overlap' });
+  assert.equal(out.report.nRows, 1);
+});
+
+test('pairs are keyed unambiguously, whatever the codes are called', () => {
+  // 'A' + sep + 'B C' joins to the same string as 'A B' + sep + 'C', so a joined key
+  // would have merged two different pairs into one tally.
+  const codes = [
+    { id: 'k1', name: 'A', group: '', codebookId: BOOK },
+    { id: 'k2', name: 'B C', group: '', codebookId: BOOK },
+    { id: 'k3', name: 'A B', group: '', codebookId: BOOK },
+    { id: 'k4', name: 'C', group: '', codebookId: BOOK },
+  ];
+  const at = (rid, codeId, start) => ({ ...seg(rid, codeId, 'q'), start, end: start + 10, status: 'exact' });
+  const segs = [at('r1', 'k1', 0), at('r1', 'k2', 5), at('r2', 'k3', 0), at('r2', 'k4', 5)];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: segs, codes, bookId: BOOK, rule: 'overlap' });
+  assert.equal(out.report.nRows, 2);
+  assert.equal(edge(out, 'A', 'B C').overlaps, 1);
+  assert.equal(edge(out, 'A B', 'C').overlaps, 1);
+});
+
+test('scope and the dropped codings are reported here too', () => {
+  const segs = [...SEGS, seg('r1', 'c9', 'other book'), seg('r1', 'GONE', 'deleted')];
+  const out = cooccurrenceEdges({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK });
+  assert.equal(out.report.outOfScope, 1);
+  assert.equal(out.report.unknownCode, 1);
+  const all = cooccurrenceEdges({ docs: DOCS, segments: segs, codes: CODES, bookId: BOOK, scope: 'all' });
+  assert.ok(all.report.nRows > out.report.nRows, 'the other book’s code now ties to what it shares a document with');
+});
+
+test('the first two columns are the edge list, named for what reads them', () => {
+  const out = edges();
+  assert.deepEqual(out.variables.slice(0, 2).map((v) => v.name), ['code_a', 'code_b']);
+  for (const v of out.variables.slice(0, 2)) {
+    assert.equal(v.type, 'string', 'Network analysis takes string/factor/numeric endpoints');
+  }
 });

@@ -2496,6 +2496,107 @@ export const workspace = {
       isDoc: d.kind === 'media' || String(d.text ?? '').trim() !== '',
     }));
 
+
+    /** Shape C: one row per pair of codes that occur together. */
+    async function quantitisePairs() {
+      const form = await app.ui.showForm({
+        title: 'Quantitise codings — which codes occur together',
+        hint: 'An edge list: one row per pair, with the two codes in the first two columns — '
+          + 'which is what Network analysis reads as From and To.',
+        okLabel: 'Create dataset',
+        fields: [
+          {
+            name: 'rule', type: 'select', label: 'Two codes occur together when', value: 'document',
+            hint: 'Sharing a document is the looser claim and needs nothing; overlapping passages is '
+              + 'the stricter one and needs positions, so it only sees text codings.',
+            options: [
+              { value: 'document', label: 'They appear in the same document' },
+              { value: 'overlap', label: 'Their passages overlap' },
+            ],
+          },
+          {
+            name: 'rollup', type: 'select', label: 'Nodes are', value: 'code',
+            options: [{ value: 'code', label: 'Codes' }, { value: 'theme', label: 'Themes' }],
+          },
+          {
+            name: 'scope', type: 'select', label: 'Codes from', value: 'book',
+            options: [
+              { value: 'book', label: 'The open codebook' },
+              { value: 'all', label: 'Every codebook in the project' },
+            ],
+          },
+        ],
+      });
+      if (!form) return;
+      const { variables, columns, report } = cooccurrenceEdges({
+        docs: docRows(),
+        segments: state.segments,
+        codes: state.codes,
+        bookId: state.codebookId,
+        scope: form.scope,
+        rollup: form.rollup,
+        rule: form.rule,
+      });
+      if (!report.nRows) {
+        app.results.appendError(
+          form.rule === 'overlap'
+            ? 'No two codings overlap, so there are no pairs. Coders often highlight adjacent rather '
+              + 'than overlapping passages — try "the same document" instead.'
+            : 'No two codes share a document, so there are no pairs to put in a network.',
+        );
+        return;
+      }
+
+      const noun = form.rollup === 'theme' ? 'themes' : 'codes';
+      const name = `Codings — ${noun} that occur together`;
+      await app.data.create({ name, variables, columns, activate: false });
+      await app.results.beginAnalysis('Quantitise codings');
+      await app.results.appendText(
+        `**Dataset created: ${name}.** ${report.nRows} pair${report.nRows === 1 ? '' : 's'} among `
+        + `${report.nNodes} ${noun}. Switch to it in the Data tab and run **Multivariate ▸ Network `
+        + 'analysis (edge list)** with `code_a` as From and `code_b` as To.',
+      );
+      await app.results.appendText(
+        '**How these pairs were made:**\n\n'
+        + `- **Together means:** ${form.rule === 'overlap' ? 'their passages overlap' : 'they appear in the same document'}.\n`
+        + '- **`jaccard` is over DOCUMENTS either way** — both ÷ either — because that is the only '
+        + 'denominator here that is a set union; an overlap version would need one nobody agrees on. '
+        + 'Comparing the two count columns is itself informative: codes that share documents but never '
+        + 'overlap are discussed in the same interview, not in the same breath.\n'
+        + '- **The network has no weights.** Network analysis reads only the two code columns, so every '
+        + 'pair is one tie regardless of how often it occurs. To threshold, use Transform ▸ Select cases '
+        + 'on `docs_both` or `jaccard` first — that choice is yours to make and state.'
+        + (report.isolated.length
+          ? `\n- **${report.isolated.length} ${noun} occur with nothing** and so are absent from the `
+            + `network rather than sitting in it as isolates: ${report.isolated.slice(0, 8).join(', ')}`
+            + `${report.isolated.length > 8 ? ', …' : ''}. A density or centrality figure is computed `
+            + 'over the codes that are present.'
+          : '')
+        + (report.unused.length
+          ? `\n- ${report.unused.length} ${noun} in the codebook have not been applied to anything yet, `
+            + 'which is why they are not here either — a different fact from occurring with nothing.'
+          : '')
+        + (report.selfPairs
+          ? `\n- ${report.selfPairs} overlapping pair(s) were of one ${form.rollup === 'theme' ? 'theme' : 'code'} `
+            + 'with itself and are left out — that is not a tie.'
+          : '')
+        + (report.unpositioned && form.rule === 'overlap'
+          ? `\n- ${report.unpositioned} coding(s) had no position to compare, so they can overlap nothing. `
+            + 'Positions are resolved from the anchor, and a quote that no longer matches its document has none.'
+          : '')
+        + (report.outOfScope ? `\n- ${report.outOfScope} coding(s) of out-of-scope codes were left out.` : ''),
+      );
+      await app.results.appendTable({
+        caption: 'Strongest pairs',
+        columns: [form.rollup === 'theme' ? 'Theme' : 'Code', 'with', 'Documents', 'Jaccard', 'Overlaps'],
+        rows: columns.code_a
+          .map((a, i) => [a, columns.code_b[i], columns.docs_both[i], columns.jaccard[i], columns.overlaps[i]])
+          .sort((x, y) => y[3] - x[3] || y[2] - x[2])
+          .slice(0, 20),
+      });
+      await app.results.endAnalysis();
+    }
+
     /** Shape B: one row per coding. */
     async function quantitiseSegments() {
       const form = await app.ui.showForm({
@@ -2591,11 +2692,13 @@ export const workspace = {
           options: [
             { value: 'case', label: 'Document — a column per code (crosstabs, regression, latent class)' },
             { value: 'segment', label: 'Coding — a row per passage (text analytics, correspondence, multilevel)' },
+            { value: 'pair', label: 'Pair of codes — which codes occur together (network analysis)' },
           ],
         }],
       });
       if (!shapePick) return;
       if (shapePick.shape === 'segment') { await quantitiseSegments(); return; }
+      if (shapePick.shape === 'pair') { await quantitisePairs(); return; }
 
       const form = await app.ui.showForm({
         title: 'Quantitise codings — a column per code',
@@ -3586,6 +3689,204 @@ function modalityOf(seg) {
   if (kinds.includes('rect')) return 'Image region';
   if (kinds.includes('time-span')) return 'Time span';
   return 'Unknown';
+}
+
+/**
+ * Turn the codings into a **co-occurrence edge list** — shape C: one row per pair of
+ * codes that occur together.
+ *
+ * ## Why an edge list and not a matrix
+ *
+ * Because that is what `builtin-sna` eats: two columns naming each tie's endpoints. A
+ * square code x code matrix would have to be unpivoted by hand before anything could
+ * read it, and the long form is also what Crosstabs and a sorted table want. The same
+ * reasoning as shape B: a long table is the portable shape.
+ *
+ * ## Two rules, and why "same document" is the default
+ *
+ * - **`document`** — two codes co-occur if they appear in the same document. Needs no
+ *   parameter, works for text and media alike, and is the rule every CAQDAS calls a
+ *   code-document co-occurrence. This is what `jaccard` below is computed over.
+ * - **`overlap`** — two codings whose passages actually intersect. Closer to what a
+ *   reader means by "these two things were said together", and the stricter claim, but
+ *   it needs resolved positions (so text codings only, see shape B) and it silently says
+ *   nothing about a project where coders highlight adjacent rather than overlapping
+ *   spans. The report says how many codings had no position to compare.
+ *
+ * Both counts are emitted whichever rule is chosen, because they answer different
+ * questions and a reader comparing them learns something: codes that share documents but
+ * never overlap are discussed in the same interview, not in the same breath. The RULE
+ * decides which pairs get a row at all.
+ *
+ * ## What is NOT in the network
+ *
+ * A code that never co-occurs with anything has no edge, and an edge list cannot carry
+ * it — so it vanishes from the graph rather than appearing as an isolate. That matters
+ * for a network measure (density is computed over the nodes present), so the report
+ * names those codes and the Output says how many there were.
+ *
+ * `isolated` and `unused` are kept apart, because they are different findings. A code
+ * that was applied and never once sat beside another is a result about the coding. A code
+ * nobody has applied yet is a fact about the codebook, and reporting it as "occurs with
+ * nothing" would dress the second up as the first.
+ *
+ * Self-pairs are left out: two codings of the same code in one document is not a tie,
+ * and igraph would draw it as a self-loop that distorts degree. Under `theme` rollup that
+ * exclusion is doing real work — two different codes of one theme co-occurring would
+ * otherwise become a theme tied to itself — so it is counted and reported.
+ *
+ * Pure, so the pairing rules are testable without a DOM.
+ *
+ * @param {object} arg see {@link quantitiseCodings} for `docs`, `segments`, `codes`,
+ *   `bookId` and `scope`.
+ * @param {'code'|'theme'} [arg.rollup='code']
+ * @param {'document'|'overlap'} [arg.rule='document']
+ * @returns {{variables: object[], columns: Object<string, any[]>,
+ *            report: {nRows: number, nNodes: number, isolated: string[],
+ *                     selfPairs: number, unpositioned: number, rule: string,
+ *                     outOfScope: number, unknownCode: number, offDoc: number}}}
+ */
+export function cooccurrenceEdges({
+  docs = [], segments = [], codes = [], bookId = null, scope = 'book',
+  rollup = 'code', rule = 'document',
+}) {
+  const codeById = new Map((codes ?? []).map((c) => [c.id, c]));
+  const inScope = (c) => scope === 'all' || !bookId || c.codebookId === bookId;
+  const rows = (docs ?? []).filter((d) => d.isDoc);
+  const rowAt = new Map(rows.map((d, i) => [d.rid, i]));
+
+  const tally = { unknownCode: 0, outOfScope: 0, offDoc: 0 };
+  const used = [];
+  for (const s of segments ?? []) {
+    const code = codeById.get(s.codeId);
+    if (!code) { tally.unknownCode += 1; continue; }
+    if (!inScope(code)) { tally.outOfScope += 1; continue; }
+    if (!rowAt.has(String(s.doc))) { tally.offDoc += 1; continue; }
+    used.push({ seg: s, at: rowAt.get(String(s.doc)), node: nodeOf(code, rollup) });
+  }
+
+  // --- document-level sets, which both counts and `jaccard` rest on -------------
+  const docsOf = new Map(); // node -> Set of document indexes
+  for (const u of used) {
+    if (!docsOf.has(u.node)) docsOf.set(u.node, new Set());
+    docsOf.get(u.node).add(u.at);
+  }
+  // Every node in scope, including ones with no codings: a code that was never applied
+  // is not an isolate of the network, it is simply absent, and the two readings differ.
+  const nodes = [...new Set((codes ?? []).filter(inScope).map((c) => nodeOf(c, rollup)))].sort();
+
+  // --- overlaps, per document ---------------------------------------------------
+  const overlapCount = new Map(); // pairKey -> codings that intersect
+  let selfPairs = 0;
+  let unpositioned = 0;
+  const byDoc = new Map();
+  for (const u of used) {
+    if (!byDoc.has(u.at)) byDoc.set(u.at, []);
+    byDoc.get(u.at).push(u);
+  }
+  for (const group of byDoc.values()) {
+    for (const u of group) if (!spanOf(u.seg)) unpositioned += 1;
+    for (let i = 0; i < group.length; i += 1) {
+      for (let j = i + 1; j < group.length; j += 1) {
+        const a = group[i];
+        const b = group[j];
+        const sa = spanOf(a.seg);
+        const sb = spanOf(b.seg);
+        if (!sa || !sb || sa.unit !== sb.unit) continue;
+        if (!(sa.lo < sb.hi && sb.lo < sa.hi)) continue;
+        if (a.node === b.node) { selfPairs += 1; continue; }
+        const k = pairKey(a.node, b.node);
+        overlapCount.set(k, (overlapCount.get(k) ?? 0) + 1);
+      }
+    }
+  }
+
+  // --- assemble the edges -------------------------------------------------------
+  const out = { code_a: [], code_b: [], docs_both: [], docs_either: [], jaccard: [], overlaps: [] };
+  const report = {
+    nRows: 0, nNodes: 0, isolated: [], unused: [], selfPairs, unpositioned, rule, ...tally,
+  };
+  const linked = new Set();
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const a = nodes[i];
+      const b = nodes[j];
+      const A = docsOf.get(a) ?? new Set();
+      const B = docsOf.get(b) ?? new Set();
+      let both = 0;
+      for (const d of A) if (B.has(d)) both += 1;
+      const either = A.size + B.size - both;
+      const over = overlapCount.get(pairKey(a, b)) ?? 0;
+      const keep = rule === 'overlap' ? over > 0 : both > 0;
+      if (!keep) continue;
+      linked.add(a);
+      linked.add(b);
+      out.code_a.push(a);
+      out.code_b.push(b);
+      out.docs_both.push(both);
+      out.docs_either.push(either);
+      // Jaccard over DOCUMENTS whichever rule chose the row, because that is the only
+      // denominator here that is a set union. An "overlap Jaccard" would need a
+      // denominator nobody agrees on, so it is not invented.
+      out.jaccard.push(either ? Math.round((both / either) * 1e4) / 1e4 : 0);
+      out.overlaps.push(over);
+    }
+  }
+  report.nRows = out.code_a.length;
+  report.nNodes = linked.size;
+  report.isolated = nodes.filter((n) => !linked.has(n) && docsOf.has(n));
+  report.unused = nodes.filter((n) => !docsOf.has(n));
+
+  const variables = [
+    // The two columns `builtin-sna` reads as an edge list. Named for what they are to it,
+    // not for the codes, so the pairing with "From"/"To" is obvious in its picker.
+    { name: 'code_a', type: 'string', measurementLevel: 'nominal', label: rollup === 'theme' ? 'Theme (from)' : 'Code (from)' },
+    { name: 'code_b', type: 'string', measurementLevel: 'nominal', label: rollup === 'theme' ? 'Theme (to)' : 'Code (to)' },
+    { name: 'docs_both', type: 'numeric', measurementLevel: 'scale', label: 'Documents with both' },
+    { name: 'docs_either', type: 'numeric', measurementLevel: 'scale', label: 'Documents with either' },
+    { name: 'jaccard', type: 'numeric', measurementLevel: 'scale', label: 'Jaccard (over documents)' },
+    { name: 'overlaps', type: 'numeric', measurementLevel: 'scale', label: 'Overlapping passages' },
+  ];
+  return { variables, columns: out, report };
+}
+
+/** The node a code contributes under the chosen rollup. */
+function nodeOf(code, rollup) {
+  return rollup === 'theme'
+    ? (cleanName(code.group, { max: 120 }) || UNTHEMED)
+    : cleanName(code.name, { max: 120, fallback: code.id });
+}
+
+/**
+ * An unordered pair's key, so a-b and b-a are one edge.
+ *
+ * JSON rather than a joined string: a code name can contain anything a person types,
+ * and 'A' + sep + 'B C' joins to the same thing as 'A B' + sep + 'C' — two different
+ * pairs that would then have shared one tally.
+ */
+function pairKey(a, b) {
+  return a < b ? JSON.stringify([a, b]) : JSON.stringify([b, a]);
+}
+
+/**
+ * A coding's extent, in whatever unit it has — or null if it has none.
+ *
+ * `unit` is compared before two spans are, because 12–30 seconds and characters 12–30
+ * are not the same interval and would otherwise "overlap". A document holds text or
+ * media, not both, so in practice this never fires; it is here so that the one time it
+ * does, the answer is "no comparison" rather than a confident wrong one.
+ */
+function spanOf(seg) {
+  if (typeof seg?.start === 'number' && typeof seg?.end === 'number') {
+    return { unit: 'char', lo: seg.start, hi: seg.end };
+  }
+  if (typeof seg?.tStart === 'number' && typeof seg?.tEnd === 'number') {
+    // A zero-length mark (a video keyframe) is given the smallest extent that can
+    // intersect another mark at the same instant, rather than being unable to overlap
+    // anything including itself.
+    return { unit: 'time', lo: seg.tStart, hi: seg.tEnd > seg.tStart ? seg.tEnd : seg.tStart + 1e-9 };
+  }
+  return null;
 }
 
 /** The label for codings whose code carries no theme, and for an unstamped coder. */

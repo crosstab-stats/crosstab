@@ -951,12 +951,54 @@ bottom; they are the project's memory and are not summarised away.
         Found by running the thing on realistic data, which is also how the `fp` bug
         turned up. Two live crashes in two browser passes, in plugins nobody had reason
         to suspect.
-      - **C — code-pair edge list.** `code_a, code_b, n, jaccard` — three columns, which
-        is exactly what `builtin-sna` eats (an edge list, not a matrix). Needs an
-        explicit co-occurrence rule; default "same document", because it is the only one
-        needing no parameter — the same reasoning `fromCodings` already used.
-      - **D — unit x interval counts.** case, session/interval, code, count, exposure.
-        Feeds SCED, time series, count models. Only meaningful for session/media data.
+      - **C — code-pair edge list. BUILT 2026-10-18.** `code_a`, `code_b`,
+        `docs_both`, `docs_either`, `jaccard`, `overlaps` — one row per pair, the first
+        two columns being the edge list `builtin-sna` reads as From and To.
+        `cooccurrenceEdges()`, 15 new tests.
+
+        **Two rules, both counts.** "Same document" is the default because it needs no
+        parameter and works for media as well as text; "their passages overlap" is the
+        stricter claim and needs resolved positions, so it sees text codings only. The
+        RULE decides which pairs get a row, but **both counts are always emitted**,
+        because comparing them is itself a finding: codes that share documents and never
+        overlap were discussed in the same interview, not in the same breath.
+
+        **`jaccard` is over documents either way**, and labelled as such — it is the only
+        denominator here that is a set union. An "overlap Jaccard" would need one nobody
+        agrees on, so it is not invented.
+
+        **Adjacency is not overlap.** Strict intersection, which matters because coders
+        routinely highlight consecutive passages — counting touching spans would make
+        every neighbouring pair in a transcript a tie. Tested, because it is the kind of
+        thing a reader assumes either way.
+
+        **Self-pairs are excluded and counted**, since igraph would draw a self-loop and
+        inflate that code's degree. Under theme rollup that exclusion does real work: two
+        codes of one theme overlapping would otherwise tie the theme to itself.
+
+        **Three states are kept apart, which the first draft of this conflated.**
+        `isolated` is a code that WAS applied and never once sat beside another — a
+        result about the coding. `unused` is a code nobody has applied — a fact about the
+        codebook. Neither can appear in an edge list at all, so both are named in the
+        Output; reporting the second as "occurs with nothing" would dress it up as the
+        first. **And the network has no weights**: `builtin-sna` reads only the two
+        endpoint columns, so every pair is one tie however often it occurs. Thresholding
+        is `Transform ▸ Select cases` on `docs_both` or `jaccard` first, which the Output
+        says, because that is the user's judgement to make and to state.
+
+        **Verified in the browser** on 6 documents and 5 codes: Cost–Transport Jaccard
+        1.0 (both in all four documents where either appears), Cost–Trust 0.5, one
+        isolated code and one unused code correctly separated — then **Network analysis**
+        on the result returning 3 nodes, 3 edges, density 1.0000, centralities and the
+        network plot. Which also demonstrates the caveat: that density is over the three
+        codes PRESENT, not the five in the codebook.
+      - [ ] **D — unit x interval counts.** case, session/interval, code, count,
+        exposure. Feeds SCED, time series, count models. Only meaningful for
+        session/media data — and unlike A–C it needs something the model does not have
+        yet: a notion of which SESSION a document belongs to. Today that would have to be
+        a carried attribute the user nominates (an interview number, a session column),
+        which is probably the right answer, but it is a design question rather than more
+        of the same. Not started.
 
       The code frequency table (code, n, %) is a REPORT, not a payload. We already have
       it; no contract should be built around it.
