@@ -162,9 +162,45 @@ class HandleDriver {
   #root;
   kind;
 
+  /**
+   * What the engine turned out to do about rename: `null` until a write has tried,
+   * then true/false.
+   *
+   * This exists because `atomicWrite` used to be a static `true` and stopped being one.
+   * `renameOver` falls back to writing in place where `move()` is present but not
+   * usable (WebKit), so on those engines the temp-then-rename guarantee is not kept —
+   * and a capability that over-promises is worse than one that admits it cannot say,
+   * because the consumer it misleads is folder-sync's "a peer never reads a torn file".
+   */
+  #renameWorks = null;
+
   constructor(root, kind) {
     this.#root = root;
     this.kind = kind;
+  }
+
+  /**
+   * Whether this engine has been seen to rename.
+   *
+   * `true` before any write has happened — optimistic, and deliberately so: the engines
+   * that cannot rename are the minority, and answering `false` on a Chromium driver that
+   * simply has not written yet would be its own lie. The window is one write wide, and
+   * every save closes it. {@link HandleDriver#atomicityKnown} says whether the answer is
+   * evidence or assumption, for a caller that needs to care about the difference.
+   */
+  get renamesAtomically() {
+    return this.#renameWorks !== false;
+  }
+
+  /** Whether {@link HandleDriver#renamesAtomically} is based on an actual attempt yet. */
+  get atomicityKnown() {
+    return this.#renameWorks !== null;
+  }
+
+  /** Record what an attempt proved. Called by `write`, which is the only thing that
+   * finds out. */
+  #learnedRename(ok) {
+    this.#renameWorks = ok;
   }
 
   async #rootHandle() {
@@ -204,6 +240,10 @@ class HandleDriver {
     let renamed = false;
     try {
       renamed = await renameOver(dir, tfh, name);
+      // The only place the truth is available. A thrown error below is a REAL failure
+      // (a blocked extension, quota) rather than a missing rename, so it teaches nothing
+      // about the engine and deliberately does not record anything.
+      this.#learnedRename(renamed);
     } catch (err) {
       // A real failure (e.g. the File System Access API blocks the target extension).
       // Don't leave an orphan `.tmp` behind — clean it up, then surface it.
@@ -240,6 +280,10 @@ class HandleDriver {
     let renamed = false;
     try {
       renamed = await renameOver(dir, tfh, name);
+      // The only place the truth is available. A thrown error below is a REAL failure
+      // (a blocked extension, quota) rather than a missing rename, so it teaches nothing
+      // about the engine and deliberately does not record anything.
+      this.#learnedRename(renamed);
     } catch (err) {
       try { await dir.removeEntry(tmp); } catch { /* best effort */ }
       throw err;
@@ -325,9 +369,15 @@ export class OpfsDriver extends HandleDriver {
 
   /** Private to this origin and this tab's browser profile: many projects, and nobody
    * else writing them — but every ProjectStore in the tab opens this same root, so they
-   * are all writers of one catalog (`sharedRoot`). */
+   * are all writers of one catalog (`sharedRoot`).
+   *
+   * `atomicWrite` follows what the engine was seen to do, not what the design intends —
+   * see {@link HandleDriver#renamesAtomically}. */
   get capabilities() {
-    return { flat: false, externallySynced: false, atomicWrite: true, canStream: true, sharedRoot: true };
+    return {
+      flat: false, externallySynced: false, atomicWrite: this.renamesAtomically,
+      canStream: true, sharedRoot: true,
+    };
   }
 
   get available() {
@@ -343,8 +393,13 @@ export class FsaFolderDriver extends HandleDriver {
   }
 
   /** The folder IS the project, and an OS sync client mirrors it — so another machine
-   * writing these bytes is the normal case, not an edge one. */
+   * writing these bytes is the normal case, not an edge one. That is also what makes
+   * `atomicWrite` load-bearing here rather than decorative: folder-sync's peer-safety
+   * argument rests on it, so it reports what the engine was seen to do rather than what
+   * temp-then-rename intends — see {@link HandleDriver#renamesAtomically}. */
   get capabilities() {
-    return { flat: true, externallySynced: true, atomicWrite: true, canStream: true };
+    return {
+      flat: true, externallySynced: true, atomicWrite: this.renamesAtomically, canStream: true,
+    };
   }
 }

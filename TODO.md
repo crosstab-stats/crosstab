@@ -350,15 +350,27 @@ bottom; they are the project's memory and are not summarised away.
       temp-then-rename guarantee is conditional now while the capability is still declared
       statically by `OpfsDriver` and `FsaFolderDriver`.
 
-      **It is latent, not broken: nothing in production reads the flag** (four drivers declare
-      it, four tests assert it, no consumer). That is exactly the hazard worth recording — the
-      FIRST consumer will believe it, and the obvious first consumer is folder-sync, whose
-      peer-safety argument is *"the driver's write is atomic (temp + rename), so a peer polling
-      `project.json` mid-write never reads a torn file."* On an engine using the fallback that
-      sentence stops being true. **Fix when it gets a reader:** have the driver downgrade the
-      declared capability once it has discovered rename does not work, rather than asserting it
-      up front — the same "probe by attempt, not by existence" lesson the fallback itself came
-      from.
+      **FIXED 2026-10-17, before it got a reader.** `HandleDriver` now records what the
+      engine actually did — `renameOver`'s answer, from both `write` and `writeStream` —
+      and `capabilities.atomicWrite` reports that rather than a literal `true`. Optimistic
+      until a write has happened (answering `false` on a Chromium driver that has simply
+      not written yet would be its own lie), and `atomicityKnown` says which of the two
+      the answer is, for a caller that needs to tell evidence from assumption. A test
+      asserts no handle driver hard-codes the literal again.
+
+      **A correction while doing it:** this entry is easy to read as "WebKit writes are
+      not atomic", and I did read it that way. Real iOS throws on the one-argument
+      `move(name)` — which is what used to crash the save — but it implements the spec's
+      `move(dir, name)`, which `renameOver` tries second. So on WebKit the rename DOES
+      happen and atomicity is kept; the bug was the crash, not a lost guarantee. The case
+      that genuinely downgrades is an engine where `move` exists and neither form works,
+      which no existence check can see. The tests now model all four shapes
+      (chromium / webkit / none / name-only) so the distinction cannot be lost again.
+
+      It was latent rather than broken: four drivers declared it, four tests asserted it,
+      no consumer read it. The obvious first consumer would have been folder-sync, whose
+      peer-safety argument is *"the driver's write is atomic (temp + rename), so a peer
+      polling `project.json` mid-write never reads a torn file."*
 
       **3. Live co-authoring is UNVERIFIED on WebKit, not known broken.** It is trystero over
       MQTT (`core/live-sync.js`, loaded from CDN per `core/assets.js`), i.e. WebRTC, which iOS
@@ -1884,9 +1896,17 @@ bottom; they are the project's memory and are not summarised away.
       names (2026-10-17) because those become ops in the log; variable names deliberately
       did not change.
 
-- [ ] **A line-with-uncertainty-ribbon chart kind (raised 2026-10-16).** The one thing
-      blocking the last of the three "migrate it instead" charts, and useful well beyond
-      it. Nothing currently draws a line with a shaded interval around it.
+- [x] **A line-with-uncertainty-ribbon chart kind — DONE 2026-10-16 (`band`).** Built,
+      and the ARIMA forecast migrated onto it the same day; this checkbox was simply
+      missed at the time. It is NOT a copy of `steps` and not an option on it — the two
+      share one `curveKind` factory parameterised by the two functions that differ (how
+      the curve joins its points, and how the ribbon follows it), because that difference
+      IS the statistical claim each kind makes. Reusable for any fitted curve with a
+      confidence band. Original note follows.
+
+      The one thing blocking the last of the three "migrate it instead" charts, and
+      useful well beyond it. Nothing currently draws a line with a shaded interval
+      around it.
 
       **Why neither existing kind will do**, which is the part worth not re-deciding:
       - `scatter` draws a connected line (`model.line`) but has no band, and a forecast
