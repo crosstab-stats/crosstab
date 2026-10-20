@@ -66,6 +66,17 @@ export const manifest = {
       parse: 'parseTextFile',
     },
     {
+      // Above the media entries, because a transcript import can ATTACH its recording —
+      // so this is the one to reach for when you have both, and importing the audio
+      // first would leave you with two rows to reconcile by hand.
+      label: 'Transcripts (VTT, SRT, timestamped text) → one row per file…',
+      extensions: ['.vtt', '.srt', '.sbv', '.txt', '.text'],
+      group: 'Qualitative',
+      order: 16,
+      multiple: true,
+      parse: 'parseTranscriptFile',
+    },
+    {
       label: 'Image files (PNG, JPEG, …) → one row per file…',
       extensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'],
       group: 'Media',
@@ -4237,6 +4248,414 @@ export function occasionCounts({
   report.nOccasions = order.length;
 
   return { variables, columns: out, report };
+}
+
+// =============================================================================
+// Transcripts: time-aligned text
+// =============================================================================
+
+/**
+ * Parse a transcript into codable text plus a cue index — WebVTT, SubRip (`.srt`) or
+ * plain timestamped lines.
+ *
+ * ## What a transcript is, in this model
+ *
+ * **Readable text in the document column, and the timing beside it.** The text is the
+ * thing being coded, so it stays exactly what it looks like: a plain transcript, which
+ * means the char-span coding already built for text documents works on it unchanged, the
+ * data grid shows words rather than JSON, and Text analytics can read the column. The
+ * cues are a separate value recording where each passage sits in the media.
+ *
+ * That split is also why the workspace finds the timing **by value shape rather than by
+ * column name** (see `parseTiming`): a convention like "the column called `timing`"
+ * breaks the moment someone renames it or joins two datasets, and the plugin already
+ * detects media documents by the shape of their cell rather than by what it is called.
+ * Lose the timing column and a transcript degrades to an ordinary text document — still
+ * codable, no longer seekable, which is the right way for this to fail.
+ *
+ * ## Cues carry BOTH coordinate systems
+ *
+ * Each cue holds its time (`tStart`/`tEnd`, seconds) and its span in the assembled text
+ * (`start`/`end`, character offsets). One without the other is useless here: the time
+ * alone cannot say which words to highlight, and the offsets alone cannot move a
+ * playhead. Holding both is what lets a click on a line seek the audio, and a coded
+ * passage report when it was said.
+ *
+ * ## Speakers are extracted, because qualitative work is about who said it
+ *
+ * `<v Ann>` (the WebVTT voice span) and a leading `Ann:` are both read as a speaker and
+ * kept on the cue. The speaker is NOT stripped from the text: a transcript that reads
+ * "Ann: I couldn't afford it" is what the researcher expects to see and to quote, and
+ * removing the name would make a coded passage ambiguous about whose words it was.
+ *
+ * @param {string} raw the file's contents
+ * @param {{kind?: 'vtt'|'srt'|'text'|'auto', gapSeconds?: number}} [opts]
+ *   `gapSeconds` is how long a plain timestamped line lasts when the next timestamp does
+ *   not say — only used by the `text` form, which records starts and no ends.
+ * @returns {{text: string, cues: Array<{tStart: number, tEnd: number, start: number,
+ *   end: number, speaker: string}>, kind: string, skipped: number}}
+ */
+export function parseTranscript(raw, { kind = 'auto', gapSeconds = 4 } = {}) {
+  const src = String(raw ?? '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const form = kind === 'auto' ? sniffTranscript(src) : kind;
+  const parsed = form === 'text' ? plainCues(src, gapSeconds) : blockCues(src, form);
+  resolveSpeakers(parsed.cues);
+  // Assemble the text and the offsets together, so they cannot disagree — the failure
+  // that would put a coded highlight on the wrong words.
+  const lines = [];
+  const cues = [];
+  let at = 0;
+  for (const c of parsed.cues) {
+    if (!c.text) continue;
+    cues.push({
+      tStart: c.tStart,
+      tEnd: Number.isFinite(c.tEnd) && c.tEnd > c.tStart ? c.tEnd : c.tStart + gapSeconds,
+      start: at,
+      end: at + c.text.length,
+      speaker: c.speaker || '',
+    });
+    lines.push(c.text);
+    at += c.text.length + 1; // the newline that joins them
+  }
+  return { text: lines.join('\n'), cues, kind: form, skipped: parsed.skipped };
+}
+
+/** Which of the three forms this is, by looking at it. */
+export function sniffTranscript(src) {
+  const s = String(src ?? '');
+  if (/^\s*WEBVTT/.test(s)) return 'vtt';
+  // An SRT timestamp uses a comma for the decimal; WebVTT uses a point. That is the only
+  // reliable difference between the two bodies, since an SRT index line is optional in
+  // practice and plenty of files in the wild omit the WEBVTT header.
+  if (/\d\d:\d\d:\d\d,\d{1,3}\s*-->/.test(s)) return 'srt';
+  if (/\d\d:\d\d[:.]\d\d[.,]?\d*\s*-->/.test(s)) return 'vtt';
+  return 'text';
+}
+
+/** `HH:MM:SS.mmm`, `MM:SS.mmm`, or either with a comma — in seconds, or NaN. */
+export function parseTimestamp(s) {
+  const m = /^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?$/.exec(String(s ?? '').trim());
+  if (!m) return NaN;
+  const [, h, mm, ss, frac] = m;
+  const mins = Number(mm);
+  const secs = Number(ss);
+  // Minutes and seconds past 59 mean this is not a timestamp — most likely a line of
+  // digits that happens to hold colons. Rejecting is better than inventing a time.
+  if (mins > 59 || secs > 59) return NaN;
+  return (Number(h || 0) * 3600) + (mins * 60) + secs
+    + (frac ? Number(frac.padEnd(3, '0')) / 1000 : 0);
+}
+
+/** VTT / SRT: blocks separated by a blank line, each with a `-->` timing line. */
+function blockCues(src, form) {
+  const cues = [];
+  let skipped = 0;
+  for (const block of src.split(/\n{2,}/)) {
+    const lines = block.split('\n').filter((l) => l.trim() !== '');
+    if (!lines.length) continue;
+    // WebVTT header and its metadata blocks carry no cue. A NOTE block can run to
+    // several lines, which is why this is a block-level skip rather than a line filter.
+    if (/^WEBVTT/.test(lines[0]) || /^(NOTE|STYLE|REGION)\b/.test(lines[0])) continue;
+    const at = lines.findIndex((l) => l.includes('-->'));
+    if (at < 0) { skipped += 1; continue; }
+    const [from, rest] = lines[at].split('-->');
+    const tStart = parseTimestamp(from);
+    // Anything after the end time is cue settings (`align:start line:90%`) — a position
+    // on screen, which this model has no use for.
+    const tEnd = parseTimestamp(String(rest ?? '').trim().split(/\s+/)[0]);
+    if (!Number.isFinite(tStart)) { skipped += 1; continue; }
+    const body = lines.slice(at + 1).map((l) => cleanCueText(l, form)).filter(Boolean);
+    if (!body.length) { skipped += 1; continue; }
+    const speaker = voiceOf(lines.slice(at + 1).join('\n')) || leadingSpeaker(body[0]);
+    cues.push({ tStart, tEnd, text: body.join(' '), speaker });
+  }
+  return { cues, skipped };
+}
+
+/**
+ * Plain timestamped lines — `[00:01:23] Ann: text`, or the same without brackets.
+ *
+ * The common shape of a transcript typed by a person or exported by a transcription
+ * service, and the reason the TODO entry named three formats rather than two. Each line
+ * records only a START, so a cue runs until the next one begins; the last gets
+ * `gapSeconds`, which is a guess and is the only guess in here.
+ */
+function plainCues(src, gapSeconds) {
+  const cues = [];
+  let skipped = 0;
+  for (const line of src.split('\n')) {
+    if (line.trim() === '') continue;
+    const m = /^\s*[[(]?\s*((?:\d+:)?\d{1,2}:\d{1,2}(?:[.,]\d{1,3})?)\s*[\])]?\s*[-–—]?\s*(.*)$/.exec(line);
+    const t = m ? parseTimestamp(m[1]) : NaN;
+    if (!Number.isFinite(t)) {
+      // A line with no timestamp belongs to the cue above it — a wrapped paragraph —
+      // rather than being dropped, which would silently lose most of a hand-typed file.
+      if (cues.length) cues[cues.length - 1].text += ` ${line.trim()}`;
+      else skipped += 1;
+      continue;
+    }
+    const text = cleanCueText(m[2], 'text');
+    if (!text) { skipped += 1; continue; }
+    cues.push({ tStart: t, tEnd: NaN, text, speaker: leadingSpeaker(text) });
+  }
+  for (let i = 0; i < cues.length - 1; i += 1) {
+    if (cues[i + 1].tStart > cues[i].tStart) cues[i].tEnd = cues[i + 1].tStart;
+  }
+  if (cues.length) {
+    const last = cues[cues.length - 1];
+    if (!Number.isFinite(last.tEnd)) last.tEnd = last.tStart + gapSeconds;
+  }
+  return { cues, skipped };
+}
+
+/** The WebVTT voice span's name: `<v Ann>text</v>`, or `<v.loud Ann>`. */
+function voiceOf(s) {
+  const m = /<v(?:\.[^\s>]+)*\s+([^>]+)>/.exec(String(s ?? ''));
+  return m ? m[1].trim() : '';
+}
+
+/**
+ * The candidate speaker label at the head of a line — a leading `Ann:`, which is how
+ * almost every hand-typed transcript marks who is talking.
+ *
+ * Only a CANDIDATE, because the evidence that settles it is not on the line. "I remember
+ * thinking: there is no way I can pay that" has a short capitalised prefix and a colon,
+ * and no line-by-line rule tells it from a name. What distinguishes a real label is that
+ * it RECURS — see {@link resolveSpeakers}.
+ */
+function leadingSpeaker(s) {
+  const m = /^([^\s:][^:]{0,31}):\s/.exec(String(s ?? ''));
+  if (!m) return '';
+  const who = m[1].trim();
+  // A timestamp that survived the line parse is not a speaker. Note this rejects the
+  // SHAPE rather than the presence of a digit: "Participant 3" and "Child 2" are
+  // ordinary labels in this literature, and banning digits banned them.
+  if (/^[\d\s:.,]+$/.test(who)) return '';
+  return who.split(/\s+/).length > 3 ? '' : who;
+}
+
+/**
+ * Decide which candidate labels are really speakers, over the whole file.
+ *
+ * A label that appears on several lines is a speaker; a one-off multi-word prefix is a
+ * sentence that happened to contain a colon. One- and two-word candidates are kept even
+ * when they appear once, because a transcript can legitimately have a single line from
+ * `Interviewer` — and at two words or fewer a false positive costs little, while losing
+ * the label costs the thing the transcript is for.
+ *
+ * Mutates in place: the cues are this function's own intermediate list, not the
+ * caller's.
+ */
+function resolveSpeakers(cues) {
+  const seen = new Map();
+  for (const c of cues) if (c.speaker) seen.set(c.speaker, (seen.get(c.speaker) ?? 0) + 1);
+  for (const c of cues) {
+    if (!c.speaker) continue;
+    const recurs = seen.get(c.speaker) > 1;
+    if (!recurs && c.speaker.split(/\s+/).length > 2) c.speaker = '';
+  }
+  return cues;
+}
+
+/**
+ * One cue line as codable text: markup out, entities decoded, whitespace settled.
+ *
+ * WebVTT allows inline tags — `<i>`, `<c.loud>`, `<v Ann>`, and mid-cue timestamps like
+ * `<00:00:02.500>` used for karaoke-style highlighting. None of it is content, and all of
+ * it would end up inside a coded quote and then inside a paper.
+ */
+function cleanCueText(line, form) {
+  let s = String(line ?? '');
+  if (form !== 'text') s = s.replace(/<[^>]*>/g, '');
+  s = s
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lrm;|&rlm;/gi, '')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    // Ampersand last, so `&amp;lt;` decodes to the text `&lt;` rather than to `<`.
+    .replace(/&amp;/gi, '&');
+  // Control characters to spaces, like `cleanName`: a stray NUL or vertical tab in a
+  // transcript breaks tokenisers quietly, and the words either side must not weld.
+  return s.replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+/**
+ * The timing value stored beside a transcript: `{media, cues}` as JSON.
+ *
+ * `media` is a list for the same reason a media document's is — a document can have more
+ * than one file — and it is the SAME list shape, so the player code does not branch on
+ * which kind of document it came from.
+ */
+export function timingValue({ cues, refs = [] }) {
+  return JSON.stringify({ v: 1, media: refs, cues });
+}
+
+/**
+ * Read a timing value back, or null if this cell is not one.
+ *
+ * Value-shaped detection, deliberately: see the note at the top of
+ * {@link parseTranscript} for why the workspace must not depend on a column NAME. Strict
+ * about what it accepts, because every other string in the dataset is offered to it.
+ */
+export function parseTiming(raw) {
+  const s = String(raw ?? '').trim();
+  if (s[0] !== '{') return null;
+  let o;
+  try { o = JSON.parse(s); } catch { return null; }
+  if (!o || typeof o !== 'object' || !Array.isArray(o.cues)) return null;
+  // `num` rather than `Number.isFinite(Number(x))`, because `Number(null)` is **0** —
+  // as are `Number('')` and `Number(' ')`. A cue with a null offset would otherwise
+  // validate as offset 0 and put a highlight on the opening words of the document. Same
+  // trap as the missing coordinate that geocoded to (0, 0).
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const cues = o.cues
+    .filter((c) => c && num(c.tStart) !== null && num(c.start) !== null && num(c.end) !== null)
+    .map((c) => ({
+      tStart: num(c.tStart),
+      // No end is recoverable — a cue is at least an instant — so it takes its start
+      // rather than being dropped with the genuinely broken ones.
+      tEnd: num(c.tEnd) ?? num(c.tStart),
+      start: num(c.start),
+      end: num(c.end),
+      speaker: typeof c.speaker === 'string' ? c.speaker : '',
+    }));
+  if (!cues.length) return null;
+  const media = Array.isArray(o.media)
+    ? o.media.filter((x) => typeof x === 'string' && (x.startsWith('asset:') || x.startsWith('data:')))
+    : [];
+  return { media, cues };
+}
+
+/** The cue a character offset falls in — what turns a coded span into a time. */
+export function cueAtChar(cues, offset) {
+  const n = Number(offset);
+  if (!Array.isArray(cues) || !Number.isFinite(n)) return null;
+  // Binary search: a transcript of a long interview holds thousands of cues and this is
+  // called for every coding on every render.
+  let lo = 0;
+  let hi = cues.length - 1;
+  let best = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const c = cues[mid];
+    if (n < c.start) { hi = mid - 1; continue; }
+    best = c;
+    if (n < c.end) return c;
+    lo = mid + 1;
+  }
+  // Past the end of a cue but before the next one: the newline between them. The cue it
+  // belongs to is the one that just ended, not the one that has not started.
+  return best;
+}
+
+/** `m:ss`, or `h:mm:ss` once it has been going an hour. */
+export function clockOf(seconds) {
+  const t = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  return h
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * Import a time-aligned transcript — WebVTT, SubRip, or plain timestamped lines.
+ *
+ * One row per file: the transcript as readable text in `text`, and `{media, cues}` in
+ * `timing` beside it. See {@link parseTranscript} for why the text stays plain and the
+ * timing is found by value shape rather than by column name.
+ *
+ * ## It asks for the media, rather than guessing at it
+ *
+ * A transcript is only half a document; the recording is the other half, and without it
+ * there is no playhead to seek. Pairing by filename was the obvious idea and is the
+ * wrong one here: the host calls an importer once per file with no knowledge of the
+ * others, so `interview1.vtt` cannot see `interview1.mp3` in the same selection, and
+ * matching against rows already in the dataset would mean guessing from a basename that
+ * often does not match at all (`Interview 1 FINAL.mp3` beside `interview1.vtt`).
+ *
+ * So it asks, once per transcript, through the host's own picker — and **Cancel is a
+ * real answer**: a transcript with no recording is still a document worth coding, and
+ * plenty of archived qualitative data is exactly that. The import says which it got.
+ *
+ * @param {object} app
+ * @param {{name: string, file: File}} arg
+ */
+export async function parseTranscriptFile(app, { name, file }) {
+  const raw = new TextDecoder('utf-8').decode(await file.arrayBuffer());
+  const { text, cues, kind, skipped } = parseTranscript(raw);
+  if (!cues.length) {
+    await app.results.appendError(
+      `“${name}” has no readable cues. A transcript needs timings — WebVTT or SubRip `
+      + 'blocks with a `-->` line, or lines that start with a timestamp.',
+    );
+    return null;
+  }
+
+  const media = await app.ui.pickFile({
+    title: `Recording for “${name}”`,
+    hint: 'The audio or video this transcript was made from — clicking a line will seek it. '
+      + 'Cancel to import the transcript on its own; it is still codable, just not playable.',
+    accept: 'audio/*,video/*',
+  });
+  const refs = [];
+  let medium = '';
+  if (media) {
+    const dims = await probeMedia(media, (media.type || '').startsWith('video') ? 'video' : 'audio');
+    medium = (media.type || '').startsWith('video') ? 'video' : 'audio';
+    const { ref } = await app.assets.put(media, {
+      type: media.type || '', name: media.name, medium, ...dims,
+    });
+    refs.push(ref);
+  }
+
+  const document = String(name).replace(/\.[^.]+$/, '') || String(name);
+  const variables = [
+    { name: 'document', type: 'string', measurementLevel: 'nominal', label: 'Source file' },
+    { name: 'text', type: 'string', measurementLevel: 'nominal', label: 'Transcript' },
+    // The timing rides in its own column so `text` stays the plain transcript: readable
+    // in the grid, codable by character span, and usable by Text analytics.
+    { name: 'timing', type: 'string', measurementLevel: 'nominal', label: 'Transcript timing' },
+    { name: 'speakers', type: 'numeric', measurementLevel: 'scale', label: 'Speakers' },
+    { name: 'cues', type: 'numeric', measurementLevel: 'scale', label: 'Transcript lines' },
+    { name: 'duration', type: 'numeric', measurementLevel: 'scale', label: 'Duration (s)' },
+  ];
+  const columns = {
+    document: [document],
+    text: [text],
+    timing: [timingValue({ cues, refs })],
+    speakers: [new Set(cues.map((c) => c.speaker).filter(Boolean)).size],
+    cues: [cues.length],
+    // From the cues, not from the file: a transcript that stops early is a fact about
+    // the transcript, and the media's own duration is recorded on the asset anyway.
+    duration: [Math.round(cues[cues.length - 1].tEnd * 1000) / 1000],
+  };
+
+  const FORMS = { vtt: 'WebVTT', srt: 'SubRip', text: 'timestamped lines' };
+  const speakers = [...new Set(cues.map((c) => c.speaker).filter(Boolean))];
+  await app.results.appendText(
+    `**Transcript imported: ${document}** — ${cues.length} line`
+    + `${cues.length === 1 ? '' : 's'} read as ${FORMS[kind] ?? kind}, running to `
+    + `${clockOf(cues[cues.length - 1].tEnd)}`
+    + (speakers.length
+      ? `, with ${speakers.length} speaker${speakers.length === 1 ? '' : 's'} `
+        + `(${speakers.slice(0, 6).join(', ')}${speakers.length > 6 ? ', …' : ''})`
+      : ', with no speaker labels')
+    + '. '
+    + (refs.length
+      ? `The ${medium} is attached, so the Coding tab will play it and clicking a line seeks it.`
+      : 'No recording was attached, so the transcript is codable but not playable — '
+        + 'import it again with the recording if you want the playhead.')
+    + (skipped
+      ? `\n\n${skipped} block(s) were skipped: no timing line, or nothing but markup.`
+      : ''),
+  );
+  return { variables, columns, source: document };
 }
 
 /** The label for codings whose code carries no theme, and for an unstamped coder. */
