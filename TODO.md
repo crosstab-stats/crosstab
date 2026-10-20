@@ -727,102 +727,6 @@ bottom; they are the project's memory and are not summarised away.
         search of one surface; build it when the second is real.
 
 
-- [ ] **Spatial workspace features (post-verb).** Pulled out of #145's space-verb
-      item — these are `builtin-spatial` features, unrelated to verb dispatch.
-  - [ ] **Layer tree in region selection column.** Display loaded boundary sets as a
-        tree in the region-selection sidebar, so the user can expand/collapse layers
-        and select regions within each.
-  - [x] **Point-in-polygon geocoding — DONE (2026-09-29).** Map layers ▸ **Assign regions…**:
-        given the boundary set already loaded in the workspace and a longitude/latitude column
-        pair, every case is matched to the region whose shape contains it. The gap it closes is
-        mundane and constant — survey and admin data arrives with coordinates and no area code,
-        while the choropleth, Moran's I by region and "Analyse selection" all need a region
-        column nobody has, so today it comes from ArcGIS or a QGIS spatial join before CrossTab
-        is opened at all.
-
-        **Hand-rolled, not Turf.js** — this entry had assumed the dependency. Even-odd ray
-        casting with holes and multipolygons is about forty lines; the dependency is not forty
-        lines, because a plugin runs in a sandboxed opaque-origin iframe, so an external import
-        means a CSP allowance, an entry in `core/assets.js`, a runtime host for the offline cache
-        and a line in the air-gap vendor script — carried forever, for arithmetic that fits on a
-        screen. Same test the owner applied to vendoring and to hand-rolled statistics: judge a
-        dependency by what maintaining it costs. `rPackages` is unchanged; no R is involved.
-
-        **Four properties decide whether a geocode can be trusted, and each is tested:**
-        - **A case on a shared border lands in exactly ONE region.** The half-open comparison
-          `(yi > y) !== (yj > y)` gives that; the intuitive `>=` counts it in both, so a
-          respondent on a county line would inflate two counties. Swept along a whole shared
-          edge, vertices included, not spot-checked. The cost of that rule is pinned too: a point
-          exactly on the *excluded outer* edge of the coverage falls in no region, is reported as
-          `outside`, and must not be "fixed" into the double-counting version.
-        - **A hole is outside.** GeoJSON rings after the first are interior, so an enclave —
-          Lesotho, a lake, a city carved out of its county — is not the surrounding region.
-        - **Three different outcomes, counted separately and all reported:** no coordinates,
-          outside every region, and inside more than one (overlapping boundary files are common;
-          the first in file order wins and the count says a choice was made). A geocode that
-          reported only its successes would be the shape of a silent wrong answer.
-        - **A swapped column pair is named as the likely cause**, because it is the most common
-          way this goes wrong and it presents as "my boundary file doesn't cover my data". Only
-          when the columns as given place almost nothing AND flipping them places most of it — a
-          looser rule cried wolf on a file that genuinely does not cover every case.
-
-        **The bug the tests found, which is the reason for writing them:** `Number(null)` is
-        **0**, as are `Number('')` and `Number(' ')`. A case with a missing coordinate was
-        therefore geocoded to whichever region contains the point (0, 0) — silently, and with
-        full confidence. The app's own numeric columns arrive as NaN so the app path was safe,
-        but a string column or any caller passing plain arrays would have hit it. A `coord()`
-        helper rejects non-numbers before coercion, and a numeric `0` (or `"0"`) is still a
-        coordinate.
-
-        **It writes a new dataset, not a column**, and that is not a limitation to route around:
-        a plugin's data surface is read-only apart from `data.create`, because the data op-log
-        belongs to the host and a plugin adding a column would be a mutation with no op behind
-        it. Same rule that made import offer a Swap ([[no-inplace-replace]]). So the result is a
-        sibling dataset with the original columns plus the region, the original is untouched, and
-        the report says so — a user looking for a new column in the grid they were on needs
-        telling where it went.
-
-        A grid index over the features' bounding boxes, because unindexed this is
-        points × regions × vertices: 10,000 respondents against 3,000 census tracts is tens of
-        millions of ring walks, which is the difference between instant and a frozen tab. 5,000
-        cases against 400 regions runs in single-digit milliseconds. 28 tests.
-
-        **Checked against `sf`, which is the authority** (`spike/compare-geo-sf.mjs`, exits
-        non-zero on disagreement). Hand-rolled arithmetic only earns its dependency saving if it
-        is right, and the owner made it a standing rule: *"it's good to check ourselves any time
-        we need to hand-roll or modify a standard R library."* Against `sf::st_within` on planar
-        geometry, over 4,000 points across squares with a shared border, a concave L, a donut
-        with its enclave as a separate region, and a two-part island: **every interior point
-        agrees, same region and same count** — including the 92 in the enclave and the 1,722
-        outside everything.
-
-        **Boundary points are where the two deliberately differ, and the harness states it as
-        three separate facts.** `sf` follows DE-9IM: a point on an edge is within NEITHER
-        neighbour and intersects BOTH — the first drops a case on a county line, the second
-        double-counts it, and neither is usable for geocoding. The half-open rule gives: never
-        more than one (the load-bearing property, since a double count is a wrong NUMBER);
-        exactly one along a shared edge, and it is one `sf` agrees the point touches; and at a
-        VERTEX, sometimes none — 2 of 9 tested — which lands in the visible `outside` count, and
-        which `sf::st_within` also puts in none, so it is a tie-breaking difference rather than a
-        containment one.
-
-        **The planar assumption is now measured rather than asserted.** `sf` 1.x uses s2 for a
-        geographic CRS, where an edge between two lon/lat points is a great-circle arc that bows
-        poleward — which is why the comparison forces planar geometry on both sides. The gap is
-        quadratic in edge length: a 10° edge bows **11.4 km**, 1° bows **121 m**, 0.1° bows
-        **1.2 m**, 0.01° bows **1 cm**. Any real boundary file has vertices a few hundred metres
-        apart, so the two models sit millimetres apart and a case would have to fall within that
-        of a border to be assigned differently. A continent-sized polygon is the one place it
-        would matter, and nobody geocodes against one.
-
-        *(Finding the s2 default is what the comparison was for: the first run showed 16
-        "disagreements" that were nothing of the kind — sf was answering a spherical question.)*
-
-        **Still not handled:** the antimeridian and the poles, where a ring's coordinates wrap.
-        Not silently wrong — those cases land in the `outside` count rather than in a neighbouring
-        region. Projected coordinate systems are the user's to reconcile: the failure message says
-        so rather than guessing at a datum.
-
 - [ ] **Verify the CAQDAS QDPX round-trip.** Runtime regression check (not tied to any
       one code change): confirm a coding project exports and re-imports losslessly.
 
@@ -7658,6 +7562,143 @@ The record of what shipped and why. Kept in full, in the original sections.
         pick silently — character-overlap and segment-matching agreement. That extends
         agreement rather than rerouting it, and `fromCodings` keeps being the
         no-setup default.
+
+- [x] **Spatial workspace features (post-verb) — BOTH DONE.** Pulled out of #145's
+      space-verb item — these are `builtin-spatial` features, unrelated to verb dispatch.
+  - [x] **Layer tree in region selection column — DONE 2026-10-20.** The sidebar is a
+        row per boundary layer, the active one expanding to its regions. 19 new tests.
+
+        **It replaced TWO controls, not one.** The sidebar listed the active set's
+        regions flat, and the other sets lived in a separate "Switch boundaries: a · b"
+        link strip under the map — two places to think about layers, and neither could
+        say how many layers there were or which regions were picked in the one you were
+        not looking at. The strip is gone.
+
+        **Expanding an inactive layer SWITCHES to it**, which is the honest rule rather
+        than a shortcut. The map draws one set at a time and a region's swatch is the
+        colour of its drawn path, so listing an undrawn layer's regions would show
+        meaningless swatches and invite ticking regions that are not on screen. Clicking
+        the ACTIVE layer folds it instead, so the list can be got out of the way without
+        losing the map.
+
+        **A layer that is not on screen still reports itself:** its region count from the
+        registry record (stored at load, so no geometry has to be read), and its selected
+        count from its own linkage blob. That last one is the part a flat list could
+        never show — selection is per-layer and persisted per-layer, so switching away
+        and back should not feel like losing it.
+
+        **Two real bugs removed on the way, both duplication:**
+        - The link strip's click handler had its own copy of the switch that re-read the
+          geometry and called `wsApplyBoundaries` directly — **leaving out the
+          `_ws.selected` restore**. So arriving at a set by clicking its link silently
+          dropped the regions you had picked there, while arriving at the same set any
+          other way kept them. There is now one `wsSwitchSet`, and `wsLoadFromSets` holds
+          only its rule (show the most recently added set) and delegates — because
+          keeping its own copy is exactly how the strip's came to be missing a line.
+        - My own first cut put the tree indent in a second rule,
+          `.region-row { padding-left: 26px }`, which works on desktop and would have
+          **silently vanished in small-screen mode**: `[data-screen="small"] .region-row`
+          is later AND more specific AND sets the `padding` shorthand, which resets
+          `padding-left` without mentioning it. Same shape as the recurring `display`
+          override. The indent now lives in the base rule and the small-screen rule
+          states all four sides.
+
+        **Verified in the browser** by rebuilding the pane in a same-origin iframe with
+        the plugin's own stylesheet (the pane itself is opaque-origin): three layers with
+        the active one open and bold on a tinted row, "5 regions · 2 selected" beside it
+        and "9 regions · 4 selected" on a collapsed one, regions indented past their
+        heading and sorted Ward 2 before Ward 10, `aria-expanded` true/false/false, and
+        the indent surviving small-screen mode at 30px with 44px touch targets.
+  - [x] **Point-in-polygon geocoding — DONE (2026-09-29).** Map layers ▸ **Assign regions…**:
+        given the boundary set already loaded in the workspace and a longitude/latitude column
+        pair, every case is matched to the region whose shape contains it. The gap it closes is
+        mundane and constant — survey and admin data arrives with coordinates and no area code,
+        while the choropleth, Moran's I by region and "Analyse selection" all need a region
+        column nobody has, so today it comes from ArcGIS or a QGIS spatial join before CrossTab
+        is opened at all.
+
+        **Hand-rolled, not Turf.js** — this entry had assumed the dependency. Even-odd ray
+        casting with holes and multipolygons is about forty lines; the dependency is not forty
+        lines, because a plugin runs in a sandboxed opaque-origin iframe, so an external import
+        means a CSP allowance, an entry in `core/assets.js`, a runtime host for the offline cache
+        and a line in the air-gap vendor script — carried forever, for arithmetic that fits on a
+        screen. Same test the owner applied to vendoring and to hand-rolled statistics: judge a
+        dependency by what maintaining it costs. `rPackages` is unchanged; no R is involved.
+
+        **Four properties decide whether a geocode can be trusted, and each is tested:**
+        - **A case on a shared border lands in exactly ONE region.** The half-open comparison
+          `(yi > y) !== (yj > y)` gives that; the intuitive `>=` counts it in both, so a
+          respondent on a county line would inflate two counties. Swept along a whole shared
+          edge, vertices included, not spot-checked. The cost of that rule is pinned too: a point
+          exactly on the *excluded outer* edge of the coverage falls in no region, is reported as
+          `outside`, and must not be "fixed" into the double-counting version.
+        - **A hole is outside.** GeoJSON rings after the first are interior, so an enclave —
+          Lesotho, a lake, a city carved out of its county — is not the surrounding region.
+        - **Three different outcomes, counted separately and all reported:** no coordinates,
+          outside every region, and inside more than one (overlapping boundary files are common;
+          the first in file order wins and the count says a choice was made). A geocode that
+          reported only its successes would be the shape of a silent wrong answer.
+        - **A swapped column pair is named as the likely cause**, because it is the most common
+          way this goes wrong and it presents as "my boundary file doesn't cover my data". Only
+          when the columns as given place almost nothing AND flipping them places most of it — a
+          looser rule cried wolf on a file that genuinely does not cover every case.
+
+        **The bug the tests found, which is the reason for writing them:** `Number(null)` is
+        **0**, as are `Number('')` and `Number(' ')`. A case with a missing coordinate was
+        therefore geocoded to whichever region contains the point (0, 0) — silently, and with
+        full confidence. The app's own numeric columns arrive as NaN so the app path was safe,
+        but a string column or any caller passing plain arrays would have hit it. A `coord()`
+        helper rejects non-numbers before coercion, and a numeric `0` (or `"0"`) is still a
+        coordinate.
+
+        **It writes a new dataset, not a column**, and that is not a limitation to route around:
+        a plugin's data surface is read-only apart from `data.create`, because the data op-log
+        belongs to the host and a plugin adding a column would be a mutation with no op behind
+        it. Same rule that made import offer a Swap ([[no-inplace-replace]]). So the result is a
+        sibling dataset with the original columns plus the region, the original is untouched, and
+        the report says so — a user looking for a new column in the grid they were on needs
+        telling where it went.
+
+        A grid index over the features' bounding boxes, because unindexed this is
+        points × regions × vertices: 10,000 respondents against 3,000 census tracts is tens of
+        millions of ring walks, which is the difference between instant and a frozen tab. 5,000
+        cases against 400 regions runs in single-digit milliseconds. 28 tests.
+
+        **Checked against `sf`, which is the authority** (`spike/compare-geo-sf.mjs`, exits
+        non-zero on disagreement). Hand-rolled arithmetic only earns its dependency saving if it
+        is right, and the owner made it a standing rule: *"it's good to check ourselves any time
+        we need to hand-roll or modify a standard R library."* Against `sf::st_within` on planar
+        geometry, over 4,000 points across squares with a shared border, a concave L, a donut
+        with its enclave as a separate region, and a two-part island: **every interior point
+        agrees, same region and same count** — including the 92 in the enclave and the 1,722
+        outside everything.
+
+        **Boundary points are where the two deliberately differ, and the harness states it as
+        three separate facts.** `sf` follows DE-9IM: a point on an edge is within NEITHER
+        neighbour and intersects BOTH — the first drops a case on a county line, the second
+        double-counts it, and neither is usable for geocoding. The half-open rule gives: never
+        more than one (the load-bearing property, since a double count is a wrong NUMBER);
+        exactly one along a shared edge, and it is one `sf` agrees the point touches; and at a
+        VERTEX, sometimes none — 2 of 9 tested — which lands in the visible `outside` count, and
+        which `sf::st_within` also puts in none, so it is a tie-breaking difference rather than a
+        containment one.
+
+        **The planar assumption is now measured rather than asserted.** `sf` 1.x uses s2 for a
+        geographic CRS, where an edge between two lon/lat points is a great-circle arc that bows
+        poleward — which is why the comparison forces planar geometry on both sides. The gap is
+        quadratic in edge length: a 10° edge bows **11.4 km**, 1° bows **121 m**, 0.1° bows
+        **1.2 m**, 0.01° bows **1 cm**. Any real boundary file has vertices a few hundred metres
+        apart, so the two models sit millimetres apart and a case would have to fall within that
+        of a border to be assigned differently. A continent-sized polygon is the one place it
+        would matter, and nobody geocodes against one.
+
+        *(Finding the s2 default is what the comparison was for: the first run showed 16
+        "disagreements" that were nothing of the kind — sf was answering a spherical question.)*
+
+        **Still not handled:** the antimeridian and the poles, where a ring's coordinates wrap.
+        Not silently wrong — those cases land in the `outside` count rather than in a neighbouring
+        region. Projected coordinate systems are the user's to reconcile: the failure message says
+        so rather than guessing at a datum.
 
 ### Hardening before any public/shared deploy
 

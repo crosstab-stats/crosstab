@@ -370,6 +370,16 @@ export const workspace = {
       keyProp: null, dataColumn: null, shadeColumn: null,
       selected: new Set(), fileName: null, activeSetId: null, activeAssetId: null,
       svgEl: null, listEl: null, statusEl: null, root,
+      // The layer tree. `sets` is the registry as last read; `collapsed` is which layers
+      // the user has folded, held for the session only — it is a view preference, not a
+      // finding, and persisting it would mean a write to the log every time someone
+      // tidied the sidebar. `selectedCounts` lets a layer that is not on screen still
+      // say how many of its regions are picked.
+      sets: [], collapsed: new Set(), selectedCounts: new Map(),
+      // Held because the tree's click handlers outlive the call that built them, and a
+      // layer switch needs the broker. Every other entry point still takes `app` as a
+      // parameter; this is the one place a long-lived listener needs it.
+      app,
     };
 
     // The stdlib's tokens and components first, so the plugin's own rules below win at
@@ -401,16 +411,30 @@ export const workspace = {
       .list-header { padding: 8px 10px; border-bottom: 1px solid #e2e6ea; display: flex; gap: 6px; align-items: center; }
       .list-header strong { flex: 1; }
       .list-body { flex: 1; overflow-y: auto; padding: 2px 0; }
-      .region-row { display: flex; align-items: center; gap: 6px; padding: 2px 10px; cursor: pointer; }
+      /* The left padding is the tree indent: it is what says a region sits UNDER its
+         layer heading. It lives here rather than in a second rule because 'padding' is a
+         shorthand, and any later rule setting it would reset the indent without
+         mentioning it — which is exactly what the small-screen block below used to do. */
+      .region-row { display: flex; align-items: center; gap: 6px; padding: 2px 10px 2px 26px; cursor: pointer; }
       .region-row:hover { background: #f0f4f8; }
       .region-row input { margin: 0; }
       .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #ccc; flex: none; }
       .map-pane.unlinked svg { opacity: 0.35; }
       .map-pane.unlinked .status { background: #fef9e7; color: #7d6608; }
       .empty { padding: 20px; text-align: center; color: #8899a6; }
-      .set-links { padding: 6px 10px; text-align: center; color: #5a6a78; font-size: 12px; border-top: 1px solid #e2e6ea; }
-      .set-links a { color: #2980b9; cursor: pointer; text-decoration: underline; }
-      .set-links a:hover { color: #1a5276; }
+      /* A layer row is a button so it is reachable by Tab and answers Enter and Space
+         without this pane re-implementing either. */
+      .layer-row { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px;
+        font: inherit; text-align: left; background: #f7f9fb; border: 0;
+        border-bottom: 1px solid #e2e6ea; cursor: pointer; color: inherit; }
+      .layer-row:hover { background: #eef3f8; }
+      .layer-row.is-active { background: #e8f1fa; }
+      .layer-row.is-active .layer-name { font-weight: 600; }
+      .layer-row:focus-visible { outline: 2px solid #2980b9; outline-offset: -2px; }
+      .twisty { flex: none; width: 10px; color: #5a6a78; }
+      .layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .layer-count { flex: none; font-size: 11px; color: #5a6a78; font-variant-numeric: tabular-nums; }
+      /* (The region indent is on .region-row itself, above.) */
 
       /* ---- Layout ------------------------------------------------------------------
          These duplicate .ct-split from the stdlib's BASE_CSS ON PURPOSE, under this
@@ -453,13 +477,15 @@ export const workspace = {
       [data-screen="small"] .list-pane { max-height: 40vh; }
       /* A region row is the primary gesture here — a checkbox and a label, 20px tall at
          desktop density. Under a thumb that is a miss waiting to happen. */
-      [data-screen="small"] .region-row { min-height: 44px; padding: 6px 12px; }
+      [data-screen="small"] .region-row { min-height: 44px; padding: 6px 12px 6px 30px; }
       [data-screen="small"] .region-row input { width: 20px; height: 20px; }
       [data-screen="small"] .list-header { padding: 8px 12px; }
       /* Also stated locally: a 44px target and the 16px that stops iOS zooming on focus
          are accessibility, not decoration, so they must not ride on an optional sheet. */
       [data-screen="small"] .list-header button { font-size: 16px; min-height: 44px; }
-      [data-screen="small"] .status, [data-screen="small"] .set-links { font-size: 14px; padding: 10px; }
+      [data-screen="small"] .status { font-size: 14px; padding: 10px; }
+      [data-screen="small"] .layer-row { min-height: 44px; font-size: 16px; }
+      [data-screen="small"] .layer-count { font-size: 13px; }
     `);
     document.adoptedStyleSheets = [sheet];
 
@@ -576,7 +602,7 @@ export async function loadBoundaries(app, opts) {
   _ws.activeAssetId = null;
   const result = await wsApplyBoundaries(app, geojson, file.name, null, null, { prompt: true });
   if (result?.ok) {
-    wsRebuildSetLinks(app, await app.items.list('boundarySets'));
+    await wsRefreshLayers(app);
   }
   return result;
 }
@@ -942,10 +968,11 @@ export async function clearBoundaries(app) {
   _ws.keyProp = null; _ws.dataColumn = null; _ws.shadeColumn = null; _ws.selected.clear();
   _ws.activeSetId = null;
   _ws.svgEl.innerHTML = '';
-  _ws.listEl.innerHTML = '';
   _ws.statusEl.textContent = 'Load a GeoJSON boundary file to begin.';
-  const old = _ws.root.querySelector('.set-links');
-  if (old) old.remove();
+  _ws.sets = [];
+  _ws.collapsed.clear();
+  _ws.selectedCounts.clear();
+  wsRenderList();
   // Remove the registry entries and their linkage. The geometry ASSETS are left alone
   // on purpose: they are content-addressed and may be shared with another set or another
   // project, so they are freed by the reference-counted sweep, never by a direct delete.
@@ -1012,30 +1039,199 @@ function wsRenderMap() {
   }
 }
 
+/**
+ * The sidebar's shape: one node per boundary layer, the active one carrying its regions.
+ *
+ * Pure, so the rules that are easy to get subtly wrong — which layer is expanded, what a
+ * layer says about itself when it is not the one on screen — can be tested without a map,
+ * a GeoJSON file or a DOM.
+ *
+ * **Only the active layer lists regions**, because the map draws one set at a time and a
+ * region's swatch is the colour of its drawn path. A collapsed or inactive layer still
+ * reports its counts, which is the part a flat list could never show: how many regions a
+ * layer has, and how many are selected in a layer you are not currently looking at.
+ *
+ * Regions sort with `numeric: true` so "Ward 2" precedes "Ward 10" — these are
+ * administrative names and half of them end in a number.
+ *
+ * @param {object} arg
+ * @param {Array<{id: string, fields?: object}>} arg.sets the boundarySets registry
+ * @param {string|null} arg.activeId
+ * @param {string[]} arg.regionKeys the active set's region keys, in feature order
+ * @param {Set<string>} arg.selected the active set's selection
+ * @param {Set<string>} arg.collapsed layer ids the user has folded away
+ * @param {Map<string, number>} [arg.selectedCounts] selected-region counts by set id,
+ *   for layers that are not the active one (their selection lives in their own linkage)
+ * @returns {Array<{id, name, count, selectedCount, active, expanded,
+ *                  regions: Array<{key, idx, checked}>}>}
+ */
+export function layerTree({
+  sets = [], activeId = null, regionKeys = [], selected = new Set(),
+  collapsed = new Set(), selectedCounts = new Map(),
+}) {
+  return (sets ?? []).map((set) => {
+    const active = set.id === activeId;
+    const expanded = active && !collapsed.has(set.id);
+    // A layer's region count comes from the registry record, which is why it can be
+    // shown for a layer whose geometry has never been read in this session.
+    const count = active
+      ? regionKeys.length
+      : (Number(set.fields?.featureCount) || 0);
+    return {
+      id: set.id,
+      name: String(set.fields?.fileName || set.id),
+      count,
+      selectedCount: active ? selected.size : (selectedCounts.get(set.id) ?? 0),
+      active,
+      expanded,
+      regions: expanded
+        ? regionKeys
+          .map((key, idx) => ({ key, idx, checked: selected.has(key) }))
+          .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }))
+        : [],
+    };
+  });
+}
+
+/** What a layer row says about itself beside its name. */
+export function layerSummary(node) {
+  const n = Number(node?.count) || 0;
+  const regions = `${n} region${n === 1 ? '' : 's'}`;
+  return node?.selectedCount ? `${regions} · ${node.selectedCount} selected` : regions;
+}
+
 function wsRenderList() {
   const list = _ws.listEl;
   list.innerHTML = '';
-  if (!_ws.regionKeys.length) {
-    list.innerHTML = '<div class="empty">No regions loaded.</div>';
+  const tree = layerTree({
+    sets: _ws.sets,
+    activeId: _ws.activeSetId,
+    regionKeys: _ws.regionKeys,
+    selected: _ws.selected,
+    collapsed: _ws.collapsed,
+    selectedCounts: _ws.selectedCounts,
+  });
+  if (!tree.length) {
+    list.innerHTML = '<div class="empty">No boundary layers loaded.</div>';
     return;
   }
-  const sorted = _ws.regionKeys.map((k, i) => ({ key: k, idx: i }))
-    .sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
-  for (const { key, idx } of sorted) {
-    const row = el('label', { class: 'region-row' });
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = _ws.selected.has(key);
-    cb.addEventListener('change', () => wsToggleRegion(key));
-    const swatch = el('span', { class: 'swatch' });
-    swatch.style.background = _ws.pathEls[idx]?.getAttribute('fill') || '#d5dbe2';
-    swatch.dataset.idx = idx;
-    const lbl = document.createElement('span');
-    lbl.textContent = key;
-    row.append(cb, swatch, lbl);
-    row.dataset.key = key;
-    list.append(row);
+  for (const node of tree) {
+    const head = el('button', { class: 'layer-row' });
+    head.type = 'button';
+    head.dataset.set = node.id;
+    if (node.active) head.classList.add('is-active');
+    head.setAttribute('aria-expanded', String(node.expanded));
+    // The twisty is text rather than an icon font: this pane is sandboxed and ships no
+    // assets, and a rotated caret is one more thing to get wrong in small-screen mode.
+    const tw = el('span', { class: 'twisty', text: node.expanded ? '\u25be' : '\u25b8' });
+    const nm = el('span', { class: 'layer-name', text: node.name });
+    const ct = el('span', { class: 'layer-count', text: layerSummary(node) });
+    head.append(tw, nm, ct);
+    head.addEventListener('click', () => { void wsToggleLayer(node.id); });
+    list.append(head);
+
+    for (const r of node.regions) {
+      const row = el('label', { class: 'region-row' });
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = r.checked;
+      cb.addEventListener('change', () => wsToggleRegion(r.key));
+      const swatch = el('span', { class: 'swatch' });
+      swatch.style.background = _ws.pathEls[r.idx]?.getAttribute('fill') || '#d5dbe2';
+      swatch.dataset.idx = r.idx;
+      const lbl = document.createElement('span');
+      lbl.textContent = r.key;
+      row.append(cb, swatch, lbl);
+      row.dataset.key = r.key;
+      list.append(row);
+    }
   }
+}
+
+/**
+ * Clicking a layer: fold the active one away, or switch to another.
+ *
+ * Switching rather than merely expanding, because the map draws one layer at a time —
+ * see {@link layerTree}. A layer that is already active just folds, so the region list
+ * can be got out of the way without losing the map.
+ */
+async function wsToggleLayer(setId) {
+  if (!_ws) return;
+  if (setId === _ws.activeSetId) {
+    if (_ws.collapsed.has(setId)) _ws.collapsed.delete(setId);
+    else _ws.collapsed.add(setId);
+    wsRenderList();
+    return;
+  }
+  _ws.collapsed.delete(setId);
+  await wsSwitchSet(_ws.app, setId);
+}
+
+/**
+ * Make a boundary set the one on screen.
+ *
+ * The one path for switching. The sidebar's old link strip had its own copy that re-read
+ * the geometry and called `wsApplyBoundaries` directly — and left out the `_ws.selected`
+ * restore that {@link wsLoadFromSets} does, so arriving at a set by clicking its link
+ * silently dropped the regions you had picked there, while arriving any other way kept
+ * them.
+ */
+async function wsSwitchSet(app, setId) {
+  const set = (_ws.sets ?? []).find((x) => x.id === setId);
+  if (!set || !app) return;
+  const features = await wsReadGeometry(app, set.fields?.assetId);
+  if (!features) {
+    // A peer can hold the registry record before the asset has synced. Say so rather
+    // than leaving the previous layer on screen with another layer's name lit.
+    _ws.statusEl.textContent = `${set.fields?.fileName || set.id} — the boundary file has not arrived in this project yet.`;
+    return;
+  }
+  const link = await app.state.read('spatial-link', setId);
+  _ws.selected = new Set(link?.selected || []);
+  _ws.shadeColumn = link?.shadeColumn || null;
+  _ws.activeSetId = setId;
+  _ws.activeAssetId = set.fields?.assetId ?? null;
+  await wsApplyBoundaries(
+    app,
+    { type: 'FeatureCollection', features },
+    set.fields?.fileName || setId,
+    set.fields?.keyProp,
+    link?.dataColumn,
+  );
+}
+
+/**
+ * Re-read the layer registry and redraw the tree.
+ *
+ * One call for "the set of layers may have changed", so no caller has to remember that
+ * the counts come from somewhere other than the registry.
+ */
+async function wsRefreshLayers(app, sets = null) {
+  if (!_ws) return;
+  _ws.sets = sets ?? await app.items.list('boundarySets');
+  await wsLoadSelectedCounts(app);
+  wsRenderList();
+}
+
+/**
+ * How many regions each layer has selected — read from each set's own linkage blob.
+ *
+ * The active layer's selection is in memory; every other layer's is on disk, and without
+ * this a collapsed layer could not say that three of its regions are picked. Few sets and
+ * a tiny blob each, so this is cheap enough to do whenever the registry changes.
+ */
+async function wsLoadSelectedCounts(app) {
+  if (!_ws) return;
+  const counts = new Map();
+  for (const set of _ws.sets ?? []) {
+    if (set.id === _ws.activeSetId) continue;
+    try {
+      const link = await app.state.read('spatial-link', set.id);
+      const n = Array.isArray(link?.selected) ? link.selected.length : 0;
+      if (n) counts.set(set.id, n);
+    } catch { /* a layer that cannot report its selection simply reports none */ }
+  }
+  _ws.selectedCounts = counts;
 }
 
 function wsToggleRegion(key) {
@@ -1108,32 +1304,6 @@ async function wsApplyShading(app) {
     `${_ws.fileName} — shaded by ${_ws.shadeColumn} (${means.size} matched of ${_ws.regionKeys.length} regions).`;
 }
 
-function wsRebuildSetLinks(app, sets) {
-  if (!_ws) return;
-  const old = _ws.root.querySelector('.set-links');
-  if (old) old.remove();
-  if (sets.length < 2) return;
-  const links = el('div', { class: 'set-links' });
-  links.textContent = 'Switch boundaries: ';
-  for (let i = 0; i < sets.length; i++) {
-    if (i > 0) links.append(document.createTextNode(' · '));
-    const s = sets[i];
-    const a = document.createElement('a');
-    a.textContent = s.fields?.fileName || s.id;
-    a.addEventListener('click', async () => {
-      const features = await wsReadGeometry(app, s.fields?.assetId);
-      if (!features) return;
-      const link = await app.state.read('spatial-link', s.id);
-      _ws.activeSetId = s.id;
-      _ws.activeAssetId = s.fields?.assetId ?? null;
-      const fc = { type: 'FeatureCollection', features };
-      await wsApplyBoundaries(app, fc, s.fields?.fileName || s.id, s.fields?.keyProp, link?.dataColumn);
-    });
-    links.append(a);
-  }
-  _ws.statusEl.insertAdjacentElement('beforebegin', links);
-}
-
 /** Read a boundary set's geometry from the asset store. The bytes live OUTSIDE the op
  * log (#152 Layer 5) — inlining a multi-megabyte FeatureCollection in a `setWorkspace`
  * payload meant every project.json, every bundle and every re-save carried a fresh copy
@@ -1166,18 +1336,20 @@ async function wsStoreBoundarySet(app, features, keyProp, fileName) {
   return setId;
 }
 
+/**
+ * Show one of the project's boundary sets on mount or refresh.
+ *
+ * All this holds is the RULE — the most recently added set is the one to show — because
+ * everything after that is {@link wsSwitchSet}. Keeping its own copy of the loading was
+ * how the old link strip came to be missing the `_ws.selected` restore: two bodies that
+ * were the same when written and then were not.
+ */
 async function wsLoadFromSets(app, sets) {
   if (!sets.length) return;
-  const last = sets[sets.length - 1];
-  const features = await wsReadGeometry(app, last.fields?.assetId);
-  if (!features) return;
-  const link = await app.state.read('spatial-link', last.id);
-  _ws.selected = new Set(link?.selected || []);
-  _ws.shadeColumn = link?.shadeColumn || null;
-  _ws.activeSetId = last.id;
-  _ws.activeAssetId = last.fields?.assetId ?? null;
-  await wsApplyBoundaries(app, { type: 'FeatureCollection', features }, last.fields?.fileName || last.id, last.fields?.keyProp, link?.dataColumn);
-  wsRebuildSetLinks(app, sets);
+  // Before the switch, because `wsSwitchSet` looks the set up in here.
+  _ws.sets = sets;
+  await wsSwitchSet(app, sets[sets.length - 1].id);
+  await wsRefreshLayers(app, sets);
 }
 
 /** Persist the registry entry + linkage. Geometry is deliberately NOT written here: it
