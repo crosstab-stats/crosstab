@@ -42,6 +42,20 @@ const CATALOG_FLUSH_MS = 400;
 /** A pending catalog change that removes the entry. */
 const REMOVED = Symbol('catalog-entry-removed');
 
+/** Do two summaries say the same thing? Compared field by field rather than by
+ * stringifying, because key ORDER would otherwise decide whether the index looked
+ * stale, and `undefined` and absent have to read as the same. */
+function sameSummary(a, b) {
+  const fields = ['name', 'savedAt', 'datasetCount', 'rowCount', 'lastOpenedAt'];
+  for (const f of fields) if ((a?.[f] ?? null) !== (b?.[f] ?? null)) return false;
+  const pa = a?.activePlugins ?? null;
+  const pb = b?.activePlugins ?? null;
+  if (Array.isArray(pa) && Array.isArray(pb)) {
+    return pa.length === pb.length && pa.every((x, i) => x === pb[i]);
+  }
+  return pa === pb;
+}
+
 /**
  * Combine two pending changes to the same entry, oldest first.
  *
@@ -139,8 +153,11 @@ export class ProjectStore {
   #flushTimer = null;
 
   /** Ids whose catalog entry this session has already put on disk. The FIRST save of a
-   * project flushes immediately because that is when the entry may need creating, and
-   * `list()` does not invent entries for folders it has no record of. */
+   * project flushes immediately, because that is when the entry may need CREATING and a
+   * creation is the one change that cannot be reconstructed cheaply: `list()` can
+   * recover a folder the catalog has no record of, but only by reading its manifest, so
+   * a catalog missing many entries turns one listing into that many reads. Writing a
+   * creation at once keeps recovery an exceptional path rather than the normal one. */
   #onDisk = new Set();
 
   constructor() {
@@ -551,6 +568,23 @@ export class ProjectStore {
       // Heal by recording removals rather than writing here — so every catalog write
       // goes through the flush, and listing a busy index costs no write at all.
       for (const e of cat.entries) if (!present.has(e.id)) this.#pendingCatalog.set(e.id, REMOVED);
+      // And heal the other way: a folder the catalog has no record of is a project that
+      // exists, so it is listed from its own manifest rather than being invisible. This
+      // is what makes the catalog a CACHE — losing it costs ordering metadata, not
+      // access to anyone's work.
+      const known = new Set(cat.entries.map((e) => e.id));
+      for (const id of present) {
+        // What makes a folder a project is that it holds a manifest, which
+        // `#recoverEntry` checks — not the shape of its name. An earlier cut tested ids
+        // against the UUID format `crypto.randomUUID` produces, which made any project
+        // whose id came from elsewhere unrecoverable, in precisely the situation
+        // recovery is for. The cost of asking is one failed read per stray directory.
+        if (known.has(id) || id === CATALOG) continue;
+        const found = await this.#recoverEntry(id);
+        if (!found) continue;
+        kept.push(found);
+        this.#pendingCatalog.set(id, composePatch(this.#pendingCatalog.get(id), () => found));
+      }
       return kept.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
     } finally {
       release();
@@ -606,8 +640,9 @@ export class ProjectStore {
     //
     // Deferred after the first save of this project: the project's own bytes are already
     // on disk above, and what is left is a browse index. The first one goes now, because
-    // that is when the ENTRY may need creating and `list()` does not invent entries for
-    // folders it has no record of.
+    // that is when the ENTRY may need creating — see `#onDisk`. Losing it costs a
+    // manifest read at the next listing rather than the project, which is what the
+    // recovery in `list()` is for.
     await this.#patchCatalog(
       id,
       (prev) => this.#summaryFor(id, manifest, prev),
@@ -623,6 +658,16 @@ export class ProjectStore {
    */
   async load(id) {
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
+    // Reconcile the index against what was just read. A catalog entry left stale by a
+    // lost flush would otherwise STAY stale for a project nobody edits: opening one to
+    // read its output stamps `lastOpenedAt` and nothing else, and without an edit there
+    // is no save to rebuild the summary.
+    //
+    // Deliberately not "trigger a save". A save writes a new `savedAt` for an edit that
+    // never happened — a lie in the log and in the History panel — and rewrites bytes
+    // that are already correct. The manifest is in hand here, so the honest repair is to
+    // make the summary agree with it and leave the project alone.
+    this.#reconcileSummary(id, manifest);
     // The single flat one-true-log (every tier). Re-attach each LIVE source op's Parquet
     // from its op-id-keyed sidecar; byte-less (retracted) source ops and every other op
     // pass through verbatim with their stable id/hlc/target intact.
@@ -937,14 +982,78 @@ export class ProjectStore {
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
-      this.#applyPatches(cat, batch, { record: true });
-      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+      if (this.#applyPatches(cat, batch, { record: true })) {
+        await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+      }
     } catch {
       // Put them back, so the next flush retries rather than silently losing the index
       // update. Newer patches for the same id win — they were computed later.
       for (const [id, patch] of batch) if (!this.#pendingCatalog.has(id)) this.#pendingCatalog.set(id, patch);
     } finally {
       release();
+    }
+  }
+
+  /**
+   * Bring the catalog entry into line with a manifest just read, if it has drifted.
+   *
+   * Fire-and-forget and deferred: it is housekeeping on a browse index, and must never
+   * delay or fail the load that noticed it. Comparing first keeps the common case free —
+   * an entry that already agrees schedules no write at all.
+   */
+  #reconcileSummary(id, manifest) {
+    if (this.#flat || !manifest) return;
+    this.#patchCatalog(id, (prev) => {
+      const next = this.#summaryFor(id, manifest, prev);
+      // `recovered` is not part of the summary; an entry that carried it is being
+      // replaced by a real one, so a drift check must not call them equal.
+      if (prev && !prev.recovered && sameSummary(prev, next)) return null;
+      return next;
+    }).catch(() => { /* the project loaded; the index can wait for the next flush */ });
+  }
+
+  /**
+   * Rebuild one project's summary from its own files, for a folder the catalog has no
+   * record of.
+   *
+   * Three outcomes, and the second is the one worth designing for:
+   *
+   *  - **Readable** — the manifest answers everything the catalog holds except
+   *    `lastOpenedAt`, which is a fact about this device and is simply absent. Nothing
+   *    is guessed.
+   *  - **Encrypted and locked** — the bytes are an envelope this store has no key for,
+   *    so the name is genuinely unknowable from here (for a protected project the
+   *    catalog was the only place it lived in the clear). It is still LISTED, with the
+   *    lock stated, because a project you cannot name is far better than a project you
+   *    cannot find: opening it prompts for the passphrase and the real name arrives with
+   *    the first successful read.
+   *  - **Neither** — no `project.json`, or bytes that are not a manifest. Not a project;
+   *    skipped, so a stray directory never becomes a phantom row.
+   *
+   * @returns {Promise<object|null>} a catalog summary, or null if this is not a project.
+   */
+  async #recoverEntry(id) {
+    let bytes;
+    try {
+      bytes = await this.#driver.read(this.#file(id, 'project.json'));
+    } catch {
+      return null;
+    }
+    if (!bytes) return null;
+    if (isEnveloped(bytes) && !this.#key) {
+      return { id, name: null, encrypted: true, savedAt: undefined, recovered: true };
+    }
+    try {
+      const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
+      if (!manifest || typeof manifest !== 'object' || typeof manifest.name !== 'string') return null;
+      return { ...this.#summaryFor(id, manifest, undefined), recovered: true };
+    } catch {
+      // Enveloped under a DIFFERENT key, or damaged. Either way the folder holds
+      // something claiming to be a project, so say it is there rather than silently
+      // dropping it — the user is the only one who can tell which it is.
+      return isEnveloped(bytes)
+        ? { id, name: null, encrypted: true, savedAt: undefined, recovered: true }
+        : null;
     }
   }
 
@@ -960,19 +1069,26 @@ export class ProjectStore {
    * them pending, because listing does not write them.
    */
   #applyPatches(cat, batch, { record = false } = {}) {
+    let changed = 0;
     for (const [id, patch] of batch) {
       const idx = cat.entries.findIndex((e) => e.id === id);
       if (patch === REMOVED) {
-        if (idx >= 0) cat.entries.splice(idx, 1);
+        if (idx >= 0) { cat.entries.splice(idx, 1); changed += 1; }
         if (record) this.#onDisk.delete(id);
         continue;
       }
       const next = patch(idx >= 0 ? cat.entries[idx] : undefined);
-      if (!next) continue; // the patch declined — e.g. stamping a project never saved
+      // A patch may DECLINE by returning null: stamping a project that has no entry, or
+      // a reconcile finding nothing has drifted. Counting those as changes would make
+      // every project open cost a full catalog write — the cost this is all here to
+      // remove, coming back through the door marked housekeeping.
+      if (!next) continue;
       if (idx >= 0) cat.entries[idx] = next;
       else cat.entries.push(next);
       if (record) this.#onDisk.add(id);
+      changed += 1;
     }
+    return changed;
   }
 
   /**

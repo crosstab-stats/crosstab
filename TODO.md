@@ -2380,12 +2380,14 @@ bottom; they are the project's memory and are not summarised away.
       instead of one clobbering the other. The old code had the same race with a wider
       window — read, rebuild, write, with the whole of `#writeSources` nowhere near it.
 
-      **What cannot wait does not.** A creation flushes before returning, because `list()`
-      does not invent entries for folders it has no record of, so a lost creation would
-      hide a real project. A rename and a delete flush too: both are deliberate acts the
-      user is watching for. Only UPDATES defer, and both ways one can be lost are
-      self-healing — a stale `savedAt` is merely stale, and a dropped deletion is caught
-      by the existing "drop entries whose folder is missing" sweep on the next `list()`.
+      **What cannot wait does not.** A creation flushes before returning: `list()` can
+      now recover a folder the catalog has no record of, but only by reading its
+      manifest, so writing a creation at once is what keeps recovery an exceptional path
+      instead of the normal one. A rename and a delete flush too: both are deliberate
+      acts the user is watching for. Only UPDATES defer, and every way one can be lost is
+      self-healing — a dropped deletion is caught by the missing-folder sweep, a dropped
+      creation by the recovery, and a stale summary is reconciled the next time the
+      project is opened.
 
       **Two bugs found while building it, both by tests:**
       - **Two pending changes to one project replaced each other** instead of composing.
@@ -2409,6 +2411,63 @@ bottom; they are the project's memory and are not summarised away.
       whole; what changed is how OFTEN. A per-project sidecar would make writes O(1) but
       turn `list()` into N reads, which is the trade the catalog exists to avoid. At
       1000 projects the flush would cost ~170 ms — but once per burst, not once per save.
+
+  - [x] **The catalog became a CACHE rather than the record of what exists
+        (2026-10-20).** Two hardenings, both prompted by the owner asking what a power
+        cut between a pending change and its flush would cost. The answer was "a stale
+        summary, for at most 400 ms" — but working it through turned up two holes that
+        had nothing to do with deferring, and everything to do with the index being
+        treated as authoritative over data that can speak for itself.
+
+        **1. A project folder with no catalog entry was invisible.** `list()` intersected
+        the catalog with the folders present, so an entry lost to a torn write — or a
+        project folder synced in from another machine — meant a project that exists on
+        disk and cannot be seen or opened. The catastrophic version: `#readCatalog`
+        degrades an unparseable file to `{entries: []}`, so one corrupt `catalog.json`
+        hid EVERY project at once. `list()` now rebuilds an unknown folder's summary
+        from its own `project.json` and writes it back, so the repair happens once.
+
+        **Verified against the real 51-project index**: `catalog.json` truncated
+        mid-write, all 52 projects came back with their names and dates, in 290 ms, and
+        the restored catalog matched byte-for-byte afterwards. A healthy index is
+        unaffected (10 ms, no manifest reads) because recovery only touches folders the
+        catalog does not already name.
+
+        **A locked project is listed as locked, not hidden.** For a protected project the
+        catalog was the only place the name lived in the clear, so after recovery the
+        name is genuinely unknowable — the entry says `encrypted: true` and `name: null`
+        rather than inventing one. Being unable to NAME a project is much better than
+        being unable to FIND it: opening it prompts for the passphrase and the real name
+        arrives with the first successful read.
+
+        **2. A stale entry stayed stale for a project nobody edits.** Opening one to read
+        its output stamps `lastOpenedAt` and nothing else, so an entry left behind by a
+        lost flush kept its old `savedAt` and row count indefinitely — there is no edit,
+        so there is no save to rebuild it. `load()` already holds a freshly-read
+        manifest, so it reconciles the summary against it for free.
+
+        **Deliberately NOT "trigger a save", which was the obvious fix.** A save writes a
+        new `savedAt` for an edit that never happened — a lie in the log and in the
+        History panel — and rewrites bytes that are already correct. A test asserts the
+        project's own `project.json` is untouched by an open.
+
+        **Two defects these tests found:**
+        - A guard rejected ids that did not match the UUID shape `crypto.randomUUID()`
+          happens to produce, so a project whose id came from anywhere else was
+          unrecoverable — in exactly the situation recovery exists for. What makes a
+          folder a project is that it holds a manifest, which the recovery already
+          checks; the format guess is gone.
+        - **A flush whose patches all DECLINED still rewrote the file.** The reconcile
+          records a patch returning null for "nothing drifted", so every project open
+          cost a 36 KB write — the exact cost this work exists to remove, coming back
+          through the door marked housekeeping. The flush now writes only if something
+          changed, confirmed on the real index: opening a settled project leaves
+          `catalog.json` untouched.
+
+        **What is still unrecoverable, and honestly so:** `lastOpenedAt`. It is a fact
+        about this device, never appears in a manifest, and only ever lived in the
+        catalog — so a recovered entry has none, and the list falls back to `savedAt`
+        ordering until you open things again.
 
       **What makes an entry 697 bytes rather than ~100** is `activePlugins`, carried in the
       summary so the launcher's rail can seed its picker without loading the project. A

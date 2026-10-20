@@ -20,6 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ProjectStore } from '../core/project-store.js';
+import { MAGIC } from '../core/crypto-envelope.js';
 
 /** An in-memory driver that COUNTS what it is asked to do, per path. */
 function countingDriver() {
@@ -76,8 +77,9 @@ const catalog = (d) => JSON.parse(new TextDecoder().decode(d.files.get('projects
 // =============================================================================
 
 test('the first save of a project writes the catalog; the next ones do not', async () => {
-  // The first is when the ENTRY may need creating, and `list()` does not invent entries
-  // for folders it has no record of — so losing that one would hide a real project.
+  // The first is when the ENTRY may need CREATING. `list()` can recover a folder the
+  // catalog has no record of, but only by reading its manifest — so writing a creation
+  // at once is what keeps recovery exceptional instead of the normal path.
   const { s, d } = store();
   await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
   assert.equal(d.catalogWrites(), 1, 'the creating save is durable at once');
@@ -293,7 +295,191 @@ test('save and refreshSummary build the SAME summary', async () => {
     new URL('../core/project-store.js', import.meta.url), 'utf8',
   );
   const uses = [...src.matchAll(/#summaryFor\(/g)].length;
-  assert.equal(uses, 3, 'one definition and two callers');
+  // One definition and every caller: save, refreshSummary, the load-time reconcile and
+  // the recovery of a folder the catalog had no record of.
+  assert.equal(uses, 5, 'one definition and four callers');
   assert.doesNotMatch(src, /activePlugins: manifest\.activePlugins,/,
     'the un-defaulted copy is gone');
+});
+
+// =============================================================================
+// The catalog is a CACHE: the folders are the truth about what exists
+// =============================================================================
+// Both hardenings close holes where the index was authoritative over data that can
+// perfectly well speak for itself, and both answer the same question: what survives a
+// power cut between a change being recorded and the flush that writes it.
+
+/** Wipe the catalog the way a torn write or a lost disk would. */
+const loseCatalog = (d) => d.files.delete('projects/catalog.json');
+
+/**
+ * Change a project's manifest WITHOUT going through `save()`, leaving the catalog behind
+ * — a manifest newer than the index.
+ *
+ * Not a contrived state: it is what a power cut between a save and its flush leaves, and
+ * equally what a folder sync or a peer delivers, since neither of those goes through this
+ * machine's `save()` either.
+ */
+function driftManifest(d, id, patch) {
+  const path = `projects/${id}/project.json`;
+  const m = JSON.parse(new TextDecoder().decode(d.files.get(path)));
+  d.files.set(path, new TextEncoder().encode(JSON.stringify({ ...m, ...patch })));
+}
+
+test('a project whose catalog entry is gone is still listed', async () => {
+  // The hole: `list()` intersected the catalog with the folders present, so an entry
+  // lost to a torn write — or arriving from another machine — meant a project that
+  // exists on disk and cannot be seen or opened.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
+  await s.flushCatalog();
+  loseCatalog(d);
+
+  const listed = await s.list();
+  assert.deepEqual(listed.map((e) => e.name), ['Study']);
+  assert.equal(listed[0].savedAt, 1000, 'rebuilt from the project’s own manifest');
+  assert.equal(listed[0].id, 'p1');
+});
+
+test('losing the whole catalog loses ordering metadata, not access', async () => {
+  // The catastrophic version: `#readCatalog` degrades a corrupt file to `{entries: []}`,
+  // which used to hide EVERY project at once.
+  const { s, d } = store();
+  for (let i = 0; i < 5; i += 1) {
+    await s.save({ id: `p${i}`, name: `Study ${i}`, savedAt: 1000 + i, bundle: bundle() });
+  }
+  await s.flushCatalog();
+  await s.markOpened('p2', 9999);
+  await s.flushCatalog();
+  d.files.set('projects/catalog.json', new TextEncoder().encode('{ this is not json'));
+
+  const listed = await s.list();
+  assert.equal(listed.length, 5, 'every project is back');
+  assert.deepEqual(listed.map((e) => e.name).sort(),
+    ['Study 0', 'Study 1', 'Study 2', 'Study 3', 'Study 4']);
+  // What is genuinely unrecoverable is the one field that only ever lived here.
+  assert.equal(listed.find((e) => e.id === 'p2').lastOpenedAt, undefined,
+    'lastOpenedAt is a fact about this device, and is honestly absent');
+});
+
+test('recovery is written back, so it happens once', async () => {
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
+  await s.flushCatalog();
+  loseCatalog(d);
+  await s.list();
+  await s.flushCatalog();
+  const reads = d.reads.get('projects/p1/project.json') ?? 0;
+  await s.list();
+  assert.equal(d.reads.get('projects/p1/project.json') ?? 0, reads,
+    'the second listing reads no manifests');
+});
+
+test('a stray directory does not become a phantom project', async () => {
+  // Recovery must not turn everything under `projects/` into a row.
+  const { s, d } = store();
+  await s.save({ id: 'c7e1f3a2-0b4d-4e5f-8a9b-1c2d3e4f5a6b', name: 'Real', savedAt: 1000, bundle: bundle() });
+  await s.flushCatalog();
+  loseCatalog(d);
+  d.files.set('projects/.DS_Store', new Uint8Array([1, 2, 3]));
+  d.files.set('projects/notes/readme.txt', new TextEncoder().encode('hello'));
+  const listed = await s.list();
+  assert.deepEqual(listed.map((e) => e.name), ['Real']);
+});
+
+test('a folder with no manifest is not a project', async () => {
+  const { s, d } = store();
+  d.files.set('projects/c7e1f3a2-0b4d-4e5f-8a9b-1c2d3e4f5a6b/src_1.parquet', new Uint8Array([1]));
+  assert.deepEqual(await s.list(), []);
+});
+
+test('a locked project is listed as locked rather than hidden', async () => {
+  // For a protected project the catalog was the only place the name lived in the clear,
+  // so the name is genuinely unknowable here. Being unable to NAME a project is far
+  // better than being unable to FIND it: opening it prompts for the passphrase.
+  const { s, d } = store();
+  const id = 'c7e1f3a2-0b4d-4e5f-8a9b-1c2d3e4f5a6b';
+  // The real magic, not four bytes typed from memory — wrong ones would make this
+  // assert nothing. Padded past the IV length so `isEnveloped` accepts it.
+  const env = new Uint8Array(32);
+  env.set(MAGIC, 0);
+  d.files.set(`projects/${id}/project.json`, env);
+  const [entry] = await s.list();
+  assert.equal(entry.id, id);
+  assert.equal(entry.encrypted, true);
+  assert.equal(entry.name, null, 'and it does not invent one');
+});
+
+// =============================================================================
+// A stale entry repairs itself when the project is opened
+// =============================================================================
+
+test('opening a project reconciles a stale catalog entry', async () => {
+  // The question this answers: a project whose entry is stale, opened only to READ its
+  // output and never edited. Nothing triggers a save, so without this the entry stayed
+  // stale indefinitely.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
+  await s.flushCatalog();
+  driftManifest(d, 'p1', { name: 'Renamed in the manifest', savedAt: 7000 });
+  assert.equal(catalog(d).entries[0].savedAt, 1000, 'the index is stale');
+
+  await s.load('p1');          // just looking; no edit, no save
+  await s.flushCatalog();
+  assert.equal(catalog(d).entries[0].savedAt, 7000, 'opening it was enough');
+  assert.equal(catalog(d).entries[0].name, 'Renamed in the manifest');
+});
+
+test('opening a project is not a save — the manifest is untouched', async () => {
+  // The remedy must not be "trigger a save": that would write a new `savedAt` for an
+  // edit that never happened, which is a lie in the log and in the History panel.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
+  await s.flushCatalog();
+  driftManifest(d, 'p1', { savedAt: 7000 });
+  const before = d.writes.get('projects/p1/project.json') ?? 0;
+  await s.load('p1');
+  await s.flushCatalog();
+  assert.equal(d.writes.get('projects/p1/project.json') ?? 0, before,
+    'the project’s own bytes were not rewritten');
+  assert.equal(catalog(d).entries[0].savedAt, 7000, 'only the index moved');
+});
+
+test('opening a project whose entry already agrees writes nothing', async () => {
+  // The common case has to stay free, or every open would cost a catalog write.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
+  await s.flushCatalog();
+  const before = d.catalogWrites();
+  await s.load('p1');
+  await s.flushCatalog();
+  assert.equal(d.catalogWrites(), before, 'nothing drifted, so nothing was written');
+});
+
+test('the reconcile keeps lastOpenedAt, which no manifest knows', async () => {
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
+  await s.markOpened('p1', 5000);
+  await s.flushCatalog();
+  driftManifest(d, 'p1', { savedAt: 7000 });
+  await s.load('p1');
+  await s.flushCatalog();
+  assert.equal(catalog(d).entries[0].lastOpenedAt, 5000);
+  assert.equal(catalog(d).entries[0].savedAt, 7000);
+});
+
+test('a load never fails because the index could not be tidied', async () => {
+  // Housekeeping on a browse index must not stand between the user and their project.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: bundle() });
+  await s.flushCatalog();
+  driftManifest(d, 'p1', { savedAt: 7000 });
+  const realWrite = d.write.bind(d);
+  d.write = async (path, bytes) => {
+    if (path === 'projects/catalog.json') throw new Error('disk full');
+    return realWrite(path, bytes);
+  };
+  const loaded = await s.load('p1');   // must not throw
+  assert.equal(loaded.name, 'Study');
+  d.write = realWrite;
 });
