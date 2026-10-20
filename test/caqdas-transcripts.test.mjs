@@ -17,10 +17,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+
+const SRC = await readFile(new URL('../plugins/builtin-caqdas/index.js', import.meta.url), 'utf8');
 
 const {
   parseTranscript, sniffTranscript, parseTimestamp, timingValue, parseTiming,
-  cueAtChar, clockOf,
+  cueAtChar, clockOf, textRuns, activeCueIndex,
 } = await import('../plugins/builtin-caqdas/index.js');
 
 // =============================================================================
@@ -401,4 +404,182 @@ test('the clock reads as a clock', () => {
   assert.equal(clockOf(3725.9), '1:02:05', 'the part-second is not rounded up to a new second');
   assert.equal(clockOf(-5), '0:00');
   assert.equal(clockOf(NaN), '0:00');
+});
+
+// =============================================================================
+// The coding surface: runs
+// =============================================================================
+// Splitting the text at every coding boundary was inline in the renderer; a transcript
+// needs the same runs grouped into lines, so it is one function now. Two copies of
+// boundary arithmetic is how a highlight ends up one character out in one view and not
+// the other.
+
+const spans = (runs) => runs.map((r) => [r.a, r.b, r.covering.length]);
+
+test('with no codings the whole document is one run', () => {
+  assert.deepEqual(spans(textRuns(10, [])), [[0, 10, 0]]);
+});
+
+test('a coding splits the text into before, the coding, and after', () => {
+  assert.deepEqual(spans(textRuns(20, [{ start: 5, end: 9 }])),
+    [[0, 5, 0], [5, 9, 1], [9, 20, 0]]);
+});
+
+test('the runs tile the document exactly — no gap, no overlap', () => {
+  // The property the renderer depends on: it concatenates run slices, so a gap loses
+  // text and an overlap duplicates it.
+  const runs = textRuns(30, [{ start: 2, end: 8 }, { start: 6, end: 12 }, { start: 20, end: 25 }]);
+  assert.equal(runs[0].a, 0);
+  assert.equal(runs[runs.length - 1].b, 30);
+  for (let i = 1; i < runs.length; i += 1) assert.equal(runs[i].a, runs[i - 1].b);
+});
+
+test('an overlapping pair gives the shared stretch BOTH codings', () => {
+  // Two coders, or two codes on one passage. The renderer colours by the first and shows
+  // every one in the tooltip, which it cannot do if the run only knows about one.
+  const runs = textRuns(20, [{ start: 2, end: 10, codeId: 'a' }, { start: 6, end: 14, codeId: 'b' }]);
+  assert.deepEqual(spans(runs), [[0, 2, 0], [2, 6, 1], [6, 10, 2], [10, 14, 1], [14, 20, 0]]);
+  assert.deepEqual(runs[2].covering.map((c) => c.codeId), ['a', 'b']);
+});
+
+test('a coding reaching past the end of the text is clamped, not dropped', () => {
+  // The text can shrink under a coding — the document was edited — and the anchor
+  // resolver leaves the offsets as it found them.
+  const runs = textRuns(10, [{ start: 8, end: 40 }]);
+  assert.deepEqual(spans(runs), [[0, 8, 0], [8, 10, 1]]);
+});
+
+test('extra boundaries split further without changing the covering', () => {
+  // The transcript pane passes its cue edges so no run straddles two lines.
+  const runs = textRuns(20, [{ start: 2, end: 18 }], [10]);
+  assert.deepEqual(spans(runs), [[0, 2, 0], [2, 10, 1], [10, 18, 1], [18, 20, 0]]);
+});
+
+test('degenerate input yields nothing rather than a broken run', () => {
+  for (const len of [0, -1, NaN, null, 'ten']) {
+    assert.deepEqual(textRuns(len, [{ start: 0, end: 5 }]), [], JSON.stringify(len));
+  }
+  // A coding with no position cannot be drawn and must not break the ones that can.
+  assert.deepEqual(spans(textRuns(10, [{ start: null, end: 5 }, { start: 2, end: 4 }])),
+    [[0, 2, 0], [2, 4, 1], [4, 10, 0]]);
+});
+
+test('a zero-width coding does not produce an empty run', () => {
+  // An empty run would be an empty <mark> — invisible, unclickable, and counted.
+  assert.deepEqual(spans(textRuns(10, [{ start: 4, end: 4 }])), [[0, 4, 0], [4, 10, 0]]);
+});
+
+// =============================================================================
+// The coding surface: which line is playing
+// =============================================================================
+
+test('the active cue follows the clock', () => {
+  const { cues } = parseTranscript(VTT);
+  assert.equal(activeCueIndex(cues, 0), 0);
+  assert.equal(activeCueIndex(cues, 3.9), 0);
+  assert.equal(activeCueIndex(cues, 4), 1);
+  assert.equal(activeCueIndex(cues, 11), 2);
+});
+
+test('before the first cue nothing is lit', () => {
+  // A transcript that starts at 0:08 should not light its first line at 0:00.
+  const { cues } = parseTranscript(['WEBVTT', '', '00:00:08.000 --> 00:00:10.000', 'late', ''].join('\n'));
+  assert.equal(activeCueIndex(cues, 0), -1);
+  assert.equal(activeCueIndex(cues, 8), 0);
+});
+
+test('a gap between cues keeps the line that just ended', () => {
+  // Silence between two lines is part of reading the one before it, and a highlight that
+  // blinks off in every pause is worse than one that lingers.
+  const { cues } = parseTranscript(['WEBVTT', '',
+    '00:00:00.000 --> 00:00:02.000', 'first', '',
+    '00:00:10.000 --> 00:00:12.000', 'second', ''].join('\n'));
+  assert.equal(activeCueIndex(cues, 5), 0, 'in the silence after the first line');
+  assert.equal(activeCueIndex(cues, 10), 1);
+});
+
+test('past the end the last line stays lit, and nonsense lights nothing', () => {
+  const { cues } = parseTranscript(VTT);
+  assert.equal(activeCueIndex(cues, 10_000), 2);
+  assert.equal(activeCueIndex(cues, NaN), -1);
+  assert.equal(activeCueIndex([], 5), -1);
+  assert.equal(activeCueIndex(null, 5), -1);
+});
+
+test('the search is right at every index, not just at the ends', () => {
+  // It binary-searches because `timeupdate` fires several times a second.
+  const plain = Array.from({ length: 300 },
+    (_, i) => `[${Math.floor(i / 60)}:${String(i % 60).padStart(2, '0')}] line ${i}`);
+  const { cues } = parseTranscript(plain.join('\n'));
+  for (let i = 0; i < cues.length; i += 1) {
+    assert.equal(activeCueIndex(cues, cues[i].tStart), i, `at the start of cue ${i}`);
+    assert.equal(activeCueIndex(cues, cues[i].tStart + 0.5), i, `mid-cue ${i}`);
+  }
+});
+
+// =============================================================================
+// The surface's wiring, which is DOM work and read from the source
+// =============================================================================
+
+test('a time gutter is marked as chrome, or it would shift every offset', async () => {
+  // Character offsets are measured by walking the text nodes in the pane. A gutter
+  // reading "0:04" that is not skipped adds four characters to every offset after it,
+  // and every highlight in the document sits adrift of the words it marks.
+  const src = await readFile(new URL('../plugins/builtin-caqdas/index.js', import.meta.url), 'utf8');
+  const render = src.slice(src.indexOf('function renderCueLines'), src.indexOf('function seekTo'));
+  assert.match(render, /gut\.setAttribute\(NONTEXT/, 'the gutter must be marked');
+  // And both directions must skip the SAME nodes, or a selection restored after a
+  // re-render lands somewhere other than where it was made.
+  const off = src.slice(src.indexOf('function offsetWithin'), src.indexOf('function offsetWithin') + 600);
+  const setr = src.slice(src.indexOf('function setSelectionRange'), src.indexOf('function setSelectionRange') + 900);
+  assert.match(off, /documentTextWalker\(container\)/);
+  assert.match(setr, /documentTextWalker\(container\)/);
+});
+
+test('the newline between two lines is in the text ONCE', () => {
+  // The newline is real text at a real offset, so the line it ends must contain it —
+  // which is why a line runs to the NEXT cue's start rather than to its own end.
+  //
+  // The first draft appended a synthetic `\n` per line INSTEAD, and the run covering the
+  // real one was then picked up by the following line. The browser pass measured 83
+  // characters in an 81-character document: one character of drift per line, so a coded
+  // highlight a word out at the top of a transcript and a sentence out at the bottom.
+  // Node could not see it — `textRuns` was right and the renderer's assembly was not.
+  const render = SRC.slice(SRC.indexOf('function renderCueLines'), SRC.indexOf('function seekTo'));
+  assert.match(render, /cues\[i \+ 1\]\.start/, 'a line runs to where the next one starts');
+  assert.doesNotMatch(render, /createTextNode\('\\n'\)/,
+    'a synthetic newline would be the second copy of one the runs already carry');
+});
+
+test('a transcript is a TEXT document, so coding it needs no new path', async () => {
+  // The whole design: the timing only adds a player and a gutter. If a transcript were
+  // its own `kind`, every one of retrieve, memos, drift, QDPX export and the quantitiser
+  // would need a branch for it.
+  const src = await readFile(new URL('../plugins/builtin-caqdas/index.js', import.meta.url), 'utf8');
+  const load = src.slice(src.indexOf('async function loadDocs'), src.indexOf('async function loadDocs') + 2400);
+  assert.match(load, /kind: 'text', text: raw, label,/);
+  assert.doesNotMatch(load, /kind: 'transcript'/);
+});
+
+test('the coded quote comes from the DOCUMENT, never from the selection string', () => {
+  // A transcript draws each line as its own block, so the browser's own
+  // `Selection.toString()` inserts and drops line breaks at those boundaries — measured
+  // over all 3321 spans of a three-line transcript in Chrome. The offsets are exact
+  // either way, so the quote must be sliced out of the document text. Reaching for
+  // `range.toString()` here would look like a simplification and would start storing the
+  // gutter clocks inside quotes.
+  const src = SRC.slice(SRC.indexOf('const currentSpan ='), SRC.indexOf('const currentSpan =') + 1200);
+  assert.match(src, /doc\.text\.slice\(lo, hi\)/);
+  assert.doesNotMatch(src, /range\.toString\(\)/);
+  assert.doesNotMatch(src, /sel\.toString\(\)/);
+});
+
+test('a time gutter is not selectable, which is a separate guard from the offsets', () => {
+  // Two different jobs: `user-select: none` decides what the BROWSER puts in a
+  // selection (so a quote copied out of the pane has no clock in the middle of the
+  // sentence), and the tree-walker filter decides what the plugin COUNTS. Neither
+  // substitutes for the other, and dropping either was a bug found in the browser.
+  const css = SRC.slice(SRC.indexOf('.caqdas__cuetime {'), SRC.indexOf('.caqdas__cuetime:hover'));
+  assert.match(css, /user-select: none/);
+  assert.match(css, /-webkit-user-select: none/, 'iPad Safari needs the prefix');
 });

@@ -1614,18 +1614,83 @@ bottom; they are the project's memory and are not summarised away.
     have Slack/Teams; and it's the *unanchored* opposite of a memo. If ever, rescope to
     ephemeral live-session-only messages, decided on its own. (Talked through with the user.)
 
-- [ ] **Transcript-linked qualitative coding (#139 follow-on).** Broken out from the
-      multimedia item above (whose media-coding core is done). Still wanted — it's the
-      dominant real qual practice. Two parts + a deferred phase:
-  - [ ] **Transcript import (Phase 1).** Import existing time-aligned transcripts —
-        **VTT / SRT / timestamped rows** — as a first-class document that references the
-        media asset. ~80% of the value cheaply; no ML needed. New importer parsers
-        (`.vtt`/`.srt` → cues with `{tStart, tEnd, text}`), attach to a media row.
-  - [ ] **Transcript-linked coding surface.** A time-aligned transcript pane beside the
-        `<audio>`/`<video>`: code the *text* (reuse the char-span selector), and clicking
-        a line **seeks the playhead** (NVivo / oTranscribe style). The playhead/seek
-        machinery already exists (`builtin-caqdas`); this adds the transcript document
-        model + the line↔time binding.
+- [~] **Transcript-linked qualitative coding (#139 follow-on).** Broken out from the
+      multimedia item above (whose media-coding core is done). The dominant real qual
+      practice. **Both non-deferred parts shipped 2026-10-20**; what is left is the
+      Whisper phase, which is deferred on scope rather than feasibility:
+  - [x] **Transcript import — DONE 2026-10-20.** WebVTT, SubRip and plain timestamped
+        lines, as `File ▸ Import data… ▸ Transcripts`. 54 new tests.
+
+        **The shape: readable text in the document column, timing beside it.** The text
+        stays a plain transcript, so the existing char-span coding works on it unchanged,
+        the grid shows words rather than JSON, and Text analytics can read the column.
+        Each cue carries BOTH its time and its character span, because one without the
+        other is useless here — the time cannot say which words to highlight, and the
+        offsets cannot move a playhead.
+
+        **Found by VALUE SHAPE, not by column name**, the way media documents already
+        are. A convention like "the column called `timing`" breaks on a rename or a join,
+        and losing the column should degrade a transcript to an ordinary text document
+        rather than breaking it. `loadDocs` probes ONE row to find which column holds a
+        timing value, so a 900-column survey is not fetched whole on the chance that one
+        of them is a transcript.
+
+        **It ASKS for the recording rather than pairing by filename.** An importer is
+        called once per file with no knowledge of the others, so `interview1.vtt` cannot
+        see `interview1.mp3` in the same selection, and matching dataset rows by basename
+        guesses (`Interview 1 FINAL.mp3`). Cancel is a real answer: an archived
+        transcript with no surviving audio is still worth coding, and the import says
+        which it got.
+
+        **Tolerant of what real files look like:** header-less VTT, comma decimals, cue
+        ids, multi-line `NOTE` blocks, cue settings after the end time, karaoke
+        timestamps, entities, BOM, CRLF — and hand-typed files, where a wrapped paragraph
+        joins the line above instead of being dropped (dropping it loses most of the
+        content, silently).
+
+        **A speaker is one that RECURS.** No line-by-line rule tells "I remember
+        thinking:" from a name — both are a short prefix before a colon — so speakers are
+        decided over the whole file. The first attempt also banned any digit to keep
+        timestamps out, which threw away "Participant 3:"; what needed excluding was a
+        timestamp's SHAPE.
+
+  - [x] **Transcript-linked coding surface — DONE 2026-10-20.** A clickable time beside
+        each line, a player above, click-to-seek, and the line being spoken lit as it
+        plays.
+
+        **A transcript is a `kind: 'text'` document.** That is the whole design: the
+        timing only adds a player and a gutter, so retrieve, memos, drift, QDPX export
+        and the quantitiser all work on it with no branch for a new kind. A test pins it.
+
+        **Every character of the document appears exactly once in the pane, and nothing
+        else does.** Both halves are load-bearing, because character offsets are measured
+        by walking that DOM — and both were bugs before they were invariants:
+        - The gutters are chrome: marked `data-ct-chrome` and skipped by the walker, in
+          BOTH `offsetWithin` and its inverse. Without it the three clocks of a
+          three-line transcript shifted every offset after them by 12 characters.
+        - They also carry `user-select: none`, which is a SEPARATE guard for a separate
+          job: a `Range` is a pair of document positions, not a filtered walk, so without
+          it a drag across two lines put "0:04" inside the user's selection and inside
+          anything they copied into a paper.
+        - A line runs to the NEXT cue's start, so the newline between two lines sits in
+          the line that ended. The first draft appended a synthetic `\n` as well and the
+          run covering the real one was picked up by the following line — one character
+          of drift per line, so a highlight a word out at the top of a transcript and a
+          sentence out at the bottom.
+
+        **The browser pass is what found all three.** Node could not: `textRuns` is
+        correct in isolation and the bugs were in the renderer's assembly and in CSS.
+        Verified by rebuilding the pane in a same-origin iframe with the plugin's own
+        stylesheet, then walking the result — 81 characters against an 81-character
+        document (83 before the fix), 0 gutter leaks across all 3321 spans of a
+        three-line transcript, offsets mapping back exactly through a straddling coding,
+        and the lines aligned by CSS subgrid.
+
+        **What remains the browser's own behaviour, not a bug:** `Selection.toString()`
+        adds and drops line breaks at block boundaries, because each line is a block.
+        The plugin never reads it — the coded quote is `doc.text.slice(lo, hi)` — and a
+        test now forbids reaching for `range.toString()`, which would look like a
+        simplification and would start putting clocks inside quotes.
   - [ ] **Whisper auto-transcription (Phase 2 — DEFERRED, feasibility confirmed).** In-
         browser transcription via transformers.js (WebGPU + WASM fallback) or whisper.cpp
         WASM; models cache offline like the R packages. A real epic (30–180 MB model

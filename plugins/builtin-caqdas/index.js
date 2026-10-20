@@ -200,6 +200,35 @@ const STYLES = `
 .caqdas__driftrow .nm { font-weight: 600; }
 .caqdas__driftrow .q { flex: 1; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__driftrow .why { color: #8a6d3b; font-size: 12px; }
+/* --- transcript pane (time-aligned text) ----------------------------------- */
+.caqdas__tplayer { padding: 6px 8px; border-bottom: 1px solid var(--ct-border, #d8dee4); background: var(--ct-surface-2, #f6f8fa); }
+.caqdas__taudio { width: 100%; }
+.caqdas__tvideo { width: 100%; max-height: 40vh; background: #000; }
+.caqdas__tloading { font-size: 12px; color: #646e77; padding: 4px 2px; }
+/* A grid, so every line's words start at the same place however long the clock is —
+   ragged text is harder to read than a wider gutter. */
+.caqdas__transcript--timed { display: grid; grid-template-columns: max-content 1fr; gap: 0 10px; align-items: start; }
+.caqdas__cue { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.caqdas__cuetime {
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #646e77; background: none; border: 0; padding: 0 2px; text-align: right;
+  cursor: pointer; border-radius: 3px;
+  /* Tabular figures so the column does not jitter between 9:59 and 10:00. */
+  font-variant-numeric: tabular-nums;
+  /* Not selectable, which is about the USER'S selection rather than about offsets.
+     A Range is a pair of document positions, not a filtered walk, so without this a
+     drag across two lines highlights the clock between them and a quote copied out of
+     the pane carries "0:04" in the middle of the sentence. (Offsets are a separate
+     problem with a separate guard — see NONTEXT.) */
+  -webkit-user-select: none;
+  user-select: none;
+}
+.caqdas__cuetime:hover { background: var(--ct-accent-soft, #dbeafe); color: var(--ct-text, #24292f); }
+.caqdas__cuetext { white-space: pre-wrap; }
+/* The line being spoken. A left bar rather than a background, because a background
+   would compete with the coding highlights — which are the colours that carry meaning. */
+.caqdas__cue.is-now .caqdas__cuetext { box-shadow: inset 2px 0 0 var(--ct-accent, #2563eb); padding-left: 6px; margin-left: -8px; }
+.caqdas__cue.is-now .caqdas__cuetime { color: var(--ct-accent, #2563eb); font-weight: 600; }
 .caqdas__segtools { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
 .caqdas__segwarn { padding: 4px 0; font-size: 12px; color: #8a6d3b; }
 .caqdas__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft); flex-wrap: wrap; }
@@ -441,6 +470,13 @@ export const workspace = {
     let timeSel = null; // pending drawn time span {tStart,tEnd} (seconds), session-only
     let currentTimeline = null, currentLanes = null, currentMediaEl = null; // live audio/video timeline refs
     let currentMedium = null; // 'image' | 'audio' | 'video' of the loaded doc
+    // Transcript pane: the cue rows on screen, the cues they were drawn from, and which
+    // row is currently lit. Held rather than re-derived because `timeupdate` fires several
+    // times a second and must not walk the DOM to find out whether anything changed.
+    let cueRows = [];
+    let currentCues = null;
+    let activeCueRow = -1;
+    let transcriptUrl = null; // the blob: URL behind a transcript's own player
     // --- video spatiotemporal (region-over-time) state ------------------------
     let activeTrack = null; // the keyframed region segment being edited (or null)
     let videoSel = null; // pending drawn box on a video frame (for a NEW track)
@@ -658,6 +694,35 @@ export const workspace = {
 
     await populateColumns();
 
+    /**
+     * Which column holds transcript timing, or null.
+     *
+     * One row, every column — the cheap probe. A dataset of transcripts has a handful of
+     * columns, and a wide survey being coded has hundreds that are certainly not timing;
+     * reading one row of each is bounded either way, and the alternative (fetch
+     * everything, then look) is not.
+     *
+     * First match wins, and the text column is skipped: a media document's own cell is a
+     * JSON array, and nothing stops someone putting a timing object where the text
+     * should be — in which case there would be no transcript to code.
+     */
+    async function findTimingColumn() {
+      try {
+        const meta = await app.data.getVariableMeta();
+        const names = meta.filter((m) => m.type !== 'numeric' && m.name !== state.textColumn)
+          .map((m) => m.name);
+        if (!names.length) return null;
+        const [first] = await app.data.getRows({ variables: names, limit: 1 });
+        if (!first) return null;
+        return names.find((n) => parseTiming(first[n])) ?? null;
+      } catch {
+        // A probe that fails must not stop the workspace mounting — the cost is a
+        // transcript that renders as plain text, which is exactly the documented
+        // degradation.
+        return null;
+      }
+    }
+
     async function loadDocs() {
       docs = [];
       activeRid = null;
@@ -665,6 +730,13 @@ export const workspace = {
       if (!state.textColumn) return;
       const vars = [state.textColumn];
       if (state.labelColumn && state.labelColumn !== state.textColumn) vars.push(state.labelColumn);
+      // A transcript's timing lives in a sibling column, found by the SHAPE of its value
+      // rather than by its name — a name breaks the moment someone renames the column or
+      // joins two datasets, and media documents are already detected the same way. Probe
+      // one row to find which column it is, so a 900-column survey is not fetched whole
+      // just in case one of them is a transcript.
+      const timingCol = await findTimingColumn();
+      if (timingCol && !vars.includes(timingCol)) vars.push(timingCol);
       const rows = await app.data.getRows({ variables: vars, includeRowId: true, limit: MAX_DOCS });
       docs = rows.map((r) => {
         const raw = String(r[state.textColumn] ?? '');
@@ -672,9 +744,17 @@ export const workspace = {
         // A media column holds a JSON array of `asset:`/`data:` refs (list-shaped even
         // for a single clip). Anything else is a plain text document.
         const refs = parseMediaRefs(raw);
-        return refs
-          ? { rid: String(r.__rid), kind: 'media', refs, label }
-          : { rid: String(r.__rid), kind: 'text', text: raw, label };
+        if (refs) return { rid: String(r.__rid), kind: 'media', refs, label };
+        // A TRANSCRIPT is a text document that also knows when each line was said. It
+        // stays `kind: 'text'` on purpose: everything about coding it — the char-span
+        // selector, the highlights, retrieve, memos, export — is the text path, and the
+        // timing only adds a player and a gutter. Lose the timing column and it is an
+        // ordinary text document again, which is the right way for this to degrade.
+        const timing = timingCol ? parseTiming(r[timingCol]) : null;
+        return {
+          rid: String(r.__rid), kind: 'text', text: raw, label,
+          ...(timing ? { timing, refs: timing.media } : {}),
+        };
       });
       activeRid = docs.length ? docs[0].rid : null;
       await resolveAllDocs();
@@ -786,11 +866,21 @@ export const workspace = {
     function renderText() {
       textPane.textContent = '';
       transcript = null;
+      // The old rows are about to be discarded; a stale reference would have `paintActiveCue`
+      // lighting an element that is no longer on screen.
+      cueRows = [];
+      currentCues = null;
+      activeCueRow = -1;
+      releaseTranscriptMedia();
       if (retrieveCodeId) { renderRetrieve(); return; }
       const doc = docs.find((d) => d.rid === activeRid);
       if (!doc) { const e = el('div', { class: 'caqdas__empty' }); e.textContent = 'Select a document.'; textPane.append(e); return; }
       if (doc.kind === 'media') { void renderMedia(doc); return; }
       renderDriftBanner(doc);
+      // A transcript with a recording gets a player above the words. A transcript
+      // WITHOUT one still renders its gutters: the times are information even when
+      // nothing can be seeked, and a reader asking "when was this said" is answered.
+      if (doc.timing?.media?.length) void attachTranscriptPlayer(doc);
       transcript = el('div', { class: 'caqdas__transcript' });
       textPane.append(transcript);
       // Only codings whose anchor still LANDS are drawn. An orphan has no position, and
@@ -799,28 +889,196 @@ export const workspace = {
       // stays fully intact — its code, its quote and its notes — until the user re-anchors
       // or removes it.
       const segs = segsFor(doc.rid).filter(isPlaced).slice().sort((a, b) => a.start - b.start || a.end - b.end);
-      // Boundary-split the text so overlapping codes still render; each run is
-      // coloured by the FIRST covering segment (v1).
-      const bounds = new Set([0, doc.text.length]);
-      for (const s of segs) { bounds.add(Math.max(0, s.start)); bounds.add(Math.min(doc.text.length, s.end)); }
-      const points = [...bounds].filter((p) => p >= 0 && p <= doc.text.length).sort((a, b) => a - b);
-      for (let i = 0; i < points.length - 1; i++) {
-        const a = points[i], b = points[i + 1];
-        if (b <= a) continue;
-        const slice = doc.text.slice(a, b);
-        const covering = segs.filter((s) => s.start <= a && s.end >= b);
-        if (!covering.length) { transcript.append(document.createTextNode(slice)); continue; }
+      // A transcript splits at its cue edges too, so no run straddles two lines.
+      const cues = doc.timing?.cues ?? null;
+      const runs = textRuns(doc.text.length, segs, cues ? cueBounds(cues) : []);
+
+      /** One run as a text node or a `<mark>`. */
+      const runNode = (run) => {
+        const slice = doc.text.slice(run.a, run.b);
+        if (!run.covering.length) return document.createTextNode(slice);
         const m = el('mark');
-        const code = codeById(covering[0].codeId);
+        const code = codeById(run.covering[0].codeId);
         m.style.backgroundColor = code ? code.color : '#eee';
-        const memoed = covering.some((s) => hasNotes(s));
-        m.title = covering.map((s) => codeById(s.codeId)?.name + (s.memo ? ` — ${s.memo}` : '')).filter(Boolean).join(', ');
-        if (memoed) m.classList.add('has-memo');
+        if (run.covering.some((x) => hasNotes(x))) m.classList.add('has-memo');
+        // On a transcript the tooltip also says WHEN — the thing a reader of a coded
+        // passage asks next, and the reason the cue index is kept at all.
+        const when = cues ? cueAtChar(cues, run.a) : null;
+        m.title = run.covering
+          .map((x) => codeById(x.codeId)?.name + (x.memo ? ` — ${x.memo}` : ''))
+          .filter(Boolean)
+          .join(', ') + (when ? ` · ${clockOf(when.tStart)}` : '');
         m.textContent = slice;
         // Click a highlight to open its segment popup (memo + remove per covering code).
-        m.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu(covering, e); });
-        transcript.append(m);
+        m.addEventListener('click', (e) => { e.stopPropagation(); openSegmentMenu(run.covering, e); });
+        return m;
+      };
+
+      if (!cues) {
+        for (const run of runs) transcript.append(runNode(run));
+        return;
       }
+      renderCueLines(doc, cues, runs, runNode);
+    }
+
+    /** Every cue edge, so a run never spans two lines of a transcript. */
+    function cueBounds(cues) {
+      const out = [];
+      for (const c of cues) { out.push(c.start); out.push(c.end); }
+      return out;
+    }
+
+    /**
+     * A transcript as lines: a clickable time beside each, the words beside that.
+     *
+     * **Every character of the document appears exactly once, and nothing else does.**
+     * Both halves of that are load-bearing, because character offsets are measured by
+     * walking this DOM:
+     *
+     *  - The newline between two cues is REAL text at a real offset, so the line that
+     *     just ended contains it — which is why a line runs to the NEXT cue's start
+     *     rather than to its own end. An earlier draft appended a synthetic `\n` as well,
+     *     and the run covering the real one was then picked up by the following line; the
+     *     browser pass measured 83 characters in an 81-character document, which is a
+     *     coded highlight a word out at the top of a transcript and a sentence out at the
+     *     bottom.
+     *  - The gutters are the reverse case: on the screen, not in the text. They carry
+     *     {@link NONTEXT} so the walker skips them.
+     *
+     * Taking a line as "up to the next cue's start" also means anything in the gap
+     * between two cues belongs to the line before it, so no part of the document can go
+     * undrawn.
+     */
+    function renderCueLines(doc, cues, runs, runNode) {
+      transcript.classList.add('caqdas__transcript--timed');
+      const lineOf = [];
+      let at = 0;
+      // A line owns everything up to where the next one starts — including the newline
+      // between them, and any gap a hand-edited timing value might leave.
+      const lineEnd = (i) => (i < cues.length - 1 ? cues[i + 1].start : doc.text.length);
+      for (const [i, cue] of cues.entries()) {
+        const row = el('div', { class: 'caqdas__cue' });
+        const gut = el('button', { class: 'caqdas__cuetime' });
+        gut.setAttribute(NONTEXT, '');
+        gut.type = 'button';
+        gut.textContent = clockOf(cue.tStart);
+        // The speaker goes in the TOOLTIP, not on the line: the label is already in the
+        // transcript text (and in any quote taken from it), so drawing it again would be
+        // a second copy that can disagree with the first. The gutter is the one place
+        // that does not already say who is talking.
+        const when = `${clockOf(cue.tStart)}\u2013${clockOf(cue.tEnd)}`;
+        gut.title = [
+          cue.speaker || null,
+          currentMediaEl ? `play from ${when}` : `${when} \u2014 no recording is attached`,
+        ].filter(Boolean).join(' \u00b7 ');
+        gut.addEventListener('click', () => seekTo(cue.tStart));
+        const body = el('div', { class: 'caqdas__cuetext' });
+        const stop = lineEnd(i);
+        while (at < runs.length && runs[at].b <= stop) { body.append(runNode(runs[at])); at += 1; }
+        if (at < runs.length && runs[at].a < stop) {
+          // A coding that runs past where this line ends: draw the part inside it and
+          // leave the remainder for the next. Cue edges are already run boundaries, so
+          // this only fires on a timing value whose cues overlap — kept as a guard,
+          // because the alternative is silently dropping text.
+          const run = runs[at];
+          body.append(runNode({ ...run, b: stop }));
+          runs[at] = { ...run, a: stop };
+        }
+        row.append(gut, body);
+        transcript.append(row);
+        lineOf.push(row);
+      }
+      // Anything after the last cue. With `lineEnd` running the final line to the end of
+      // the text there should be nothing left, but a timing value whose last cue stops
+      // short is possible, and silently not drawing part of a document is the worst
+      // outcome available here.
+      const tail = el('div', { class: 'caqdas__cue' });
+      const tailBody = el('div', { class: 'caqdas__cuetext' });
+      while (at < runs.length) { tailBody.append(runNode(runs[at])); at += 1; }
+      if (tailBody.childNodes.length) {
+        const gut = el('span', { class: 'caqdas__cuetime' });
+        gut.setAttribute(NONTEXT, '');
+        gut.textContent = '—';
+        gut.title = 'Not covered by the transcript timing';
+        tail.append(gut, tailBody);
+        transcript.append(tail);
+      }
+      cueRows = lineOf;
+      currentCues = cues;
+      paintActiveCue();
+    }
+
+    /**
+     * Load a transcript's recording and put a player above the text.
+     *
+     * Async and fire-and-forget: the transcript must be codable the instant it is drawn,
+     * not after a media file has loaded. `token` is the same guard the image/video coder
+     * uses — click through three documents quickly and the first load must not plant its
+     * player over the third one's text.
+     */
+    async function attachTranscriptPlayer(doc) {
+      const token = ++mediaLoadToken;
+      const host = el('div', { class: 'caqdas__tplayer' });
+      const loading = el('div', { class: 'caqdas__tloading' });
+      loading.textContent = 'Loading the recording…';
+      host.append(loading);
+      textPane.prepend(host);
+      let blob;
+      try {
+        blob = await app.assets.load(doc.timing.media[0]);
+      } catch (err) {
+        loading.textContent = `The recording could not be loaded: ${err.message}. The transcript is still codable.`;
+        return;
+      }
+      if (token !== mediaLoadToken || !host.isConnected) return; // a later document won
+      if (!blob) {
+        loading.textContent = 'The recording is missing from this project. The transcript is still codable.';
+        return;
+      }
+      const isVideo = String(blob.type || '').startsWith('video');
+      transcriptUrl = URL.createObjectURL(blob);
+      const player = document.createElement(isVideo ? 'video' : 'audio');
+      player.controls = true;
+      player.preload = 'metadata';
+      player.className = isVideo ? 'caqdas__tvideo' : 'caqdas__taudio';
+      player.src = transcriptUrl;
+      currentMediaEl = player;
+      currentMedium = isVideo ? 'video' : 'audio';
+      // One listener driving one class change. `paintActiveCue` returns immediately
+      // unless the cue actually changed, which is what makes a 4-per-second event safe.
+      player.addEventListener('timeupdate', paintActiveCue);
+      player.addEventListener('seeked', paintActiveCue);
+      host.textContent = '';
+      host.append(player);
+      paintActiveCue();
+    }
+
+    /** Give back the blob: URL behind a transcript's player. */
+    function releaseTranscriptMedia() {
+      if (!transcriptUrl) return;
+      // Revoking is not housekeeping here: each URL pins the whole media file in memory,
+      // and a session spent clicking through thirty interviews would hold all thirty.
+      URL.revokeObjectURL(transcriptUrl);
+      transcriptUrl = null;
+      currentMediaEl = null;
+      currentMedium = null;
+    }
+
+    /** Move the playhead, if there is one to move. */
+    function seekTo(t) {
+      if (!currentMediaEl) return;
+      try { currentMediaEl.currentTime = Math.max(0, Number(t) || 0); } catch { /* not seekable yet */ }
+      if (currentMediaEl.paused) void currentMediaEl.play().catch(() => {});
+    }
+
+    /** Mark the line being spoken, so the transcript follows the recording. */
+    function paintActiveCue() {
+      if (!cueRows.length || !currentCues) return;
+      const i = currentMediaEl ? activeCueIndex(currentCues, currentMediaEl.currentTime) : -1;
+      if (i === activeCueRow) return;
+      cueRows[activeCueRow]?.classList.remove('is-now');
+      cueRows[i]?.classList.add('is-now');
+      activeCueRow = i;
     }
 
     // Retrieve-by-code: the transcript pane lists every segment carrying one code,
@@ -4881,6 +5139,67 @@ function quotedLength(seg) {
   return typeof sel?.exact === 'string' ? sel.exact.length : 0;
 }
 
+/**
+ * Split a document's text into runs at every coding boundary — the spans that become one
+ * text node or one `<mark>` each.
+ *
+ * Pure and exported because it used to be inline in the renderer, and a transcript needs
+ * the same runs grouped into lines. Two copies of boundary arithmetic is how a highlight
+ * ends up one character out in one view and not the other.
+ *
+ * `covering` is every coding that spans the whole run, in the order given; a run covered
+ * by two overlapping codes gets both, and the renderer colours by the first. `extra`
+ * boundaries let a caller split further without knowing how this works — the transcript
+ * pane passes its cue edges, so no run ever straddles two lines.
+ *
+ * @param {number} length the document's text length
+ * @param {Array<{start: number, end: number}>} segs placed codings
+ * @param {number[]} [extra] additional boundaries to split at
+ * @returns {Array<{a: number, b: number, covering: object[]}>} in document order,
+ *   contiguous, covering [0, length) exactly
+ */
+export function textRuns(length, segs, extra = []) {
+  const len = Math.max(0, Math.floor(Number(length) || 0));
+  if (!len) return [];
+  const placed = (segs ?? []).filter((s) => Number.isFinite(s?.start) && Number.isFinite(s?.end));
+  const bounds = new Set([0, len]);
+  const clamp = (n) => Math.max(0, Math.min(len, Math.floor(n)));
+  for (const s of placed) { bounds.add(clamp(s.start)); bounds.add(clamp(s.end)); }
+  for (const e of extra ?? []) if (Number.isFinite(e)) bounds.add(clamp(e));
+  const points = [...bounds].sort((x, y) => x - y);
+  const out = [];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i];
+    const b = points[i + 1];
+    if (b <= a) continue;
+    out.push({ a, b, covering: placed.filter((s) => s.start <= a && s.end >= b) });
+  }
+  return out;
+}
+
+/**
+ * Which cue is playing at `t` — the index, or -1 before the first one starts.
+ *
+ * Used on every `timeupdate`, so it searches rather than scans: a long interview holds
+ * thousands of cues and this fires several times a second.
+ *
+ * A gap between cues keeps the cue that just ended highlighted rather than clearing the
+ * pane. Silence between two lines is part of reading the one before it, and a highlight
+ * that blinks off in every pause is worse than one that lingers.
+ */
+export function activeCueIndex(cues, t) {
+  const n = Number(t);
+  if (!Array.isArray(cues) || !cues.length || !Number.isFinite(n) || n < cues[0].tStart) return -1;
+  let lo = 0;
+  let hi = cues.length - 1;
+  let best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (cues[mid].tStart <= n) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  return best;
+}
+
 /** Fractional sort first, then name — a stable, explainable order either way. */
 function byCodeOrder(a, b) {
   const x = typeof a.sort === 'number' ? a.sort : Number.POSITIVE_INFINITY;
@@ -5151,15 +5470,43 @@ function hexToRgba(hex, alpha) {
  * it, so any chrome sharing the element — a banner, a button label — is counted as
  * document characters and shifts every offset right. Pass the transcript, never the pane
  * that contains it: that mistake anchored codings past the end of short documents. */
+/**
+ * The attribute that marks an element as CHROME: on the screen, but not part of the
+ * document's text.
+ *
+ * The transcript pane draws a time beside each line, and a character offset is measured
+ * by walking the text nodes in the pane — so without this a gutter reading "0:04" adds
+ * four characters to every offset after it, and every highlight in the document sits
+ * adrift of the words it marks.
+ */
+const NONTEXT = 'data-ct-chrome';
+
+/** Walk only the text that IS the document, skipping chrome. Used by both
+ * {@link offsetWithin} and {@link setSelectionRange}, which have to agree: if one counts
+ * a node the other skips, a selection restored after a re-render lands in the wrong
+ * place. */
+function documentTextWalker(container) {
+  return document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement && n.parentElement.closest(`[${NONTEXT}]`)
+      ? NodeFilter.FILTER_REJECT
+      : NodeFilter.FILTER_ACCEPT),
+  });
+}
+
 function offsetWithin(container, node, offset) {
   let total = 0;
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  const walker = documentTextWalker(container);
   let n;
   while ((n = walker.nextNode())) {
     if (n === node) return total + offset;
     total += n.nodeValue.length;
   }
-  return total + offset;
+  // A selection that ENDS on chrome has no offset of its own; the accumulated total is
+  // the end of the document text before it, which is the nearest honest answer. With
+  // `user-select: none` on the gutters this should be unreachable from a mouse drag — it
+  // is here for a programmatic range, and because "unreachable" is a claim about CSS
+  // support rather than about this code.
+  return total + (node && node.parentElement?.closest(`[${NONTEXT}]`) ? 0 : offset);
 }
 
 /** Re-establish a text selection over [lo, hi) character offsets within
@@ -5170,7 +5517,7 @@ function setSelectionRange(container, lo, hi) {
   const range = document.createRange();
   let acc = 0;
   let startDone = false;
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  const walker = documentTextWalker(container);
   let n;
   while ((n = walker.nextNode())) {
     const len = n.nodeValue.length;
