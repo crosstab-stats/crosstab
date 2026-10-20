@@ -165,43 +165,6 @@ bottom; they are the project's memory and are not summarised away.
       the moment. One `pluginPickerHost` bundle now, spread at both sites; the tests pin the
       SHAPE of the call rather than the dependency that happened to drift.
 
-- [x] **Two functions named `wrapLabel` — UNIFIED 2026-10-18.** One wrapper now:
-      `wrapToWidth(s, perLine, maxLines)` in the chart stdlib, with the bound optional.
-      The plugin's copy is gone and it takes the stdlib's through `lib`, which it was
-      already being handed. 2068 tests (9 new).
-
-      **The entry said "one function with an optional bound", and that was wrong — there
-      were three differences, and only one of them was a requirement.** Reading them
-      apart is most of the work; parameterising all three would have produced a function
-      with three knobs, which is two functions wearing a hat:
-
-      1. **`maxLines` + ellipsis — real, and now the third argument.** A caption sits in a
-         gutter sized from its tallest line count and must fit the panel's height; a
-         legend is a floating layer with nothing below it to push, so it has no ceiling.
-      2. **Letting a long word overflow instead of splitting it — a gap, not a choice.**
-         This is what the old entry feared changing, and it was right that it changes the
-         SCED output: a one-token behaviour code longer than the line used to run out of
-         its gutter and across the plot. It now splits, as the legend's always did, for
-         the same reason (a chemical name has no spaces to break on). Verified in the
-         browser: `Acknowledging-and-Complimenting-Others` draws as two stacked columns.
-      3. **Returning `[]` for empty text vs `['']` — the CALLER's question.** An
-         unlabelled legend entry still needs its row, because the swatch is drawn on it;
-         an absent caption must reserve no gutter at all. Both callers already ask, so
-         the wrapper answers uniformly (always at least one line, possibly blank) and the
-         SCED kind decides. Returning `[]` would have made the legend's
-         `Math.max(...lines.map(…))` `-Infinity` and NaN'd its width.
-
-      **Truncation is applied after wrapping the whole string, not by stopping the loop.**
-      The wrap is greedy and left to right, so line k cannot depend on anything after it
-      and the kept lines are identical either way — which also means a caption occupies
-      the same columns whether or not it happened to be cut. A test asserts that property
-      across every bound rather than trusting the argument.
-
-      Checked live through the real sandbox (not the Node harness, which imports the
-      stdlib directly): the host hands the plugin frame the whole module namespace, so a
-      new export needs no plumbing. Both paths drawn in the app — SCED captions split and
-      bounded, legend entries wrapping unbounded with the blank-labelled entry keeping its
-      swatch row.
 
 - [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
       shipped the project manager and is closed; these rode along inside its entry and
@@ -413,42 +376,6 @@ bottom; they are the project's memory and are not summarised away.
       bytes over the wire and is the part most likely to meet a platform limit. Until someone
       runs that, treat live-on-WebKit as unknown rather than supported.
 
-- [x] **Duplicate a project — DONE (2026-10-17).** "Duplicate" on a closed local
-      project's row menu, beside Rename and Delete.
-
-      **The owner settled the open questions** that had kept this out of #167: *"fresh
-      opIDs, fork should include current state with full log (yes, even things like step
-      reordering). Duplicate in my mind means a full duplicate and not just 'snapshot
-      what it looks like now'."*
-
-      So the whole log travels — undo markers, retractions and reorders included — and
-      the copy opens with the History the original has, every step still clickable and
-      still undoable. `reidentifyLog` (in `core/copy-to-project.js`, beside the decision
-      it contrasts with) re-mints every op id and, critically, everything that NAMES one:
-      `payload.opId` on undo/redo/retract, `payload.order` on a reorder (an array — the
-      case the owner called out; missing it would have let the fork's steps silently
-      revert to log order), and the `src_<opId>.parquet` sidecar name, without which the
-      bytes land where nothing reads them. `reads[]` is deliberately left alone: it holds
-      TARGETS, not op ids. HLC stamps and authorship stay, because re-stamping would
-      reorder the log and a full duplicate must not.
-
-      **The contrast to keep:** `copyBundle` PRESERVES op ids when copying a dataset into
-      another project, deliberately — there, shared identity is what lets the two be
-      recognised as common ancestry later. A fork wants the opposite. The two sit next to
-      each other with the reasoning written down, and a test asserts that `copyBundle`
-      still does not re-mint, so making them "agree" breaks loudly instead of quietly.
-
-      Also not carried over: the collab identity. A fork is not the same co-authoring
-      room, and inheriting it would put two different projects in one room — the same
-      hazard the fresh ids exist to prevent, arriving by another door.
-
-      **OPFS only, and only while closed.** A folder-backed project is one folder = one
-      project, so duplicating it means asking where the copy goes — a different
-      interaction, not built. Closed-only because the copy is taken from what is on disk,
-      so offering it on the open project would quietly fork the older state.
-
-      Verified in the app: the fork carried a computed variable and a logged analysis,
-      opened under its own name, and editing it left the original untouched.
 
 - [~] **Stop sharing — BUILT (2026-08-21); link revocation added 2026-10-17.**
       `core/share-state.js` + `core/sharing-settings.js` + File ▸ Sharing…. What remains is
@@ -778,370 +705,27 @@ bottom; they are the project's memory and are not summarised away.
         already exists for undoing a specific action further back. Documented rather
         than changed.
 
-- [x] **CAQDAS → statistics: quantitising coded data — SHAPES A–D ALL BUILT
-      (2026-10-18).** `Quantitise…` in the coding workspace asks which unit of analysis
-      and emits a dataset for it. What remains open is one sub-reading of D (occasions
-      WITHIN a document, which needs an interval convention chosen against a real study)
-      and the ownership question for third-party plugins — both below.
+- [ ] **Quantitising: the two pieces shapes A–D left open (2026-10-18).** The four
+      shapes are built and their reasoning is under *Completed*; these are what that work
+      deliberately did not settle.
+  - [ ] **Occasions WITHIN a document — the second reading of shape D.** An hour of video
+        binned into minutes, so the series runs inside one document rather than across
+        several. Needs a bin width AND a convention for a coding that straddles two bins:
+        momentary, partial-interval and whole-interval recording are established names for
+        choices that answer DIFFERENT questions (events vs occupancy), so picking one
+        blind would be picking the study's method for it. It is also the only reading
+        where a media file's duration is the natural exposure. Decidable with a real
+        continuously-coded study in hand, and not before.
+  - [ ] **A host read surface for coding records.** `app.items` is owner-scoped and every
+        built-in shares the `'builtin'` token, which is why `builtin-agreement` and the
+        quantitiser can read codings at all; a third-party plugin cannot. Quantitising
+        sidesteps it by emitting datasets, which every plugin can read — so this is no
+        longer blocking anything, and that is exactly why it should not be built
+        speculatively. The same surface is what a consumer outside the workspace would
+        need to RESOLVE anchors on demand (the honest answer to "where does this coding
+        sit now", as against caching offsets that rot on the next edit). Two callers in
+        search of one surface; build it when the second is real.
 
-      (Pulled out of #145 — a CAQDAS/#147 concern, not the ownership model. Was
-      "cross-plugin invocation"; the design question it was holding is **answered
-      below**.)
-
-      The old entry asked: does the derived dataset contain the coded text segments, the
-      source rows, or a frequency table of codes? **The answer is "none of those, as a
-      payload" — it is a dataset, and there are four of them, one per unit of analysis.**
-
-      **Is this a real practice?** Yes, and it is what every competitor ships. Named
-      traditions: *quantitizing* in the mixed-methods literature (Sandelowski and
-      colleagues), content analysis where counting IS the method (Krippendorff,
-      Neuendorf), and behavioural/interaction coding where codes per session become rates
-      (the Bakeman & Gottman line). Market evidence is stronger than the citations: NVivo
-      has matrix coding queries and coding comparison, MAXQDA a Crosstab and a Stats
-      module, ATLAS.ti a code-document table and a code co-occurrence table, Dedoose is
-      built around descriptor x code tables. Four competitors shipping the same four
-      features is demand.
-
-      **But the defensible form is prevalence, not raw counts.** What papers report is
-      "8 of 12 participants raised cost", not "cost was coded 31 times" — raw segment
-      counts are confounded by how much each participant talked and by how finely the
-      coder highlights, so two coders with identical judgement produce different counts.
-      There is also a real methodological objection (frequency is not importance; one
-      articulate account can outweigh ten mentions) which we should not argue with and
-      must not force. Hence: **presence/absence per case is the default, counts are the
-      opt-in, and a denominator travels with them.**
-
-      **Why a dataset and not `app.run.analysis`.** Three facts decide it:
-
-      - **A "document" is already a dataset row.** `segment.fields.doc` holds a
-        `__ct_rid` (declared in `rowRefs`), and there is no source or case record at all —
-        so the attributes are the OTHER COLUMNS OF THE SAME ROW. Age, site, condition are
-        already sitting beside the text column, which means quantitising needs no
-        attribute model, only a key.
-      - **Only built-ins can read the coding records.** `app.items` is owner-scoped and
-        every built-in shares the `'builtin'` token, which is why `builtin-agreement`
-        can reach in today. A third-party plugin cannot, so an RPC contract would need a
-        new host-mediated surface built first. A dataset needs nothing: every plugin
-        reads datasets, including third-party ones.
-      - **The decisions must be auditable.** Quantitising is five judgements (below), not
-        a conversion. Inside an analysis run they are invisible; as a dataset-creating op
-        they land in the log, in History and in the do-file, which is this project's own
-        rule that output outlives its maker. `data.create` already takes a `producedBy`
-        provenance stamp, and `Transform ▸ Join with another dataset…` is a logged op for
-        bringing more attributes in later.
-
-      `app.run.analysis` stays available as sugar afterwards ("…and run Crosstabs on
-      it") — it is just no longer the contract.
-
-      **The four shapes, each pinned to a unit of analysis:**
-
-      - **A — case x code, wide. BUILT 2026-10-18.** One row per document rid, one
-        column per code, 0/1 with Absent/Present value labels (count variant optional),
-        carried attributes, and denominators. `Quantitise…` in the coding workspace's
-        toolbar, beside Code frequency; the work is in the pure exported
-        `quantitiseCodings()`, so the whole contract is testable without a DOM.
-        2092 tests (24 new).
-
-        **Two details that decide whether it is usable, not just correct:**
-
-        - **A presence column is a `factor`, not a number.** Crosstabs accepts only
-          factor/string variables, and a code x attribute crosstab is the headline
-          reason to press the button — a numeric 0/1 would not have been offered at all.
-        - **The new dataset is NOT activated.** Switching the active dataset would
-          remount the coding workspace onto a dataset with no codings in it, which is a
-          strange reward for pressing a button in the coding tab. The result says where
-          it went instead.
-
-        **A code nobody used still gets a column of zeros**, so the dataset keeps the
-        codebook's shape as coding proceeds and two exports stay comparable — the absence
-        of a theme is a finding. Everything dropped is counted and named in the output
-        (deleted codes, out-of-scope books, rows past the 10 000 the workspace loads).
-
-        **Verified in the browser**, end to end on a real dataset through the real
-        engine: quantitise -> `Crosstabs` on `Cost x Location` renders
-        `Barriers: Cost (Cost) x Location (site)` with both sets of value labels; the
-        per-coder variant feeds the generic `Scale ▸ Inter-rater agreement…` and returns
-        75% agreement, Cohen's κ 0.467, Krippendorff's α 0.500 on 8 documents with 2
-        disagreements (κ checked by hand: expected agreement 0.531, so
-        (0.75 − 0.531) / (1 − 0.531) = 0.467). That closes the loop on the "additive
-        move" recorded under the agreement decision below.
-
-        **What the browser pass could NOT reach:** the click on the button itself. A
-        workspace pane is an opaque-origin iframe, so its DOM is unreachable from the
-        host, and screenshots of that tab time out while it is backgrounded. The host
-        half was driven for real instead — `showForm` with the exact field spec from the
-        source, returning the five keys the handler reads — and `app.ui` is known to be
-        available in a mounted workspace because builtin-spatial's workspace already
-        uses it.
-
-  - [x] **A live bug the browser pass found: `fp is not defined` in builtin-agreement
-        (fixed 2026-10-18).** Every two-rater agreement run printed both its tables and
-        then threw, losing the κ-against-zero sentence and ending the analysis in an
-        error block. `fp` was referenced in that sentence but never bound — the plugin
-        binds `fixed: f, rounded: int, unpackR: flat` and nothing else.
-
-        **Pre-existing, and nothing in 2068 tests saw it.** Not even
-        `reporting-formatters.test.mjs`, which exists for exactly this failure ("the file
-        parses, and the error arrives when a user runs it") — because its alias table
-        held ONE local name per formatter, `fmtP` was expected to be called `fmtP`, and a
-        plugin that calls it `fp` was therefore invisible. The table now holds a LIST per
-        formatter and also derives every alias any plugin actually binds, so inventing a
-        short form is covered automatically; the seeds are for the opposite case, which
-        is the one that bit — an alias no plugin binds, because the binding is what is
-        missing. Checked by removing the fix and watching the test fail with
-        `builtin-agreement: calls fp()`.
-
-        **Its remaining limit, stated rather than half-closed:** a formatter called by a
-        name that is neither bound anywhere nor seeded is still invisible. Closing that
-        needs a real unbound-identifier check, which is a linter's job and this project
-        has no linter. Worth doing as its own item if this class recurs.
-
-  - [x] **One coder resolver, shared (2026-10-18).** `coderName` moved into
-        `core/plugin-stdlib.js` and `builtin-agreement` dropped its private `coderOf`.
-        The two plugins report on the SAME people — agreement names the coders it
-        compares, the quantitiser names the per-coder columns it emits — and a coder who
-        is "RB" in one and "Rebecca B" in the other reads as two coders. It also reads
-        both places a stamp can sit (`rec.author` from the op envelope,
-        `rec.fields.author` from a plugin's own stamp), which is a distinction no call
-        site should have to make.
-      - **B — segment long. BUILT 2026-10-18.** One row per coding: document, rid,
-        `seq`, theme, code, coder, modality, the full quoted text, length, times,
-        character offsets, resolution status, and the carried attributes repeating down
-        each document's codings. `codingTable()`, 13 new tests.
-
-        **Not a second "Segments → Output".** That button writes five columns you read;
-        this writes a dataset you analyse, which is the same distinction as Code
-        frequency beside shape A. The extra columns are the proof: coder, modality,
-        times, offsets, status, sequence and attributes are all absent from the readable
-        version because a reader does not want them.
-
-        **`seq` numbers the codings in the order they occur within each document**, which
-        is the column lag-sequential analysis would need — and we have none, so the order
-        is recorded while it is free. A coding with no resolved position sorts LAST within
-        its document rather than first: having no position is not evidence of coming
-        first.
-
-        **Offsets are read off the live session objects**, where `resolveAllDocs` has put
-        them, and left null where a coding did not resolve — with `status` saying which.
-        That is the one thing in the plan that genuinely needs the workspace, and the
-        reason this is a workspace button rather than a menu analysis.
-
-        **The attribute alignment is by ROW ID, not position**, because `attrs` are
-        aligned to the full document list while the table drops empty rows — aligning by
-        position would hand one participant's codings another's attributes. Tested
-        directly, since it is the kind of off-by-one that produces plausible wrong
-        answers rather than an error.
-
-        **Verified in the browser:** 5 codings across 3 documents, ordered by document
-        then position with `seq` restarting (1,2,3 / 1 / 1), `site` repeating correctly
-        down one document's three codings and not shifted by the excluded empty row, then
-        `Correspondence analysis` on `code × site` returning a real inertia
-        decomposition and a biplot.
-
-  - [x] **A crash the shape-B pass found in builtin-ordination (fixed 2026-10-18).**
-        Correspondence analysis of `code × site` with TWO sites died with
-        `Error in x[, dim]: subscript out of bounds` — an R error, reaching the user, from
-        inside `plot(cc)`. A contingency table has one fewer dimension than its smaller
-        side, so a two-level variable yields one, and a biplot indexes a second axis that
-        is not there.
-
-        **The analysis was never the problem, only the map.** A one-dimensional solution
-        has a perfectly valid inertia table — it is a single ordering rather than a plane
-        — so the fix keeps the analysis, skips the figure, and says why in a sentence
-        that names the cause ("a table yields one fewer than its smaller side — 2
-        categories here"). Refusing the whole analysis would have thrown away a correct
-        answer to avoid an undrawable picture. A constant variable still stops with a
-        plain message, because then there is genuinely nothing to decompose.
-
-        Found by running the thing on realistic data, which is also how the `fp` bug
-        turned up. Two live crashes in two browser passes, in plugins nobody had reason
-        to suspect.
-      - **C — code-pair edge list. BUILT 2026-10-18.** `code_a`, `code_b`,
-        `docs_both`, `docs_either`, `jaccard`, `overlaps` — one row per pair, the first
-        two columns being the edge list `builtin-sna` reads as From and To.
-        `cooccurrenceEdges()`, 15 new tests.
-
-        **Two rules, both counts.** "Same document" is the default because it needs no
-        parameter and works for media as well as text; "their passages overlap" is the
-        stricter claim and needs resolved positions, so it sees text codings only. The
-        RULE decides which pairs get a row, but **both counts are always emitted**,
-        because comparing them is itself a finding: codes that share documents and never
-        overlap were discussed in the same interview, not in the same breath.
-
-        **`jaccard` is over documents either way**, and labelled as such — it is the only
-        denominator here that is a set union. An "overlap Jaccard" would need one nobody
-        agrees on, so it is not invented.
-
-        **Adjacency is not overlap.** Strict intersection, which matters because coders
-        routinely highlight consecutive passages — counting touching spans would make
-        every neighbouring pair in a transcript a tie. Tested, because it is the kind of
-        thing a reader assumes either way.
-
-        **Self-pairs are excluded and counted**, since igraph would draw a self-loop and
-        inflate that code's degree. Under theme rollup that exclusion does real work: two
-        codes of one theme overlapping would otherwise tie the theme to itself.
-
-        **Three states are kept apart, which the first draft of this conflated.**
-        `isolated` is a code that WAS applied and never once sat beside another — a
-        result about the coding. `unused` is a code nobody has applied — a fact about the
-        codebook. Neither can appear in an edge list at all, so both are named in the
-        Output; reporting the second as "occurs with nothing" would dress it up as the
-        first. **And the network has no weights**: `builtin-sna` reads only the two
-        endpoint columns, so every pair is one tie however often it occurs. Thresholding
-        is `Transform ▸ Select cases` on `docs_both` or `jaccard` first, which the Output
-        says, because that is the user's judgement to make and to state.
-
-        **Verified in the browser** on 6 documents and 5 codes: Cost–Transport Jaccard
-        1.0 (both in all four documents where either appears), Cost–Trust 0.5, one
-        isolated code and one unused code correctly separated — then **Network analysis**
-        on the result returning 3 nodes, 3 edges, density 1.0000, centralities and the
-        network plot. Which also demonstrates the caveat: that density is over the three
-        codes PRESENT, not the five in the codebook.
-      - **D — counts per case per occasion. BUILT 2026-10-18 (the across-documents
-        reading).** `case`, `session`, `occasion`, `measure`, `count`, `present`,
-        `n_docs`, `doc_chars` + carried columns — the long shape `builtin-sced`'s
-        multi-measure graph reads. `occasionCounts()`, 14 new tests.
-
-        **"Occasion" was one word doing two jobs, which is why this waited.** The two
-        readings want the same output and need different machinery:
-
-        - **Across documents (BUILT).** Eight participants interviewed three times is 24
-          documents, 3 occasions, 8 cases; the series runs between documents.
-        - **Within one document (NOT built).** An hour of video binned into minutes; the
-          series runs inside it. Needs a bin width AND a convention for a coding that
-          straddles two bins — momentary, partial-interval or whole-interval recording,
-          which are established names for choices that answer DIFFERENT questions
-          (events vs occupancy). Only decidable with a real continuously-coded study in
-          hand, and it is the only reading where media duration is the natural exposure.
-          Left open deliberately.
-
-        **Case and occasion are nominated COLUMNS, and that is the permanent answer.**
-        There is no concept of a case spanning documents anywhere in the coding model,
-        and this does not add one: `seg.doc` is a row id, so "which participant" and
-        "which interview" are already columns of that row — the same fact shape A rests
-        on. A second place to declare the grouping could only drift from the first, and
-        nominating a column lets a case be a participant in one analysis and a site in
-        the next without recoding anything. The form guesses both from the column names
-        and the guess is visible in a select, so correcting it is free.
-
-        **It also makes explicit something shape A left implicit:** shape A's unit is the
-        DOCUMENT, so when cases span documents its prevalence is "how many interviews
-        mentioned cost", not how many participants. D is the answer to that.
-
-        **Zeros are rows; missing occasions are not.** A session where the behaviour
-        never occurred is an observation, and leaving the row out makes a single-case
-        graph draw its line straight through the gap. But an occasion a case does not
-        HAVE is never invented — a participant who stopped after session two has no
-        session three, and a zero there would be fabricating an observation rather than
-        recording an absence. The two are one line apart in the code and opposite in
-        meaning.
-
-        **A phase is required by the single-case tools and no coding can supply one** —
-        when an intervention started is a fact about the study design. So it has to be a
-        carried column, the Output says so rather than letting the user find out in the
-        picker, and the form's "carry everything" hint says why you would want it. Where
-        one cell is built from several documents that disagree about a carried value, the
-        first is used and the disagreements are COUNTED, because a silent pick would make
-        a conflicting phase look settled.
-
-        **The occasion axis** uses the column's numbers when they are numbers, and
-        otherwise orders occasions by where they first appear in the data — which is the
-        user's own row order, and the same rule `builtin-sced` applies when no session
-        column is given. Alphabetical would put "Follow-up" before "Pre". The original
-        label travels in `occasion` either way, so the ordering can be checked rather
-        than trusted.
-
-        **One trap named in the Output rather than left to bite:** the multiple-baseline
-        GRAPH reads the `measure` column, but the non-overlap indices (NAP, PND, Tau-U,
-        IRD) do not — run against this table as it stands they would pool every code into
-        one series per case and report a number for nothing. The Output says to Select
-        cases down to one measure first. A wrong number that looks right is worse than an
-        error.
-
-        **Verified in the browser:** 2 participants x 6 sessions x 2 codes, baseline for
-        three sessions then intervention, quantitised and then drawn by
-        **Multiple-baseline graph, several measures** — two panels, two measures each, six
-        points per series, phases Baseline/Intervention, no errors.
-
-      The code frequency table (code, n, %) is a REPORT, not a payload. We already have
-      it; no contract should be built around it.
-
-      **What this unlocks that we cannot do at all today** — the coding workspace
-      computes a flat code frequency, a segment dump, a themed word cloud and
-      in-workspace retrieval, and nothing else: no code x document matrix, no
-      code x attribute crosstab, no co-occurrence, no boolean/proximity query. With
-      shape A alone: theme x attribute crosstabs with chi-square (the headline
-      mixed-methods output, impossible now), logistic regression on whether a case raised
-      a theme, LCA of coding patterns into participant typologies, code similarity
-      clustering, and Poisson/negbin on counts per transcript. Shapes B–D add
-      correspondence analysis, code networks, and SCED from behavioural coding.
-
-      Genuinely absent from the whole app, so quantitising will not reach them:
-      **QCA** truth tables (Ragin — whose input is literally case x condition presence,
-      so shape A would hand it its data), **lag-sequential / transition analysis**, and
-      Jaccard-type similarity. Also: `builtin-countmodels` has no exposure/offset input,
-      which is exactly why denominators must arrive as COLUMNS.
-
-      **The five decisions each run must record in its own output**, because they are
-      judgements and not facts — the standard `builtin-agreement.fromCodings` set by
-      stating its unit model in its own result:
-      1. **Unit** — document/case, segment, or interval.
-      2. **Presence vs count** — presence by default.
-      3. **Rollup** — by code or by theme. `code.group` is a flat one-level string, so
-         this is two levels and no recursive walk.
-      4. **Coder reconciliation** — pooled (double-counts), one coder, or
-         union/intersection.
-      5. **Scope** — which codebook, and whether unresolved codings are included.
-
-      Two warts to fix in passing: **code frequency counts segments from every codebook
-      while listing only the active book's codes** (`index.js:2428` vs `:2432`), and
-      **the dataset id is on no segment record** — it is only inside
-      `anchor.target` (`ds:<dsId>/cell:<col>:<rid>`), so a consumer outside the workspace
-      must parse it out or be handed it.
-
-  - [x] **Are the unpersisted offsets a gap? NO — answered 2026-10-18.** Raised because
-        "offsets aren't persisted" sounds like data loss. It is not: `textRef()` writes
-        **both** selectors into the anchor, and both are saved —
-        `{kind:'text-quote', exact, prefix, suffix}` AND
-        `{kind:'text-position', start, end}`. What `persistableSegment` strips is the
-        top-level `start`/`end`/`status`/`reason`, which are the RESOLUTION RESULT: where
-        the quote sits in the text *as it is now*, and how confident the match was.
-
-        Those are a pure function of the current cell, so persisting them would be
-        caching a value that silently rots the moment anyone edits the document —
-        precisely the bug class the anchor design exists to prevent (P1 in
-        `docs/ARCHITECTURE-coding-anchors.md`: *"Store what a coding quotes, not where it
-        sits"*, and the position selector is labelled a cache, never truth).
-
-        It also turns out not to constrain quantitising, because `text-quote.exact`
-        holds the **full** coded text — unlike `fields.quote`, which is truncated to 80
-        characters for display. So segment length and segment text need no resolution at
-        all. And at document grain, drift is irrelevant by construction: a coding belongs
-        to its row because `doc` is a rid, not a position, so a drifted coding still
-        counts for the right case. Only shape B's offsets need resolving, and shape B is
-        built inside the workspace where `resolveAllDocs()` has already run.
-
-        If a consumer outside the workspace ever needs current positions, the fix is a
-        host read surface that resolves on demand — not stored offsets. Same surface a
-        third-party plugin would need, so it belongs with the ownership question above.
-
-  - [x] **Should `builtin-agreement.fromCodings` be reworked onto the dataset route?
-        NO — decided 2026-10-18, and not for the "keep it as an example" reason.** The
-        substantive reason: **agreement's unit is not the analysis unit.** Shape A
-        answers "did this case raise theme X" AFTER reconciling coders — collapsing them
-        is decision 4 — which is exactly the information agreement needs kept. Routing it
-        through a dataset would mean emitting per-coder columns, which agreement would
-        then have to pivot back to the wide-per-coder matrix it already builds in twenty
-        lines from the source. A materialisation step, a dataset to manage, and nothing
-        gained.
-
-        **The additive move instead:** let the quantitiser optionally emit **one column
-        per coder**. Then the generic `Scale ▸ Inter-rater agreement…` (rater columns)
-        becomes usable on coded data, which gives the user the alternative unit models
-        `fromCodings`' own header calls "defensible for a specific study" but refuses to
-        pick silently — character-overlap and segment-matching agreement. That extends
-        agreement rather than rerouting it, and `fromCodings` keeps being the
-        no-setup default.
 
 - [ ] **Spatial workspace features (post-verb).** Pulled out of #145's space-verb
       item — these are `builtin-spatial` features, unrelated to verb dispatch.
@@ -1939,6 +1523,27 @@ bottom; they are the project's memory and are not summarised away.
     feature, not a collab one, so it lives in **"## More analyses"** below (the stats
     backlog). The collab foundation it needs — per-coder attribution + distinct per-coder
     segments — is DONE here (steps 2–3); the κ/α computation is the analysis-side work.
+  - [~] **4. Inter-coder reliability analysis (κ / α) — the COEFFICIENTS shipped, the
+        DISAGREEMENTS did not. (Row restored 2026-10-20; it had dropped out of this list
+        entirely, which is why the entry read as finished.)** `builtin-agreement` has both
+        paths — `Scale ▸ Inter-rater agreement…` over rater columns, and
+        `Inter-coder agreement from codings…` which reads this project's coding records
+        and needs no reshaping — giving percent agreement, Cohen's/Fleiss' κ and
+        Krippendorff's α with a benchmark reading. Browser-verified 2026-10-18, including
+        on a per-coder dataset emitted by the CAQDAS quantitiser.
+
+        **What is still missing is the other half of the original line: "surface
+        disagreements".** A coefficient says how much two coders agree; it does not say
+        WHERE they differed, and the where is what a team actually acts on — it is the
+        input to a coding-scheme revision, and κ alone cannot start that conversation.
+        Nothing lists the disagreeing units: `grep -i disagree` over the plugin finds only
+        a sentence of prose in its own how-to.
+
+        The data for it exists and needs no new storage: `fromCodings` already builds the
+        (document × code) × coder presence matrix, so the disagreeing cells are the rows
+        of that matrix where the coders differ. What it needs is a view — the units, who
+        applied the code and who did not, and a way to reach the passage.
+
   - [x] **5. Presence chips in the top bar. DONE — two-window verified during #156.** Live editors shown by initials/colour. Cheap
     add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
     the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
@@ -2305,37 +1910,6 @@ bottom; they are the project's memory and are not summarised away.
       names (2026-10-17) because those become ops in the log; variable names deliberately
       did not change.
 
-- [x] **A line-with-uncertainty-ribbon chart kind — DONE 2026-10-16 (`band`).** Built,
-      and the ARIMA forecast migrated onto it the same day; this checkbox was simply
-      missed at the time. It is NOT a copy of `steps` and not an option on it — the two
-      share one `curveKind` factory parameterised by the two functions that differ (how
-      the curve joins its points, and how the ribbon follows it), because that difference
-      IS the statistical claim each kind makes. Reusable for any fitted curve with a
-      confidence band. Original note follows.
-
-      The one thing blocking the last of the three "migrate it instead" charts, and
-      useful well beyond it. Nothing currently draws a line with a shaded interval
-      around it.
-
-      **Why neither existing kind will do**, which is the part worth not re-deciding:
-      - `scatter` draws a connected line (`model.line`) but has no band, and a forecast
-        figure without its interval has lost the point of being a forecast.
-      - `steps` has exactly the right band — it was built for Kaplan–Meier — but it is
-        deliberately a STAIRCASE, and its own header gives the statistical reason:
-        joining two estimates with a straight line claims a gradual change between them,
-        which is the opposite of what the KM estimator asserts. A forecast mean *is* a
-        continuous interpolation, so borrowing `steps` would make the same false claim in
-        the other direction. Adding a `mark: 'linear'` option to a kind named `steps`
-        would also blur the one thing it exists to say.
-
-      **Clients, in order of readiness:** `timeseries` ARIMA forecast (history + mean +
-      CI band; the plugin already extracts `point`/`lo`/`hi` for its table and would need
-      to add the history), then any fitted curve with a confidence band, a smoothed trend,
-      or a growth trajectory — all of which currently have no way to show uncertainty.
-
-      **Note when building:** adding a kind means registering it in BOTH the manifest's
-      `charts.kinds` list and `chartKinds()`. The harness asserts this, after `tornado`
-      shipped in only one of them and produced a chart mode nothing could draw.
 
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
       `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
@@ -2920,38 +2494,6 @@ bottom; they are the project's memory and are not summarised away.
         shaped value (the three encryption toggles, a relay list) is edited generically,
         and whether it absorbs the Encryption settings modal or links out to it.
 
-- [~] **Variable-picker polish — two of three DONE (2026-10-15).** The "Selected" group
-      is a snapshot taken when the dialog opens — ticking a box inside the dialog
-      deliberately does *not* live-reorder it to the top (reordering rows under the cursor
-      causes mis-clicks). That rule is what shaped both of these.
-
-      - [x] **A live "N selected" count.** The status line said "12 of 900 variables" —
-            how much the filter was showing — and never how much was *chosen*, which on a
-            900-variable extract is the number the user wants. It could not just be added
-            to `render()`, because ticking does not re-render; it is repainted on its own
-            from the change handler, into the existing `aria-live` element, so a screen
-            reader hears the tick land too. Multi-select only — "1 selected" beside a
-            radio list states what the list already shows.
-      - [x] **A "Selected only" view**, restricted to what is ticked *now* (the live set,
-            not the one the dialog opened with). Offered only for a multi-select list of
-            at least `SELECTED_ONLY_MIN` (15) — the rule the cross-dataset scope switch
-            already follows, that a control which cannot usefully change anything reads as
-            broken. Unticking inside the view leaves the row in place with its box cleared,
-            because ticking still does not re-render — the no-jumping rule paying off
-            rather than being worked around. Empty says *which* emptiness it is: "Nothing
-            is selected yet" rather than blaming a filter the reader never set.
-            The three behaviours are pure functions (`visibleVars`, `pickerCountLabel`,
-            `pickerEmptyLabel`) so they are testable without a DOM.
-      - [x] **Picker→selection write-back — DECIDED AGAINST (owner, 2026-10-15).** The
-            question was whether ticking or clearing a variable inside a run's dialog
-            should change the active selection in the Data grid. *"No. The selections (or
-            clearing selections) in the variable picker dialog is purely ephemeral to that
-            run and should not change the overall project state."*
-
-            So the current behaviour is the intended one, not an unfinished edge: the
-            picker reads the grid selection as a convenience seed and writes nothing back.
-            Worth keeping in mind for anything that looks like a near-miss here — a run's
-            inputs are the run's, and the project state is not a scratchpad for them.
 
 - [ ] **#184 — a comprehensive how-to guide (owner, 2026-09-21).** Nothing like it
       exists. What exists is scattered and each piece is deliberately narrow: *Getting
@@ -7612,6 +7154,446 @@ The record of what shipped and why. Kept in full, in the original sections.
         **The bug:** moving an analysis GREW the dataset's transform list — 1 → 2 → 5 → 10
         → 20 → 30 across repeated moves. Its own entry is above; this item is what found it.
 
+- [x] **Two functions named `wrapLabel` — UNIFIED 2026-10-18.** One wrapper now:
+      `wrapToWidth(s, perLine, maxLines)` in the chart stdlib, with the bound optional.
+      The plugin's copy is gone and it takes the stdlib's through `lib`, which it was
+      already being handed. 2068 tests (9 new).
+
+      **The entry said "one function with an optional bound", and that was wrong — there
+      were three differences, and only one of them was a requirement.** Reading them
+      apart is most of the work; parameterising all three would have produced a function
+      with three knobs, which is two functions wearing a hat:
+
+      1. **`maxLines` + ellipsis — real, and now the third argument.** A caption sits in a
+         gutter sized from its tallest line count and must fit the panel's height; a
+         legend is a floating layer with nothing below it to push, so it has no ceiling.
+      2. **Letting a long word overflow instead of splitting it — a gap, not a choice.**
+         This is what the old entry feared changing, and it was right that it changes the
+         SCED output: a one-token behaviour code longer than the line used to run out of
+         its gutter and across the plot. It now splits, as the legend's always did, for
+         the same reason (a chemical name has no spaces to break on). Verified in the
+         browser: `Acknowledging-and-Complimenting-Others` draws as two stacked columns.
+      3. **Returning `[]` for empty text vs `['']` — the CALLER's question.** An
+         unlabelled legend entry still needs its row, because the swatch is drawn on it;
+         an absent caption must reserve no gutter at all. Both callers already ask, so
+         the wrapper answers uniformly (always at least one line, possibly blank) and the
+         SCED kind decides. Returning `[]` would have made the legend's
+         `Math.max(...lines.map(…))` `-Infinity` and NaN'd its width.
+
+      **Truncation is applied after wrapping the whole string, not by stopping the loop.**
+      The wrap is greedy and left to right, so line k cannot depend on anything after it
+      and the kept lines are identical either way — which also means a caption occupies
+      the same columns whether or not it happened to be cut. A test asserts that property
+      across every bound rather than trusting the argument.
+
+      Checked live through the real sandbox (not the Node harness, which imports the
+      stdlib directly): the host hands the plugin frame the whole module namespace, so a
+      new export needs no plumbing. Both paths drawn in the app — SCED captions split and
+      bounded, legend entries wrapping unbounded with the blank-labelled entry keeping its
+      swatch row.
+
+- [x] **Duplicate a project — DONE (2026-10-17).** "Duplicate" on a closed local
+      project's row menu, beside Rename and Delete.
+
+      **The owner settled the open questions** that had kept this out of #167: *"fresh
+      opIDs, fork should include current state with full log (yes, even things like step
+      reordering). Duplicate in my mind means a full duplicate and not just 'snapshot
+      what it looks like now'."*
+
+      So the whole log travels — undo markers, retractions and reorders included — and
+      the copy opens with the History the original has, every step still clickable and
+      still undoable. `reidentifyLog` (in `core/copy-to-project.js`, beside the decision
+      it contrasts with) re-mints every op id and, critically, everything that NAMES one:
+      `payload.opId` on undo/redo/retract, `payload.order` on a reorder (an array — the
+      case the owner called out; missing it would have let the fork's steps silently
+      revert to log order), and the `src_<opId>.parquet` sidecar name, without which the
+      bytes land where nothing reads them. `reads[]` is deliberately left alone: it holds
+      TARGETS, not op ids. HLC stamps and authorship stay, because re-stamping would
+      reorder the log and a full duplicate must not.
+
+      **The contrast to keep:** `copyBundle` PRESERVES op ids when copying a dataset into
+      another project, deliberately — there, shared identity is what lets the two be
+      recognised as common ancestry later. A fork wants the opposite. The two sit next to
+      each other with the reasoning written down, and a test asserts that `copyBundle`
+      still does not re-mint, so making them "agree" breaks loudly instead of quietly.
+
+      Also not carried over: the collab identity. A fork is not the same co-authoring
+      room, and inheriting it would put two different projects in one room — the same
+      hazard the fresh ids exist to prevent, arriving by another door.
+
+      **OPFS only, and only while closed.** A folder-backed project is one folder = one
+      project, so duplicating it means asking where the copy goes — a different
+      interaction, not built. Closed-only because the copy is taken from what is on disk,
+      so offering it on the open project would quietly fork the older state.
+
+      Verified in the app: the fork carried a computed variable and a logged analysis,
+      opened under its own name, and editing it left the original untouched.
+
+- [x] **CAQDAS → statistics: quantitising coded data — SHAPES A–D ALL BUILT
+      (2026-10-18).** `Quantitise…` in the coding workspace asks which unit of analysis
+      and emits a dataset for it. What remains open is one sub-reading of D (occasions
+      WITHIN a document, which needs an interval convention chosen against a real study)
+      and the ownership question for third-party plugins — both below.
+
+      (Pulled out of #145 — a CAQDAS/#147 concern, not the ownership model. Was
+      "cross-plugin invocation"; the design question it was holding is **answered
+      below**.)
+
+      The old entry asked: does the derived dataset contain the coded text segments, the
+      source rows, or a frequency table of codes? **The answer is "none of those, as a
+      payload" — it is a dataset, and there are four of them, one per unit of analysis.**
+
+      **Is this a real practice?** Yes, and it is what every competitor ships. Named
+      traditions: *quantitizing* in the mixed-methods literature (Sandelowski and
+      colleagues), content analysis where counting IS the method (Krippendorff,
+      Neuendorf), and behavioural/interaction coding where codes per session become rates
+      (the Bakeman & Gottman line). Market evidence is stronger than the citations: NVivo
+      has matrix coding queries and coding comparison, MAXQDA a Crosstab and a Stats
+      module, ATLAS.ti a code-document table and a code co-occurrence table, Dedoose is
+      built around descriptor x code tables. Four competitors shipping the same four
+      features is demand.
+
+      **But the defensible form is prevalence, not raw counts.** What papers report is
+      "8 of 12 participants raised cost", not "cost was coded 31 times" — raw segment
+      counts are confounded by how much each participant talked and by how finely the
+      coder highlights, so two coders with identical judgement produce different counts.
+      There is also a real methodological objection (frequency is not importance; one
+      articulate account can outweigh ten mentions) which we should not argue with and
+      must not force. Hence: **presence/absence per case is the default, counts are the
+      opt-in, and a denominator travels with them.**
+
+      **Why a dataset and not `app.run.analysis`.** Three facts decide it:
+
+      - **A "document" is already a dataset row.** `segment.fields.doc` holds a
+        `__ct_rid` (declared in `rowRefs`), and there is no source or case record at all —
+        so the attributes are the OTHER COLUMNS OF THE SAME ROW. Age, site, condition are
+        already sitting beside the text column, which means quantitising needs no
+        attribute model, only a key.
+      - **Only built-ins can read the coding records.** `app.items` is owner-scoped and
+        every built-in shares the `'builtin'` token, which is why `builtin-agreement`
+        can reach in today. A third-party plugin cannot, so an RPC contract would need a
+        new host-mediated surface built first. A dataset needs nothing: every plugin
+        reads datasets, including third-party ones.
+      - **The decisions must be auditable.** Quantitising is five judgements (below), not
+        a conversion. Inside an analysis run they are invisible; as a dataset-creating op
+        they land in the log, in History and in the do-file, which is this project's own
+        rule that output outlives its maker. `data.create` already takes a `producedBy`
+        provenance stamp, and `Transform ▸ Join with another dataset…` is a logged op for
+        bringing more attributes in later.
+
+      `app.run.analysis` stays available as sugar afterwards ("…and run Crosstabs on
+      it") — it is just no longer the contract.
+
+      **The four shapes, each pinned to a unit of analysis:**
+
+      - **A — case x code, wide. BUILT 2026-10-18.** One row per document rid, one
+        column per code, 0/1 with Absent/Present value labels (count variant optional),
+        carried attributes, and denominators. `Quantitise…` in the coding workspace's
+        toolbar, beside Code frequency; the work is in the pure exported
+        `quantitiseCodings()`, so the whole contract is testable without a DOM.
+        2092 tests (24 new).
+
+        **Two details that decide whether it is usable, not just correct:**
+
+        - **A presence column is a `factor`, not a number.** Crosstabs accepts only
+          factor/string variables, and a code x attribute crosstab is the headline
+          reason to press the button — a numeric 0/1 would not have been offered at all.
+        - **The new dataset is NOT activated.** Switching the active dataset would
+          remount the coding workspace onto a dataset with no codings in it, which is a
+          strange reward for pressing a button in the coding tab. The result says where
+          it went instead.
+
+        **A code nobody used still gets a column of zeros**, so the dataset keeps the
+        codebook's shape as coding proceeds and two exports stay comparable — the absence
+        of a theme is a finding. Everything dropped is counted and named in the output
+        (deleted codes, out-of-scope books, rows past the 10 000 the workspace loads).
+
+        **Verified in the browser**, end to end on a real dataset through the real
+        engine: quantitise -> `Crosstabs` on `Cost x Location` renders
+        `Barriers: Cost (Cost) x Location (site)` with both sets of value labels; the
+        per-coder variant feeds the generic `Scale ▸ Inter-rater agreement…` and returns
+        75% agreement, Cohen's κ 0.467, Krippendorff's α 0.500 on 8 documents with 2
+        disagreements (κ checked by hand: expected agreement 0.531, so
+        (0.75 − 0.531) / (1 − 0.531) = 0.467). That closes the loop on the "additive
+        move" recorded under the agreement decision below.
+
+        **What the browser pass could NOT reach:** the click on the button itself. A
+        workspace pane is an opaque-origin iframe, so its DOM is unreachable from the
+        host, and screenshots of that tab time out while it is backgrounded. The host
+        half was driven for real instead — `showForm` with the exact field spec from the
+        source, returning the five keys the handler reads — and `app.ui` is known to be
+        available in a mounted workspace because builtin-spatial's workspace already
+        uses it.
+
+  - [x] **A live bug the browser pass found: `fp is not defined` in builtin-agreement
+        (fixed 2026-10-18).** Every two-rater agreement run printed both its tables and
+        then threw, losing the κ-against-zero sentence and ending the analysis in an
+        error block. `fp` was referenced in that sentence but never bound — the plugin
+        binds `fixed: f, rounded: int, unpackR: flat` and nothing else.
+
+        **Pre-existing, and nothing in 2068 tests saw it.** Not even
+        `reporting-formatters.test.mjs`, which exists for exactly this failure ("the file
+        parses, and the error arrives when a user runs it") — because its alias table
+        held ONE local name per formatter, `fmtP` was expected to be called `fmtP`, and a
+        plugin that calls it `fp` was therefore invisible. The table now holds a LIST per
+        formatter and also derives every alias any plugin actually binds, so inventing a
+        short form is covered automatically; the seeds are for the opposite case, which
+        is the one that bit — an alias no plugin binds, because the binding is what is
+        missing. Checked by removing the fix and watching the test fail with
+        `builtin-agreement: calls fp()`.
+
+        **Its remaining limit, stated rather than half-closed:** a formatter called by a
+        name that is neither bound anywhere nor seeded is still invisible. Closing that
+        needs a real unbound-identifier check, which is a linter's job and this project
+        has no linter. Worth doing as its own item if this class recurs.
+
+  - [x] **One coder resolver, shared (2026-10-18).** `coderName` moved into
+        `core/plugin-stdlib.js` and `builtin-agreement` dropped its private `coderOf`.
+        The two plugins report on the SAME people — agreement names the coders it
+        compares, the quantitiser names the per-coder columns it emits — and a coder who
+        is "RB" in one and "Rebecca B" in the other reads as two coders. It also reads
+        both places a stamp can sit (`rec.author` from the op envelope,
+        `rec.fields.author` from a plugin's own stamp), which is a distinction no call
+        site should have to make.
+      - **B — segment long. BUILT 2026-10-18.** One row per coding: document, rid,
+        `seq`, theme, code, coder, modality, the full quoted text, length, times,
+        character offsets, resolution status, and the carried attributes repeating down
+        each document's codings. `codingTable()`, 13 new tests.
+
+        **Not a second "Segments → Output".** That button writes five columns you read;
+        this writes a dataset you analyse, which is the same distinction as Code
+        frequency beside shape A. The extra columns are the proof: coder, modality,
+        times, offsets, status, sequence and attributes are all absent from the readable
+        version because a reader does not want them.
+
+        **`seq` numbers the codings in the order they occur within each document**, which
+        is the column lag-sequential analysis would need — and we have none, so the order
+        is recorded while it is free. A coding with no resolved position sorts LAST within
+        its document rather than first: having no position is not evidence of coming
+        first.
+
+        **Offsets are read off the live session objects**, where `resolveAllDocs` has put
+        them, and left null where a coding did not resolve — with `status` saying which.
+        That is the one thing in the plan that genuinely needs the workspace, and the
+        reason this is a workspace button rather than a menu analysis.
+
+        **The attribute alignment is by ROW ID, not position**, because `attrs` are
+        aligned to the full document list while the table drops empty rows — aligning by
+        position would hand one participant's codings another's attributes. Tested
+        directly, since it is the kind of off-by-one that produces plausible wrong
+        answers rather than an error.
+
+        **Verified in the browser:** 5 codings across 3 documents, ordered by document
+        then position with `seq` restarting (1,2,3 / 1 / 1), `site` repeating correctly
+        down one document's three codings and not shifted by the excluded empty row, then
+        `Correspondence analysis` on `code × site` returning a real inertia
+        decomposition and a biplot.
+
+  - [x] **A crash the shape-B pass found in builtin-ordination (fixed 2026-10-18).**
+        Correspondence analysis of `code × site` with TWO sites died with
+        `Error in x[, dim]: subscript out of bounds` — an R error, reaching the user, from
+        inside `plot(cc)`. A contingency table has one fewer dimension than its smaller
+        side, so a two-level variable yields one, and a biplot indexes a second axis that
+        is not there.
+
+        **The analysis was never the problem, only the map.** A one-dimensional solution
+        has a perfectly valid inertia table — it is a single ordering rather than a plane
+        — so the fix keeps the analysis, skips the figure, and says why in a sentence
+        that names the cause ("a table yields one fewer than its smaller side — 2
+        categories here"). Refusing the whole analysis would have thrown away a correct
+        answer to avoid an undrawable picture. A constant variable still stops with a
+        plain message, because then there is genuinely nothing to decompose.
+
+        Found by running the thing on realistic data, which is also how the `fp` bug
+        turned up. Two live crashes in two browser passes, in plugins nobody had reason
+        to suspect.
+      - **C — code-pair edge list. BUILT 2026-10-18.** `code_a`, `code_b`,
+        `docs_both`, `docs_either`, `jaccard`, `overlaps` — one row per pair, the first
+        two columns being the edge list `builtin-sna` reads as From and To.
+        `cooccurrenceEdges()`, 15 new tests.
+
+        **Two rules, both counts.** "Same document" is the default because it needs no
+        parameter and works for media as well as text; "their passages overlap" is the
+        stricter claim and needs resolved positions, so it sees text codings only. The
+        RULE decides which pairs get a row, but **both counts are always emitted**,
+        because comparing them is itself a finding: codes that share documents and never
+        overlap were discussed in the same interview, not in the same breath.
+
+        **`jaccard` is over documents either way**, and labelled as such — it is the only
+        denominator here that is a set union. An "overlap Jaccard" would need one nobody
+        agrees on, so it is not invented.
+
+        **Adjacency is not overlap.** Strict intersection, which matters because coders
+        routinely highlight consecutive passages — counting touching spans would make
+        every neighbouring pair in a transcript a tie. Tested, because it is the kind of
+        thing a reader assumes either way.
+
+        **Self-pairs are excluded and counted**, since igraph would draw a self-loop and
+        inflate that code's degree. Under theme rollup that exclusion does real work: two
+        codes of one theme overlapping would otherwise tie the theme to itself.
+
+        **Three states are kept apart, which the first draft of this conflated.**
+        `isolated` is a code that WAS applied and never once sat beside another — a
+        result about the coding. `unused` is a code nobody has applied — a fact about the
+        codebook. Neither can appear in an edge list at all, so both are named in the
+        Output; reporting the second as "occurs with nothing" would dress it up as the
+        first. **And the network has no weights**: `builtin-sna` reads only the two
+        endpoint columns, so every pair is one tie however often it occurs. Thresholding
+        is `Transform ▸ Select cases` on `docs_both` or `jaccard` first, which the Output
+        says, because that is the user's judgement to make and to state.
+
+        **Verified in the browser** on 6 documents and 5 codes: Cost–Transport Jaccard
+        1.0 (both in all four documents where either appears), Cost–Trust 0.5, one
+        isolated code and one unused code correctly separated — then **Network analysis**
+        on the result returning 3 nodes, 3 edges, density 1.0000, centralities and the
+        network plot. Which also demonstrates the caveat: that density is over the three
+        codes PRESENT, not the five in the codebook.
+      - **D — counts per case per occasion. BUILT 2026-10-18 (the across-documents
+        reading).** `case`, `session`, `occasion`, `measure`, `count`, `present`,
+        `n_docs`, `doc_chars` + carried columns — the long shape `builtin-sced`'s
+        multi-measure graph reads. `occasionCounts()`, 14 new tests.
+
+        **"Occasion" was one word doing two jobs, which is why this waited.** The two
+        readings want the same output and need different machinery:
+
+        - **Across documents (BUILT).** Eight participants interviewed three times is 24
+          documents, 3 occasions, 8 cases; the series runs between documents.
+        - **Within one document (NOT built).** An hour of video binned into minutes; the
+          series runs inside it. Needs a bin width AND a convention for a coding that
+          straddles two bins — momentary, partial-interval or whole-interval recording,
+          which are established names for choices that answer DIFFERENT questions
+          (events vs occupancy). Only decidable with a real continuously-coded study in
+          hand, and it is the only reading where media duration is the natural exposure.
+          Left open deliberately.
+
+        **Case and occasion are nominated COLUMNS, and that is the permanent answer.**
+        There is no concept of a case spanning documents anywhere in the coding model,
+        and this does not add one: `seg.doc` is a row id, so "which participant" and
+        "which interview" are already columns of that row — the same fact shape A rests
+        on. A second place to declare the grouping could only drift from the first, and
+        nominating a column lets a case be a participant in one analysis and a site in
+        the next without recoding anything. The form guesses both from the column names
+        and the guess is visible in a select, so correcting it is free.
+
+        **It also makes explicit something shape A left implicit:** shape A's unit is the
+        DOCUMENT, so when cases span documents its prevalence is "how many interviews
+        mentioned cost", not how many participants. D is the answer to that.
+
+        **Zeros are rows; missing occasions are not.** A session where the behaviour
+        never occurred is an observation, and leaving the row out makes a single-case
+        graph draw its line straight through the gap. But an occasion a case does not
+        HAVE is never invented — a participant who stopped after session two has no
+        session three, and a zero there would be fabricating an observation rather than
+        recording an absence. The two are one line apart in the code and opposite in
+        meaning.
+
+        **A phase is required by the single-case tools and no coding can supply one** —
+        when an intervention started is a fact about the study design. So it has to be a
+        carried column, the Output says so rather than letting the user find out in the
+        picker, and the form's "carry everything" hint says why you would want it. Where
+        one cell is built from several documents that disagree about a carried value, the
+        first is used and the disagreements are COUNTED, because a silent pick would make
+        a conflicting phase look settled.
+
+        **The occasion axis** uses the column's numbers when they are numbers, and
+        otherwise orders occasions by where they first appear in the data — which is the
+        user's own row order, and the same rule `builtin-sced` applies when no session
+        column is given. Alphabetical would put "Follow-up" before "Pre". The original
+        label travels in `occasion` either way, so the ordering can be checked rather
+        than trusted.
+
+        **One trap named in the Output rather than left to bite:** the multiple-baseline
+        GRAPH reads the `measure` column, but the non-overlap indices (NAP, PND, Tau-U,
+        IRD) do not — run against this table as it stands they would pool every code into
+        one series per case and report a number for nothing. The Output says to Select
+        cases down to one measure first. A wrong number that looks right is worse than an
+        error.
+
+        **Verified in the browser:** 2 participants x 6 sessions x 2 codes, baseline for
+        three sessions then intervention, quantitised and then drawn by
+        **Multiple-baseline graph, several measures** — two panels, two measures each, six
+        points per series, phases Baseline/Intervention, no errors.
+
+      The code frequency table (code, n, %) is a REPORT, not a payload. We already have
+      it; no contract should be built around it.
+
+      **What this unlocks that we cannot do at all today** — the coding workspace
+      computes a flat code frequency, a segment dump, a themed word cloud and
+      in-workspace retrieval, and nothing else: no code x document matrix, no
+      code x attribute crosstab, no co-occurrence, no boolean/proximity query. With
+      shape A alone: theme x attribute crosstabs with chi-square (the headline
+      mixed-methods output, impossible now), logistic regression on whether a case raised
+      a theme, LCA of coding patterns into participant typologies, code similarity
+      clustering, and Poisson/negbin on counts per transcript. Shapes B–D add
+      correspondence analysis, code networks, and SCED from behavioural coding.
+
+      Genuinely absent from the whole app, so quantitising will not reach them:
+      **QCA** truth tables (Ragin — whose input is literally case x condition presence,
+      so shape A would hand it its data), **lag-sequential / transition analysis**, and
+      Jaccard-type similarity. Also: `builtin-countmodels` has no exposure/offset input,
+      which is exactly why denominators must arrive as COLUMNS.
+
+      **The five decisions each run must record in its own output**, because they are
+      judgements and not facts — the standard `builtin-agreement.fromCodings` set by
+      stating its unit model in its own result:
+      1. **Unit** — document/case, segment, or interval.
+      2. **Presence vs count** — presence by default.
+      3. **Rollup** — by code or by theme. `code.group` is a flat one-level string, so
+         this is two levels and no recursive walk.
+      4. **Coder reconciliation** — pooled (double-counts), one coder, or
+         union/intersection.
+      5. **Scope** — which codebook, and whether unresolved codings are included.
+
+      Two warts to fix in passing: **code frequency counts segments from every codebook
+      while listing only the active book's codes** (`index.js:2428` vs `:2432`), and
+      **the dataset id is on no segment record** — it is only inside
+      `anchor.target` (`ds:<dsId>/cell:<col>:<rid>`), so a consumer outside the workspace
+      must parse it out or be handed it.
+
+  - [x] **Are the unpersisted offsets a gap? NO — answered 2026-10-18.** Raised because
+        "offsets aren't persisted" sounds like data loss. It is not: `textRef()` writes
+        **both** selectors into the anchor, and both are saved —
+        `{kind:'text-quote', exact, prefix, suffix}` AND
+        `{kind:'text-position', start, end}`. What `persistableSegment` strips is the
+        top-level `start`/`end`/`status`/`reason`, which are the RESOLUTION RESULT: where
+        the quote sits in the text *as it is now*, and how confident the match was.
+
+        Those are a pure function of the current cell, so persisting them would be
+        caching a value that silently rots the moment anyone edits the document —
+        precisely the bug class the anchor design exists to prevent (P1 in
+        `docs/ARCHITECTURE-coding-anchors.md`: *"Store what a coding quotes, not where it
+        sits"*, and the position selector is labelled a cache, never truth).
+
+        It also turns out not to constrain quantitising, because `text-quote.exact`
+        holds the **full** coded text — unlike `fields.quote`, which is truncated to 80
+        characters for display. So segment length and segment text need no resolution at
+        all. And at document grain, drift is irrelevant by construction: a coding belongs
+        to its row because `doc` is a rid, not a position, so a drifted coding still
+        counts for the right case. Only shape B's offsets need resolving, and shape B is
+        built inside the workspace where `resolveAllDocs()` has already run.
+
+        If a consumer outside the workspace ever needs current positions, the fix is a
+        host read surface that resolves on demand — not stored offsets. Same surface a
+        third-party plugin would need, so it belongs with the ownership question above.
+
+  - [x] **Should `builtin-agreement.fromCodings` be reworked onto the dataset route?
+        NO — decided 2026-10-18, and not for the "keep it as an example" reason.** The
+        substantive reason: **agreement's unit is not the analysis unit.** Shape A
+        answers "did this case raise theme X" AFTER reconciling coders — collapsing them
+        is decision 4 — which is exactly the information agreement needs kept. Routing it
+        through a dataset would mean emitting per-coder columns, which agreement would
+        then have to pivot back to the wide-per-coder matrix it already builds in twenty
+        lines from the source. A materialisation step, a dataset to manage, and nothing
+        gained.
+
+        **The additive move instead:** let the quantitiser optionally emit **one column
+        per coder**. Then the generic `Scale ▸ Inter-rater agreement…` (rater columns)
+        becomes usable on coded data, which gives the user the alternative unit models
+        `fromCodings`' own header calls "defensible for a specific study" but refuses to
+        pick silently — character-overlap and segment-matching agreement. That extends
+        agreement rather than rerouting it, and `fromCodings` keeps being the
+        no-setup default.
+
 ### Hardening before any public/shared deploy
 
 > **#89 hardening pass — DONE (see [docs/SECURITY.md](docs/SECURITY.md)).** Full
@@ -9620,6 +9602,38 @@ The record of what shipped and why. Kept in full, in the original sections.
   the analysis R directly and check rendering manually. Single-dialog analyses
   (Descriptives) drive fine.
 
+- [x] **A line-with-uncertainty-ribbon chart kind — DONE 2026-10-16 (`band`).** Built,
+      and the ARIMA forecast migrated onto it the same day; this checkbox was simply
+      missed at the time. It is NOT a copy of `steps` and not an option on it — the two
+      share one `curveKind` factory parameterised by the two functions that differ (how
+      the curve joins its points, and how the ribbon follows it), because that difference
+      IS the statistical claim each kind makes. Reusable for any fitted curve with a
+      confidence band. Original note follows.
+
+      The one thing blocking the last of the three "migrate it instead" charts, and
+      useful well beyond it. Nothing currently draws a line with a shaded interval
+      around it.
+
+      **Why neither existing kind will do**, which is the part worth not re-deciding:
+      - `scatter` draws a connected line (`model.line`) but has no band, and a forecast
+        figure without its interval has lost the point of being a forecast.
+      - `steps` has exactly the right band — it was built for Kaplan–Meier — but it is
+        deliberately a STAIRCASE, and its own header gives the statistical reason:
+        joining two estimates with a straight line claims a gradual change between them,
+        which is the opposite of what the KM estimator asserts. A forecast mean *is* a
+        continuous interpolation, so borrowing `steps` would make the same false claim in
+        the other direction. Adding a `mark: 'linear'` option to a kind named `steps`
+        would also blur the one thing it exists to say.
+
+      **Clients, in order of readiness:** `timeseries` ARIMA forecast (history + mean +
+      CI band; the plugin already extracts `point`/`lo`/`hi` for its table and would need
+      to add the history), then any fitted curve with a confidence band, a smoothed trend,
+      or a growth trajectory — all of which currently have no way to show uncertainty.
+
+      **Note when building:** adding a kind means registering it in BOTH the manifest's
+      `charts.kinds` list and `chartKinds()`. The harness asserts this, after `tornado`
+      shipped in only one of them and produced a chart mode nothing could draw.
+
 ### Nice-to-have / optimisations
 
 - [x] **Frequencies measures every variable in ONE R call (2026-10-14).** It used to
@@ -10378,6 +10392,42 @@ The record of what shipped and why. Kept in full, in the original sections.
       app, and the classification plot has not been *seen* rendering — only its model
       asserted. That is the same manual-click gap the regression/logistic entries below
       already carry, and it wants the GSS-style `.sav` the assignment uses.
+
+- [x] **Variable-picker polish — ALL THREE SETTLED (2026-10-15; marker fixed
+      2026-10-20).** Two were built and the third was decided against by the owner,
+      which closes the entry — a decision is an outcome, not an absence. The
+      "Selected" group
+      is a snapshot taken when the dialog opens — ticking a box inside the dialog
+      deliberately does *not* live-reorder it to the top (reordering rows under the cursor
+      causes mis-clicks). That rule is what shaped both of these.
+
+      - [x] **A live "N selected" count.** The status line said "12 of 900 variables" —
+            how much the filter was showing — and never how much was *chosen*, which on a
+            900-variable extract is the number the user wants. It could not just be added
+            to `render()`, because ticking does not re-render; it is repainted on its own
+            from the change handler, into the existing `aria-live` element, so a screen
+            reader hears the tick land too. Multi-select only — "1 selected" beside a
+            radio list states what the list already shows.
+      - [x] **A "Selected only" view**, restricted to what is ticked *now* (the live set,
+            not the one the dialog opened with). Offered only for a multi-select list of
+            at least `SELECTED_ONLY_MIN` (15) — the rule the cross-dataset scope switch
+            already follows, that a control which cannot usefully change anything reads as
+            broken. Unticking inside the view leaves the row in place with its box cleared,
+            because ticking still does not re-render — the no-jumping rule paying off
+            rather than being worked around. Empty says *which* emptiness it is: "Nothing
+            is selected yet" rather than blaming a filter the reader never set.
+            The three behaviours are pure functions (`visibleVars`, `pickerCountLabel`,
+            `pickerEmptyLabel`) so they are testable without a DOM.
+      - [x] **Picker→selection write-back — DECIDED AGAINST (owner, 2026-10-15).** The
+            question was whether ticking or clearing a variable inside a run's dialog
+            should change the active selection in the Data grid. *"No. The selections (or
+            clearing selections) in the variable picker dialog is purely ephemeral to that
+            run and should not change the overall project state."*
+
+            So the current behaviour is the intended one, not an unfinished edge: the
+            picker reads the grid selection as a convenience seed and writes nothing back.
+            Worth keeping in mind for anything that looks like a near-miss here — a run's
+            inputs are the run's, and the project state is not a scratchpad for them.
 
 ### Blocked until public deploy (GitHub Pages)
 
