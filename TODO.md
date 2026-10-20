@@ -2354,12 +2354,61 @@ bottom; they are the project's memory and are not summarised away.
       `listProjects()` somewhere around 60–120 ms at a thousand. Opening a dialog that
       takes a tenth of a second is survivable.
 
-      **The cost that is NOT about load times, which is why it is worth writing down.**
-      `ProjectStore#save` reads the WHOLE catalog, rebuilds one entry, and rewrites the
-      WHOLE file — under a lock — on every save. So the price of a busy index is paid by
-      every autosave of every project, including a small one that has nothing to do with
-      the other 999. That is the number to watch, and it is a write rather than a read, so
-      it will degrade faster than the figures above suggest.
+      **The cost that is NOT about load times — FIXED 2026-10-20.**
+      `ProjectStore#save` read the WHOLE catalog, rebuilt one entry, and rewrote the
+      WHOLE file — under a lock — on every save. So the price of a busy index was paid by
+      every autosave of every project, including a small one with nothing to do with the
+      other 999. It was a write rather than a read, so it degraded faster than the read
+      figures above suggest, and **measuring it bore that out: 8.57 ms median at 51
+      projects (7.9–14.9), against the 1.11 ms the read alone had predicted.** Nearly all
+      of it is the atomic temp-then-rename write of 36 KB.
+
+      **Measured A/B on the real OPFS store at 51 projects, same code path, 20 saves:**
+      - catalog written per save (the old behaviour): **19.27 ms per save**
+      - catalog deferred (now): **9.93 ms per save** — **48% faster**, 9.34 ms saved each
+
+      **What changed.** Five methods did that same read-modify-write — `save`,
+      `refreshSummary`, `rename`, `markOpened`, `delete`. They became one deferred
+      primitive, `#patchCatalog`, and the hot path now does **no catalog read, no write
+      and no lock**: it records a change and returns. Verified against the real index —
+      twenty consecutive saves left `catalog.json` byte-for-byte untouched, and the flush
+      afterwards wrote it once.
+
+      **A pending change is a FUNCTION of the entry on disk, not a snapshot of it.** That
+      is what makes deferring safe rather than merely faster: the flush re-reads the
+      catalog and applies the patches to what is actually there, so two tabs merge
+      instead of one clobbering the other. The old code had the same race with a wider
+      window — read, rebuild, write, with the whole of `#writeSources` nowhere near it.
+
+      **What cannot wait does not.** A creation flushes before returning, because `list()`
+      does not invent entries for folders it has no record of, so a lost creation would
+      hide a real project. A rename and a delete flush too: both are deliberate acts the
+      user is watching for. Only UPDATES defer, and both ways one can be lost are
+      self-healing — a stale `savedAt` is merely stale, and a dropped deletion is caught
+      by the existing "drop entries whose folder is missing" sweep on the next `list()`.
+
+      **Two bugs found while building it, both by tests:**
+      - **Two pending changes to one project replaced each other** instead of composing.
+        Each patch computes its carried fields from the entry it is handed, so the later
+        one read a disk entry without the earlier change in it. Open a project (a
+        deferred `lastOpenedAt`) then autosave — at most 400 ms apart, so the common case
+        — and "recent" silently went back to meaning "recently saved". Caught by the
+        existing test whose own header calls that "the whole point of this file".
+      - **`list()` did not report pending changes**, so opening a project and going
+        straight to the manager showed a stale order until the flush ran. Listing now
+        applies the same patches, which also let the self-heal stop writing: it records
+        removals instead, so listing a busy index costs no write at all and every catalog
+        write goes through one path.
+
+      Also folded: `save` and `refreshSummary` had a copy each of the summary builder and
+      had already drifted — one wrote `activePlugins: manifest.activePlugins`, the other
+      `?? null`, so whether a project's plugin list read as absent or empty depended on
+      which path last touched it. One `#summaryFor` now.
+
+      **Still linear, and deliberately so.** The catalog is still one file rewritten
+      whole; what changed is how OFTEN. A per-project sidecar would make writes O(1) but
+      turn `list()` into N reads, which is the trade the catalog exists to avoid. At
+      1000 projects the flush would cost ~170 ms — but once per burst, not once per save.
 
       **What makes an entry 697 bytes rather than ~100** is `activePlugins`, carried in the
       summary so the launcher's rail can seed its picker without loading the project. A

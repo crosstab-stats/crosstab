@@ -35,6 +35,37 @@ const ROOT = 'projects';
  */
 const SHARED_TAILS = new Map();
 const CATALOG = 'catalog.json';
+/** How long a catalog write waits for more changes. Long enough that a burst of
+ * autosaves writes once, short enough that the index is right by the time anyone has
+ * navigated anywhere to look at it. */
+const CATALOG_FLUSH_MS = 400;
+/** A pending catalog change that removes the entry. */
+const REMOVED = Symbol('catalog-entry-removed');
+
+/**
+ * Combine two pending changes to the same entry, oldest first.
+ *
+ * They must COMPOSE rather than the later one replacing the earlier, because each patch
+ * computes its carried fields from the entry it is handed — and if that is the entry on
+ * DISK, everything the earlier patch did is invisible to it. Open a project (a deferred
+ * `lastOpenedAt`) and then autosave it, and the save would carry `lastOpenedAt` from a
+ * disk entry that did not have it yet, putting "recent" back to meaning "recently saved".
+ *
+ * @param {Function|symbol|undefined} older
+ * @param {Function|symbol} newer
+ */
+function composePatch(older, newer) {
+  if (!older || newer === REMOVED) return newer;
+  // Removed and then written again — a delete followed by a save of the same id. The
+  // new entry is built from nothing, not from the one that was removed.
+  if (older === REMOVED) return (prev) => newer(undefined);
+  return (prev) => {
+    const mid = older(prev);
+    // A patch that declines (returns null) leaves the entry as it was for the next one —
+    // `markOpened` on a project with no entry must not stop a save from creating one.
+    return newer(mid ?? prev) ?? mid;
+  };
+}
 
 /** Subdirectory holding media asset bytes inside a project (`assets/<id>.bin`). */
 const ASSET_DIR = 'assets';
@@ -90,6 +121,47 @@ export class ProjectStore {
   /** Serialises catalog read-modify-write ops so an autosave can't interleave
    * with a delete/rename and resurrect a just-removed entry (orphan in the list). */
   #tail = Promise.resolve();
+
+  /**
+   * Catalog changes not yet on disk: `id` → a function of that id's current entry, or
+   * {@link REMOVED}.
+   *
+   * A FUNCTION rather than a finished entry, because the whole point of holding them is
+   * that they are applied later, against a catalog that may have moved on. A patch reads
+   * `lastOpenedAt` and a carried `rowCount` off whatever is actually on disk at flush
+   * time, so a second tab stamping "opened" is merged rather than overwritten by a
+   * summary that was built before it happened.
+   * @type {Map<string, Function|symbol>}
+   */
+  #pendingCatalog = new Map();
+
+  /** The scheduled flush, so a burst of autosaves writes the catalog once. */
+  #flushTimer = null;
+
+  /** Ids whose catalog entry this session has already put on disk. The FIRST save of a
+   * project flushes immediately because that is when the entry may need creating, and
+   * `list()` does not invent entries for folders it has no record of. */
+  #onDisk = new Set();
+
+  constructor() {
+    // The last moment a deferred write can happen. `pagehide` rather than
+    // `beforeunload`, which does not fire reliably on mobile, and rather than `unload`,
+    // which is deprecated and disqualifies the page from the back-forward cache.
+    // `visibilitychange` catches the tab being switched away from, which on mobile is
+    // often the only warning there is.
+    //
+    // Best-effort by construction: the browser does not wait for an async flush. That is
+    // the reason only UPDATES defer — a lost one costs a slightly stale `savedAt` in the
+    // list, while the project's own bytes were written long before. Creations, renames
+    // and deletions never defer, so none of them depends on this firing.
+    if (typeof addEventListener === 'function') {
+      const onExit = () => { void this.flushCatalog(); };
+      addEventListener('pagehide', onExit);
+      addEventListener('visibilitychange', () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') onExit();
+      });
+    }
+  }
 
   /** The byte backend (see {@link module:core/storage-driver}). OPFS by default;
    * {@link ProjectStore#useDirectory} swaps in a picked folder. */
@@ -470,9 +542,15 @@ export class ProjectStore {
     const release = await this.#acquire();
     try {
       const cat = await this.#readCatalog();
+      // A change that has not been flushed is still a change: without this, opening a
+      // project and going straight to the manager would show the stale "recent" order
+      // for as long as the flush had not run.
+      this.#applyPatches(cat, this.#pendingCatalog);
       const present = new Set(await this.#driver.list(ROOT));
       const kept = cat.entries.filter((e) => present.has(e.id));
-      if (kept.length !== cat.entries.length) await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify({ entries: kept }));
+      // Heal by recording removals rather than writing here — so every catalog write
+      // goes through the flush, and listing a busy index costs no write at all.
+      for (const e of cat.entries) if (!present.has(e.id)) this.#pendingCatalog.set(e.id, REMOVED);
       return kept.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
     } finally {
       release();
@@ -523,34 +601,18 @@ export class ProjectStore {
       return id;
     }
 
-    const release = await this.#acquire();
-    try {
-      const cat = await this.#readCatalog();
-      // The summary carries activePlugins too, so the launcher's rail can seed its
-      // picker from a project without loading the whole bundle.
-      const idx = cat.entries.findIndex((e) => e.id === id);
-      const summary = {
-        // `lastOpenedAt` is not in the manifest and never will be — it is a fact about
-        // this device, not about the project. The summary is REBUILT here on every save,
-        // so it has to be carried across or a save silently resets "recent".
-        lastOpenedAt: idx >= 0 ? cat.entries[idx].lastOpenedAt : undefined,
-        id,
-        name,
-        savedAt,
-        datasetCount: countDatasets(manifest),
-        // Carried across when this write did not supply one, exactly as lastOpenedAt is:
-        // the summary is rebuilt from scratch each save, so anything not re-stated is lost.
-        rowCount: Number.isFinite(manifest.rowCount)
-          ? manifest.rowCount
-          : (idx >= 0 ? cat.entries[idx].rowCount : undefined),
-        activePlugins: manifest.activePlugins,
-      };
-      if (idx >= 0) cat.entries[idx] = summary;
-      else cat.entries.push(summary);
-      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
-    } finally {
-      release();
-    }
+    // The summary carries activePlugins too, so the launcher's rail can seed its picker
+    // from a project without loading the whole bundle.
+    //
+    // Deferred after the first save of this project: the project's own bytes are already
+    // on disk above, and what is left is a browse index. The first one goes now, because
+    // that is when the ENTRY may need creating and `list()` does not invent entries for
+    // folders it has no record of.
+    await this.#patchCatalog(
+      id,
+      (prev) => this.#summaryFor(id, manifest, prev),
+      { now: !this.#onDisk.has(id) },
+    );
     return id;
   }
 
@@ -639,27 +701,11 @@ export class ProjectStore {
       await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name: manifest.name, savedAt: manifest.savedAt })));
       return;
     }
-    const release = await this.#acquire();
-    try {
-      const cat = await this.#readCatalog();
-      const idx = cat.entries.findIndex((e) => e.id === id);
-      const summary = {
-        lastOpenedAt: idx >= 0 ? cat.entries[idx].lastOpenedAt : undefined, // see #save
-        id,
-        name: manifest.name,
-        savedAt: manifest.savedAt,
-        datasetCount: countDatasets(manifest),
-        rowCount: Number.isFinite(manifest.rowCount)
-          ? manifest.rowCount
-          : (idx >= 0 ? cat.entries[idx].rowCount : undefined),
-        activePlugins: manifest.activePlugins ?? null,
-      };
-      if (idx >= 0) cat.entries[idx] = summary;
-      else cat.entries.push(summary);
-      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
-    } finally {
-      release();
-    }
+    await this.#patchCatalog(
+      id,
+      (prev) => this.#summaryFor(id, manifest, prev),
+      { now: !this.#onDisk.has(id) },
+    );
   }
 
   /** Rename a project (updates its manifest + the catalog/marker). */
@@ -671,15 +717,9 @@ export class ProjectStore {
       await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name, savedAt: manifest.savedAt })));
       return;
     }
-    const release = await this.#acquire();
-    try {
-      const cat = await this.#readCatalog();
-      const e = cat.entries.find((x) => x.id === id);
-      if (e) e.name = name;
-      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
-    } finally {
-      release();
-    }
+    // `now`, unlike a save: a rename is a deliberate act the user is watching for, and
+    // seeing the old name come back after a crash would read as the rename not working.
+    await this.#patchCatalog(id, (prev) => (prev ? { ...prev, name } : null), { now: true });
   }
 
   /** Delete a project bundle and drop it from the catalog. (Not used in flat/folder
@@ -696,31 +736,18 @@ export class ProjectStore {
    */
   async markOpened(id, when = Date.now()) {
     if (this.#flat || id == null) return; // one project per location; nothing to order
-    const release = await this.#acquire();
-    try {
-      const cat = await this.#readCatalog();
-      const e = cat.entries.find((x) => x.id === id);
-      if (!e) return; // never saved — nothing in the catalog to stamp
-      e.lastOpenedAt = when;
-      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
-    } catch {
-      /* the project is open; the ordering hint is a convenience */
-    } finally {
-      release();
-    }
+    // Deferred, and returning the entry UNCHANGED when there is none: a project that
+    // has never been saved has nothing in the catalog to stamp, and the patch must not
+    // conjure a half-built entry for it.
+    await this.#patchCatalog(id, (prev) => (prev ? { ...prev, lastOpenedAt: when } : null));
   }
 
   async delete(id) {
     if (this.#flat) return; // don't blow away the user's picked folder from here
     await this.#driver.removeTree(`${ROOT}/${id}`);
-    const release = await this.#acquire();
-    try {
-      const cat = await this.#readCatalog();
-      cat.entries = cat.entries.filter((e) => e.id !== id);
-      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
-    } finally {
-      release();
-    }
+    // `now`: the bytes are already gone, so until this lands the catalog names a project
+    // that cannot be opened. `list()` would heal it, but only on the next listing.
+    await this.#patchCatalog(id, REMOVED, { now: true });
   }
 
   /**
@@ -859,6 +886,118 @@ export class ProjectStore {
   /** Path of a file inside a project bundle (layout-aware; see {@link ProjectStore#useDirectory}). */
   #file(id, name) {
     return this.#path(id, name);
+  }
+
+  /**
+   * Change one project's catalog entry, writing the file later.
+   *
+   * `patch(prev)` returns the entry to store, or null to leave the catalog alone. The
+   * hot path — an autosave stamping a new `savedAt` — now costs no read, no write and no
+   * lock; it records a closure and returns.
+   *
+   * @param {string} id
+   * @param {Function|symbol} patch `(prev|undefined) => entry|null`, or {@link REMOVED}
+   * @param {{now?: boolean}} [opts] `now` writes before returning — for a change the
+   *   user made deliberately and would notice losing (a create, a rename, a delete).
+   */
+  async #patchCatalog(id, patch, { now = false } = {}) {
+    this.#pendingCatalog.set(id, composePatch(this.#pendingCatalog.get(id), patch));
+    if (now) {
+      await this.flushCatalog();
+      return;
+    }
+    if (this.#flushTimer != null) return;
+    // A plain timer rather than an idle callback: the flush must happen on a schedule a
+    // user can reason about ("within a second of stopping"), and `requestIdleCallback`
+    // can be starved indefinitely by a busy tab — which is exactly the tab that has been
+    // autosaving.
+    this.#flushTimer = setTimeout(() => {
+      this.#flushTimer = null;
+      void this.flushCatalog();
+    }, CATALOG_FLUSH_MS);
+  }
+
+  /**
+   * Write every pending catalog change.
+   *
+   * Re-reads the file and applies the patches to it, rather than writing a snapshot
+   * assembled earlier: that is what lets two tabs interleave without one losing the
+   * other's entries, and it is why a pending change is a function.
+   *
+   * Never throws — the catalog is a browse index derived from projects that are already
+   * safely on disk, and failing to update it must not fail the save that scheduled it.
+   */
+  async flushCatalog() {
+    if (this.#flushTimer != null) { clearTimeout(this.#flushTimer); this.#flushTimer = null; }
+    if (!this.#pendingCatalog.size || this.#flat) { this.#pendingCatalog.clear(); return; }
+    // Taken before the await so a patch recorded DURING the write is not dropped by the
+    // clear at the end; it stays pending and the next flush carries it.
+    const batch = this.#pendingCatalog;
+    this.#pendingCatalog = new Map();
+    const release = await this.#acquire();
+    try {
+      const cat = await this.#readCatalog();
+      this.#applyPatches(cat, batch, { record: true });
+      await this.#writePlain(`${ROOT}/${CATALOG}`, JSON.stringify(cat));
+    } catch {
+      // Put them back, so the next flush retries rather than silently losing the index
+      // update. Newer patches for the same id win — they were computed later.
+      for (const [id, patch] of batch) if (!this.#pendingCatalog.has(id)) this.#pendingCatalog.set(id, patch);
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Apply pending patches to a catalog object, in place.
+   *
+   * Shared by the flush and by {@link ProjectStore#list}, which needs the same view and
+   * must not get a different one — a listing that disagreed with what the next flush
+   * writes is worse than either answer on its own.
+   *
+   * `record` is set only by the flush: it marks which ids are now on disk, which is what
+   * decides whether a later save can defer. Listing applies the same patches and leaves
+   * them pending, because listing does not write them.
+   */
+  #applyPatches(cat, batch, { record = false } = {}) {
+    for (const [id, patch] of batch) {
+      const idx = cat.entries.findIndex((e) => e.id === id);
+      if (patch === REMOVED) {
+        if (idx >= 0) cat.entries.splice(idx, 1);
+        if (record) this.#onDisk.delete(id);
+        continue;
+      }
+      const next = patch(idx >= 0 ? cat.entries[idx] : undefined);
+      if (!next) continue; // the patch declined — e.g. stamping a project never saved
+      if (idx >= 0) cat.entries[idx] = next;
+      else cat.entries.push(next);
+      if (record) this.#onDisk.add(id);
+    }
+  }
+
+  /**
+   * One project's catalog summary, built from its manifest.
+   *
+   * Shared by `save` and `refreshSummary`, which had a copy each — and had already
+   * drifted: one wrote `activePlugins: manifest.activePlugins` and the other
+   * `manifest.activePlugins ?? null`, so whether a project's plugin list read as absent
+   * or as empty depended on which code path last touched it.
+   *
+   * `prev` is the entry currently on disk. Two fields are carried from it because the
+   * summary is rebuilt whole and anything not re-stated is lost: `lastOpenedAt`, which is
+   * a fact about this device and never appears in a manifest, and `rowCount` when this
+   * particular write did not compute one.
+   */
+  #summaryFor(id, manifest, prev) {
+    return {
+      lastOpenedAt: prev?.lastOpenedAt,
+      id,
+      name: manifest.name,
+      savedAt: manifest.savedAt,
+      datasetCount: countDatasets(manifest),
+      rowCount: Number.isFinite(manifest.rowCount) ? manifest.rowCount : prev?.rowCount,
+      activePlugins: manifest.activePlugins ?? null,
+    };
   }
 
   async #readCatalog() {
