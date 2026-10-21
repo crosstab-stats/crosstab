@@ -81,6 +81,20 @@ const withSource = (file, opId = 'op1') => ({
 });
 const empty = () => ({ log: [], datasets: [], activePlugins: [] });
 
+/**
+ * The same source op after it has been retracted, undone, or left behind a replace
+ * barrier: the envelope stays in the log for audit and merge, and loses `src.file`.
+ *
+ * That byte-less state is the EVIDENCE the sweep acts on, and it is what retracting
+ * actually produces — an op does not vanish from the log, because physical removal is
+ * merge-unsafe under shared-id ancestry (#149).
+ */
+const deadSource = (opId = 'op1') => ({
+  activePlugins: [],
+  datasets: [],
+  log: [{ id: opId, type: 'load', target: 'ds:1/data', payload: { src: { label: 'rows', meta: [] } } }],
+});
+
 const put = (d, path, bytes = [80, 65, 82, 49]) => d.files.set(path, new Uint8Array(bytes));
 const names = (d, id) => [...d.files.keys()].filter((k) => k.startsWith(`projects/${id}/`)).sort();
 
@@ -113,30 +127,69 @@ test('a project this session has never seen is not swept at all', async () => {
   assert.ok(d.files.has('projects/p9/src_b.parquet'));
 });
 
-test('what the sweep IS for still works: a dropped source is collected', async () => {
-  // The fix must not turn the sweep off. A file this session put there, and has now
-  // stopped referencing, is garbage it can prove it made.
+test('what the sweep IS for still works: a RETRACTED source is collected', async () => {
+  // The fix must not turn the sweep off. A source op that is present and byte-less is
+  // the log saying, in as many words, that its bytes are dead.
   const { s, d } = store();
   await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
-  put(d, 'projects/p1/src_op1.parquet');
   assert.ok(d.files.has('projects/p1/src_op1.parquet'));
 
-  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: empty() });
-  assert.ok(!d.files.has('projects/p1/src_op1.parquet'), 'the dataset’s Parquet went with it');
+  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: deadSource('op1') });
+  assert.ok(!d.files.has('projects/p1/src_op1.parquet'), 'the retracted source’s bytes went');
 });
 
-test('opening a project teaches the sweep what belongs to it', async () => {
-  // The better of the two ways it learns, because it happens before any save can act on
-  // a guess — a fresh session that opens then saves collects its own garbage.
+test('an op that VANISHES from the log deletes nothing', async () => {
+  // The distinction the owner's question turned on. Retracting keeps the envelope and
+  // drops `src.file`; an op simply not being there means something else — a regressed
+  // merge, a half-loaded log, a bug — and absence must not be read as a decision.
   const { s, d } = store();
   await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
-  put(d, 'projects/p1/src_op1.parquet');
+  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: empty() });
+  assert.ok(d.files.has('projects/p1/src_op1.parquet'),
+    'no evidence, so no deletion — the bytes wait for a log that explains them');
+});
 
-  const fresh = new ProjectStore();   // a new session, no memory of p1
+test('the FIRST save of a session can collect — no memory needed', async () => {
+  // The evidence is in the manifest being written, so there is nothing to learn first.
+  // An earlier design kept a per-session record of "what I knew" and had to abstain
+  // until it had one, leaking a retracted source until the second save.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+
+  const fresh = new ProjectStore();
   fresh.useDriver(d, { flat: false });
-  await fresh.load('p1');
-  await fresh.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: empty() });
+  await fresh.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: deadSource('op1') });
   assert.ok(!d.files.has('projects/p1/src_op1.parquet'));
+});
+
+test('a live op of the same name beats a dead one', async () => {
+  // Cannot happen today — the file name IS the op id, so one op owns one name — but a
+  // merge that revived a retracted source would make it possible, and resurrecting
+  // bytes is cheaper to get right than un-deleting them.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  const both = {
+    activePlugins: [], datasets: [],
+    log: [
+      { id: 'op1', type: 'load', target: 'ds:1/data', payload: { src: { label: 'dead', meta: [] } } },
+      { id: 'op2', type: 'load', target: 'ds:1/data', payload: { src: { file: 'src_op1.parquet', label: 'alive', meta: [], parquet: new Uint8Array([80, 65, 82, 49]) } } },
+    ],
+  };
+  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: both });
+  assert.ok(d.files.has('projects/p1/src_op1.parquet'), 'something live still names it');
+});
+
+test('assets are not swept by a save at all', async () => {
+  // They were, by the same absence rule. The app owns asset GC properly — reference
+  // counted across item fields and dataset cells, refusing to run while any collection
+  // is undeclared, and a rare explicit act rather than a side effect of saving. Two
+  // collectors over the same bytes with different ideas of "referenced" is how one
+  // deletes what the other is keeping.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: empty() });
+  put(d, 'projects/p1/assets/orphan.bin', [1, 2, 3]);
+  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: empty() });
+  assert.ok(d.files.has('projects/p1/assets/orphan.bin'));
 });
 
 test('a second tab’s new dataset survives this tab’s autosave', async () => {

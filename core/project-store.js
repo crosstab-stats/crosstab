@@ -58,6 +58,30 @@ export function manifestRefs(manifest) {
   return out;
 }
 
+/**
+ * The source files this manifest says are DEAD — positive evidence, not absence.
+ *
+ * A source op carries `src.file` only while it is live: `rawExport` sets it from
+ * `#steps()`, the live fold, so an op that was retracted, undone, or left behind a
+ * `replace` barrier is persisted **byte-less on purpose** — the envelope stays for audit
+ * and merge, and `buildManifest` says as much ("byte-less (retracted) sources have
+ * none"). The sidecar name is derived from the stable op id, so a dead op still names
+ * the file it used to own.
+ *
+ * That is what makes this safe where a set difference was not. A file whose op is not in
+ * this log at all — a peer's, another tab's — yields no evidence and is never returned,
+ * so it cannot be deleted by a manifest that simply does not know about it.
+ */
+export function deadSourceFiles(manifest) {
+  const out = new Set();
+  for (const op of manifest?.log ?? []) {
+    if (!isSourceOp(op) || !op.id) continue;
+    if (op.payload?.src?.file) continue; // live: it names its bytes
+    out.add(`src_${op.id}.parquet`);
+  }
+  return out;
+}
+
 /** Do two summaries say the same thing? Compared field by field rather than by
  * stringifying, because key ORDER would otherwise decide whether the index looked
  * stale, and `undefined` and absent have to read as the same. */
@@ -167,17 +191,6 @@ export class ProjectStore {
 
   /** The scheduled flush, so a burst of autosaves writes the catalog once. */
   #flushTimer = null;
-
-  /**
-   * Per project, the set of file names a manifest this session has READ or WRITTEN
-   * referred to — what the sweep is allowed to consider "mine".
-   *
-   * Null for a project neither loaded nor saved here yet, and that distinction is the
-   * whole point: no knowledge means no sweeping, rather than sweeping against an empty
-   * set and deleting everything in the folder.
-   * @type {Map<string, Set<string>>}
-   */
-  #knownRefs = new Map();
 
   /** Ids whose catalog entry this session has already put on disk. The FIRST save of a
    * project flushes immediately, because that is when the entry may need CREATING and a
@@ -685,9 +698,6 @@ export class ProjectStore {
    */
   async load(id) {
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
-    // Opening a project is the other way the sweep learns what belongs to it — and the
-    // better one, since it happens before any save can act on a guess.
-    this.#knownRefs.set(id, manifestRefs(manifest));
     // Reconcile the index against what was just read. A catalog entry left stale by a
     // lost flush would otherwise STAY stale for a project nobody edits: opening one to
     // read its output stamps `lastOpenedAt` and nothing else, and without an edit there
@@ -947,30 +957,25 @@ export class ProjectStore {
 
   async #sweep(id, manifest) {
     try {
-      const keep = manifestRefs(manifest);
-      const known = this.#knownRefs.get(id);
-      // Record what the new manifest points at BEFORE the early return, so the first
-      // save of a session teaches the next one.
-      this.#knownRefs.set(id, new Set(keep));
-      // Nothing to go on: a project this session has neither loaded nor saved before.
-      // Abstain rather than treat "I do not recognise it" as "it is garbage".
-      if (!known) return;
-
-      // Delete ONLY what was accounted for and has now been dropped — a dataset removed,
-      // a source superseded. A file in neither set arrived from somewhere this session
-      // cannot see: a peer's sync, another tab, a hand-copied folder. It is unaccounted
-      // for, not garbage, and `projectIntegrity` reports it instead.
-      const drop = [...known].filter((f) => !keep.has(f));
-      if (!drop.length) return;
+      // Only what the log SAYS is dead — see `deadSourceFiles`. A file whose op this
+      // manifest does not contain yields no evidence and is left alone, which is what a
+      // peer's half-synced data and another tab's new dataset both look like.
+      const dead = deadSourceFiles(manifest);
+      if (!dead.size) return;
+      // A live op must win over a dead one of the same name. The two cannot collide
+      // today (the name is the op id), but a merge that revives a retracted source would
+      // make them, and resurrecting is cheaper to get right than un-deleting.
+      const live = manifestRefs(manifest);
       const present = new Set(await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`));
-      for (const name of drop) {
-        if (isSourceFile(name)) {
-          if (present.has(name)) await this.#driver.remove(this.#file(id, name));
-          continue;
-        }
-        const m = /^assets\/(.+)\.bin$/.exec(name);
-        if (m) await this.removeAsset(id, m[1]);
+      for (const name of dead) {
+        if (live.has(name) || !present.has(name)) continue;
+        await this.#driver.remove(this.#file(id, name));
       }
+      // Assets are deliberately NOT swept here. The app owns that: reference-counted
+      // across item fields and dataset cells, refusing to run while any collection is
+      // undeclared, and a rare explicit act rather than a side effect of saving (#150,
+      // #152). Two collectors over the same bytes with different ideas of "referenced"
+      // is how one deletes what the other is keeping.
     } catch (err) {
       console.warn('[project] sweep skipped', err);
     }

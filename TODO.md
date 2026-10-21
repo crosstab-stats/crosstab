@@ -1143,10 +1143,39 @@ bottom; they are the project's memory and are not summarised away.
     asset GC *"refuses to sweep while ANY item collection is undeclared"*, because a
     declaration nobody wrote looks exactly like "nothing references this". A file this
     session has never seen referenced is the same shape of unknown — unaccounted for,
-    not garbage. The sweep now deletes **only what it can prove it dropped**: a file that
-    was in a manifest this session loaded or wrote, and is not in the one being written.
-    The cost of being wrong that way is a few stale megabytes; the cost of being wrong
-    the other way is a colleague's data.
+    not garbage.
+
+    **The first fix still reasoned from absence, and the owner caught it:** *"is that
+    strictly accurate? Just an absence of a file? Does our log not have an op for 'file
+    dropped' that could be a stronger indicator?"* It does, and `buildManifest` had been
+    saying so in a comment I read past — **"byte-less (retracted) sources have none"**.
+    `rawExport` sets `src.file` only for ops in the LIVE fold, so a source that was
+    retracted, undone, or left behind a `replace` barrier is persisted byte-less on
+    purpose, envelope intact for audit and merge. The sidecar name is derived from the
+    stable op id, so a dead op still names the file it used to own.
+
+    **So the rule is positive evidence, not a set difference:** delete
+    `src_<opId>.parquet` when the manifest CONTAINS source op `<opId>` and that op is
+    byte-less. Strictly better than what it replaced:
+    - **A peer's file is untouchable by construction** — my log has no op of that id, so
+      there is nothing to act on. No session memory, and it holds on the first save of a
+      session, where the previous rule had to abstain entirely.
+    - **A manifest that LOST ops now deletes nothing** instead of deleting everything the
+      loss covered. A regressed merge, a half-loaded log and a bug all look identical to
+      a deliberate deletion under an absence rule, and nothing like one under this.
+    - **It can say why.** "op X is retracted, so its bytes go" is auditable; "this file
+      was not in a set I built" is not.
+
+    **Assets are no longer swept by a save at all.** They were, by the same absence rule,
+    while the app already owns asset GC properly — reference-counted across item fields
+    and dataset cells, refusing to run while any collection is undeclared, and a rare
+    explicit act (#150, #152). Two collectors over the same bytes with different ideas of
+    "referenced" is how one deletes what the other is keeping.
+
+    Verified on real OPFS, all three cases in one run: a live source writes its file; the
+    op VANISHING from the log deletes nothing (no evidence); the op going byte-less
+    collects its bytes and leaves the peer's file alone, which `projectIntegrity` then
+    reports as `unreferenced`.
 
     **`ProjectStore#projectIntegrity(id)`** is the machinery the owner asked for: for
     every file a project consists of, which of four states is it in — `missing` (the log
