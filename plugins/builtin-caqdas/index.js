@@ -5556,6 +5556,58 @@ function setSelectionRange(container, lo, hi) {
 
 const TIME_SCALE = 1000; // seconds → the unit QDPX begin/end expect (ms). See caveat above.
 
+/**
+ * The codebook as QDA-XML, with CrossTab's flat themes expressed as the standard's own
+ * hierarchy: a theme is a parent `<Code>` carrying its codes as children.
+ *
+ * `isCodable="false"` is what marks the parent as an organiser rather than something you
+ * can apply — the same thing NVivo and ATLAS.ti write for a folder-like code. Without
+ * this the themes went nowhere at all: they are not an attribute the format has, so an
+ * exporter that only wrote a flat list simply dropped them, which a round-trip through
+ * our own file could not survive either.
+ *
+ * A theme gets a guid of its own so the nesting is well-formed, and nothing points at it:
+ * it is not a code anyone coded with.
+ */
+export function qdpxCodeTree(codes, codeGuid) {
+  const one = (c) =>
+    `<Code guid="${codeGuid.get(c.id)}" name="${xesc(c.name)}" isCodable="true"`
+    + `${c.color ? ` color="${xesc(c.color)}"` : ''}/>`;
+  const themed = new Map();
+  const loose = [];
+  for (const c of codes) {
+    const g = String(c.group ?? '').trim();
+    if (!g) { loose.push(c); continue; }
+    if (!themed.has(g)) themed.set(g, []);
+    themed.get(g).push(c);
+  }
+  const out = [];
+  for (const [theme, members] of themed) {
+    out.push(
+      `<Code guid="${qdpxUuid()}" name="${xesc(theme)}" isCodable="false">`
+      + members.map(one).join('')
+      + '</Code>',
+    );
+  }
+  // Un-themed codes stay at the top level, which is where they are in the codebook.
+  for (const c of loose) out.push(one(c));
+  return out.join('');
+}
+
+/**
+ * What the export calls itself, in the XML and on disk.
+ *
+ * One constant for both, so they cannot disagree. It is not the user's chosen filename:
+ * the host asks for that AFTER the plugin has formatted the bytes, and there is no
+ * project-name surface in the plugin API — `app` has data, items, state, assets,
+ * anchors and zip, and no project. So this is the honest answer rather than the ideal
+ * one, and it is a large improvement on what it replaced, which was the LABEL COLUMN:
+ * `<Project name="participant">`, which then re-imported as a dataset called
+ * "participant".
+ */
+const QDPX_FILE = 'coding.qdpx';
+const QDPX_PROJECT = 'CrossTab coding';
+
 export async function exportQdpx(app) {
   // Runs in the compute frame, so `app.items` here is the plugin-id-bound binding from
   // core/loader.js rather than a workspace mount's (#152).
@@ -5639,19 +5691,20 @@ export async function exportQdpx(app) {
     }
   }
 
-  const codeEls = state.codes.map((c) =>
-    `<Code guid="${codeGuid.get(c.id)}" name="${xesc(c.name)}" isCodable="true"${c.color ? ` color="${xesc(c.color)}"` : ''}/>`,
-  ).join('');
+  const codeEls = qdpxCodeTree(state.codes, codeGuid);
   const qde =
     `<?xml version="1.0" encoding="utf-8"?>\n` +
-    `<Project xmlns="urn:QDA-XML:project:1.0" name="${xesc(state.labelColumn || 'CrossTab coding')}" origin="CrossTab">` +
+    // Named for the FILE, not for the label column. The label column names the documents
+    // inside the project; it is not the project, and calling the project "participant"
+    // made a re-import produce a dataset of that name.
+    `<Project xmlns="urn:QDA-XML:project:1.0" name="${xesc(QDPX_PROJECT)}" origin="CrossTab">` +
     `<CodeBook><Codes>${codeEls}</Codes></CodeBook>` +
     `<Sources>${sourceEls.join('')}</Sources>` +
     `</Project>`;
   files.unshift({ name: 'project.qde', data: qde });
 
   const zipBytes = await app.zip.make(files);
-  return { filename: 'coding.qdpx', mimeType: 'application/zip', data: zipBytes };
+  return { filename: QDPX_FILE, mimeType: 'application/zip', data: zipBytes };
 }
 
 /** A `<Coding>` wrapping a `<CodeRef>` to the segment's code (+ its memo as a note). */
@@ -5707,14 +5760,37 @@ export async function parseQdpx(app, { name, file }) {
   if (doc.getElementsByTagName('parsererror').length) throw new Error('Could not parse the QDPX project XML.');
 
   // Codes: guid → a fresh caqdas code.
+  //
+  // A nested `<Code>` is the format's hierarchy, and CrossTab's themes are one level of
+  // it — so a code's parent becomes its `group`. Deeper nesting is flattened to the
+  // NEAREST ancestor rather than being refused or joined into a path: CrossTab's theme
+  // is a single flat label, and inventing "A > B > C" would put a string in the codebook
+  // that nothing else in the app knows how to split.
+  //
+  // A parent with `isCodable="false"` is an organiser, not a code — that is what NVivo
+  // and ATLAS.ti write for a folder — so it becomes a theme and not a code of its own.
+  // One left codable is imported as both: a real code that also groups others, which is
+  // legal in those tools and has no CrossTab equivalent beyond this.
   const codeIdByGuid = new Map();
   const codes = [];
   for (const el of doc.getElementsByTagName('Code')) {
     const guid = el.getAttribute('guid');
     if (!guid || codeIdByGuid.has(guid)) continue;
+    const parent = el.parentElement;
+    const group = parent && parent.tagName === 'Code' ? (parent.getAttribute('name') || '') : '';
+    const codable = (el.getAttribute('isCodable') || 'true') !== 'false';
+    // An organiser still needs its guid mapped, or a stray CodeRef to it resolves to
+    // nothing and silently drops the coding that pointed there.
     const id = 'c_' + guid;
     codeIdByGuid.set(guid, id);
-    codes.push({ id, name: el.getAttribute('name') || '(code)', color: el.getAttribute('color') || PALETTE[codes.length % PALETTE.length], group: '', memo: '' });
+    if (!codable && el.getElementsByTagName('Code').length) continue;
+    codes.push({
+      id,
+      name: el.getAttribute('name') || '(code)',
+      color: el.getAttribute('color') || PALETTE[codes.length % PALETTE.length],
+      group,
+      memo: '',
+    });
   }
 
   const names = [];

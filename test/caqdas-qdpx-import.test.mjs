@@ -15,7 +15,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { resolveImportedCodings } = await import('../plugins/builtin-caqdas/index.js');
+const { resolveImportedCodings, qdpxCodeTree } = await import('../plugins/builtin-caqdas/index.js');
+const SRC = await (await import('node:fs/promises'))
+  .readFile(new URL('../plugins/builtin-caqdas/index.js', import.meta.url), 'utf8');
 
 const DOCS = [
   { rid: 'r1', kind: 'text', text: 'the quick brown fox jumps' },
@@ -114,4 +116,105 @@ test('junk in, nothing out — never a throw', async () => {
   assert.deepEqual(await resolveImportedCodings(null, DOCS), { codes: [], segments: [], dropped: 0 });
   // A code with no id cannot be referenced by any coding, so it is not a code.
   assert.deepEqual((await resolveImportedCodings({ codes: [{ name: 'x' }] }, DOCS)).codes, []);
+});
+
+// =============================================================================
+// Themes survive the round trip (found 2026-10-21, by running it)
+// =============================================================================
+// The export had never been confirmed against its own importer. Doing it found that a
+// code's THEME went nowhere: "Barriers" and "Facilitators" appeared nowhere in the XML,
+// and a re-imported code came back with `group: ''`. So the codebook's organisation
+// survived neither a hand-off to NVivo nor a round trip through our own file.
+//
+// QDA-XML has the place for it already — hierarchy is nested `<Code>`, and a parent
+// marked `isCodable="false"` is an organiser rather than something you apply, which is
+// what NVivo and ATLAS.ti write for a folder-like code. Nothing new was invented.
+
+const guids = (codes) => new Map(codes.map((c, i) => [c.id, `guid-${i}`]));
+const tree = (codes) => qdpxCodeTree(codes, guids(codes));
+
+test('a theme becomes a parent code holding its members', () => {
+  const xml = tree([
+    { id: 'a', name: 'Cost', group: 'Barriers', color: '#e74c3c' },
+    { id: 'b', name: 'Transport', group: 'Barriers', color: '#d35400' },
+  ]);
+  assert.match(xml, /<Code [^>]*name="Barriers" isCodable="false">/);
+  assert.match(xml, /name="Barriers" isCodable="false">\s*<Code [^>]*name="Cost"/);
+  assert.equal((xml.match(/<\/Code>/g) || []).length, 1, 'one wrapper, closed once');
+  assert.ok(xml.indexOf('Transport') > xml.indexOf('Cost'), 'both members inside it');
+});
+
+test('an organiser is marked NOT codable; its members are', () => {
+  // The distinction the format uses, and the one a reader needs: a theme is not a code
+  // anyone coded with, so nothing may point at it as though it were.
+  const xml = tree([{ id: 'a', name: 'Cost', group: 'Barriers' }]);
+  assert.match(xml, /name="Barriers" isCodable="false"/);
+  assert.match(xml, /name="Cost" isCodable="true"/);
+});
+
+test('an un-themed code stays at the top level', () => {
+  // Where it is in the codebook. Inventing an "Ungrouped" parent would put a theme in
+  // the recipient's codebook that the author never wrote.
+  const xml = tree([
+    { id: 'a', name: 'Cost', group: 'Barriers' },
+    { id: 'b', name: 'Loose', group: '' },
+    { id: 'c', name: 'Also loose' },
+  ]);
+  assert.match(xml, /<Code [^>]*name="Loose" isCodable="true"\/>/);
+  assert.match(xml, /<Code [^>]*name="Also loose" isCodable="true"\/>/);
+  assert.equal((xml.match(/isCodable="false"/g) || []).length, 1);
+});
+
+test('whitespace is not a theme', () => {
+  const xml = tree([{ id: 'a', name: 'Cost', group: '   ' }]);
+  assert.doesNotMatch(xml, /isCodable="false"/);
+});
+
+test('colours ride along, and a code without one gets no attribute', () => {
+  const xml = tree([
+    { id: 'a', name: 'Cost', group: 'Barriers', color: '#e74c3c' },
+    { id: 'b', name: 'Bare', group: '' },
+  ]);
+  assert.match(xml, /name="Cost" isCodable="true" color="#e74c3c"/);
+  assert.match(xml, /name="Bare" isCodable="true"\/>/);
+});
+
+test('a code name that is XML is escaped, inside a theme and out', () => {
+  // A code is user-typed and can hold anything; an unescaped `&` makes the file
+  // unparseable and the export silently useless.
+  const xml = tree([{ id: 'a', name: 'Cost & "value" <here>', group: 'R&D' }]);
+  assert.match(xml, /name="R&amp;D"/);
+  assert.match(xml, /name="Cost &amp; &quot;value&quot; &lt;here&gt;"/);
+  assert.doesNotMatch(xml, /name="[^"]*&(?!amp;|quot;|lt;|gt;|apos;)/);
+});
+
+// =============================================================================
+// Reading the nesting back
+// =============================================================================
+
+test('the importer reads a parent code as the child’s theme', () => {
+  const parse = SRC.slice(SRC.indexOf('// Codes: guid → a fresh caqdas code.'),
+    SRC.indexOf('const names = []'));
+  assert.match(parse, /parent\.tagName === 'Code'/, 'the parent element is the theme');
+  assert.match(parse, /isCodable/, 'and an organiser is told apart from a code');
+  // An organiser still has to be in the guid map, or a CodeRef pointing at one resolves
+  // to nothing and the coding that used it is dropped without a word.
+  assert.ok(parse.indexOf('codeIdByGuid.set(guid, id)') < parse.indexOf('if (!codable'),
+    'the guid is mapped BEFORE an organiser is skipped');
+});
+
+// =============================================================================
+// The project is not named after a column
+// =============================================================================
+
+test('the exported project is not named after the label column', () => {
+  // It was: `<Project name="participant">`, which re-imported as a dataset called
+  // "participant". The label column names the documents inside the project; it is not
+  // the project.
+  const exp = SRC.slice(SRC.indexOf('export async function exportQdpx'), SRC.length);
+  const head = exp.slice(0, exp.indexOf('const zipBytes'));
+  assert.doesNotMatch(head, /<Project[^`]*labelColumn/);
+  assert.match(head, /name="\$\{xesc\(QDPX_PROJECT\)\}"/);
+  // One constant for the name in the XML and the name on disk, so they cannot disagree.
+  assert.match(exp, /filename: QDPX_FILE/);
 });

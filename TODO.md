@@ -504,8 +504,10 @@ bottom; they are the project's memory and are not summarised away.
         search of one surface; build it when the second is real.
 
 
-- [ ] **Verify the CAQDAS QDPX round-trip.** Runtime regression check (not tied to any
-      one code change): confirm a coding project exports and re-imports losslessly.
+- [~] **Verify the CAQDAS QDPX round-trip — SELF ROUND-TRIP DONE 2026-10-21; the
+      NVivo comparison is still open and is the owner's.** Runtime regression check (not
+      tied to any one code change): confirm a coding project exports and re-imports
+      losslessly.
 
       **RE-SCOPED 2026-10-17 — half of what this entry asked for no longer exists.** It
       used to also say "confirm an older-format saved project still loads and hydrates
@@ -528,10 +530,49 @@ bottom; they are the project's memory and are not summarised away.
       rather than to verify one. Either way it is a decision, not a check, and it is no
       longer part of this entry.
 
-      **What remains, and is worth doing:** the QDPX round-trip itself. The chooser
-      advertises REFI-QDA export, and nothing has confirmed that what comes back in is
-      what went out. It has to run in the app — `parseQdpx` uses `DOMParser`, which node
-      does not have, so this cannot become an ordinary test.
+      **DONE 2026-10-21 — and it found two things.** Run in the app against real item
+      records and a real dataset (`parseQdpx` needs `DOMParser`, so this could never be
+      an ordinary test): export a coded project, re-import the bytes, compare.
+
+      **The round trip is lossless for text, codings and codes.** Every coding came back
+      pointing at exactly the same words — character offsets re-derived from the quote,
+      not carried — and both documents came back verbatim. That part of the format was
+      doing its job and nothing had ever confirmed it.
+
+      **1. Themes were silently dropped.** A code's `group` — "Barriers",
+      "Facilitators" — appeared NOWHERE in the exported XML, and a re-imported code came
+      back with `group: ''`. So the codebook's organisation survived neither a hand-off
+      to NVivo nor a round trip through our own file; you got a flat pile of codes back.
+
+      QDA-XML already had the place for it and the exporter simply was not using it:
+      hierarchy is **nested `<Code>`**, and a parent marked `isCodable="false"` is an
+      organiser rather than something you apply — exactly what NVivo and ATLAS.ti write
+      for a folder-like code. So a theme is now a parent code holding its members, read
+      back on import as the child's `group`. Nothing new invented, and it is the form the
+      other tools already expect.
+
+      Two asymmetries are stated rather than papered over: **deeper nesting flattens to
+      the nearest ancestor** (CrossTab's theme is one flat label, and inventing "A > B >
+      C" would put a string in the codebook nothing else can split), and an organiser
+      left `isCodable="true"` by another tool imports as both a code and a theme, which
+      is legal there and has no CrossTab equivalent.
+
+      **2. The exported project was named after the LABEL COLUMN.**
+      `<Project name="participant">`, so re-importing produced a dataset called
+      "participant". The label column names the documents INSIDE the project; it is not
+      the project. Now one constant for the name in the XML and the name on disk, so they
+      cannot disagree. It is not the user's chosen filename — the host asks for that
+      AFTER the plugin has formatted the bytes, and there is no project-name surface in
+      the plugin API — so this is the honest answer rather than the ideal one.
+
+      **Re-verified after the fix:** themes match on both sides
+      (`Cost / Barriers`, `Trust in staff / Facilitators`), the XML carries
+      `<Code name="Barriers" isCodable="false">` wrappers, every coding still lands on
+      the same words, and the re-imported dataset is no longer named after a column.
+      8 new tests cover the parts Node can reach.
+
+      **Still outstanding and still the owner's:** the NVivo comparison. This proves
+      CrossTab agrees with itself; it does not prove NVivo agrees with CrossTab.
 
       *Notes for whoever does it*, gathered while scoping: a fixture can be built from the
       host without going through the UI — `textRef(text, start, end)` from `core/anchors.js`
