@@ -361,3 +361,51 @@ test('the check never repairs anything', async () => {
   assert.deepEqual(names(d, 'p1'), before, 'not one byte moved');
   assert.deepEqual(d.removed, []);
 });
+
+// =============================================================================
+// Discarding what the log cannot account for — a USER's call, not the app's
+// =============================================================================
+// Separate from compaction, and the difference is authority rather than mechanism.
+// Compaction acts on the log's own evidence and needs nobody's permission; this deletes
+// files the log says nothing about, which is the exact case the save path was changed to
+// stop touching. It exists only because a person can know the one thing the app cannot:
+// that the sync has finished.
+
+test('discarding removes exactly the unreferenced files, and compaction does not', async () => {
+  // The browser pass caught this wired the wrong way round: the dialog's "delete the
+  // unexpected files" called compactProject, which deliberately will not touch them —
+  // so it reported zero bytes and did nothing, while telling the user it had tidied up.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  put(d, 'projects/p1/src_peer.parquet', [1, 2, 3, 4, 5]);
+
+  const compacted = await s.compactProject('p1');
+  assert.deepEqual(compacted.files, [], 'compaction has no evidence about it');
+  assert.ok(d.files.has('projects/p1/src_peer.parquet'));
+
+  const plan = await s.discardUnreferenced('p1', { dryRun: true });
+  assert.deepEqual(plan.files, ['src_peer.parquet']);
+  assert.equal(plan.bytes, 5);
+  assert.equal(plan.removed, 0);
+  assert.ok(d.files.has('projects/p1/src_peer.parquet'), 'a dry run removes nothing');
+
+  const done = await s.discardUnreferenced('p1');
+  assert.equal(done.removed, 1);
+  assert.ok(!d.files.has('projects/p1/src_peer.parquet'));
+  assert.ok(d.files.has('projects/p1/src_op1.parquet'), 'the live source is untouched');
+});
+
+test('discarding refuses entirely when the manifest cannot be read', async () => {
+  // Without a manifest EVERY file is unaccounted-for, so this would delete the project's
+  // data because its index was briefly unreadable — the worst outcome in this whole area.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  put(d, 'projects/p1/src_peer.parquet');
+  d.files.set('projects/p1/project.json', new TextEncoder().encode('{ torn'));
+
+  const done = await s.discardUnreferenced('p1');
+  assert.deepEqual(done.files, []);
+  assert.equal(done.removed, 0);
+  assert.ok(d.files.has('projects/p1/src_op1.parquet'));
+  assert.ok(d.files.has('projects/p1/src_peer.parquet'));
+});

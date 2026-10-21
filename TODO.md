@@ -1242,10 +1242,96 @@ bottom; they are the project's memory and are not summarised away.
     written into a project folder now survives an autosave and is reported as
     `unreferenced` instead of being deleted. 14 new tests.
 
-    **Still to build:** the UI. `projectIntegrity` has no caller yet — the natural homes
-    are the project manager (a badge on a project that is not whole) and a line in the
-    sync status when `missingSources` is non-empty, which is the thing that today only
-    reaches the console.
+    **The UI — BUILT 2026-10-21.** A hazard chip beside the project status, and a dialog
+    behind it.
+
+    **Three messages, not one, because "wait" and "act" are opposite advice.** The
+    owner's framing: this should never arise for a local OPFS project, but with OneDrive
+    syncing a folder it may be downright common. So `core/project-health.js` decides from
+    the backing and the KIND of trouble:
+    - **folder + something absent → `waiting`** (amber). Absence is routine there: the
+      index and the data files are the two ends of one save and sync separately. "This
+      usually clears on its own."
+    - **local + something absent → `damaged`** (red). Nothing else writes to OPFS, so
+      they did not fail to arrive — they have gone.
+    - **anything present-but-unreadable, or an unparseable manifest → `damaged`** on
+      either backing, because no sync client is going to finish delivering a torn file.
+    Damage outranks absence when both are present, or a folder project with one torn file
+    would read as "just waiting" and be left alone.
+
+    **The chip is a button and is absent when the project is whole** — a permanent
+    "healthy" badge trains people to stop reading the place the warning will appear.
+
+    **Recovery: every route shown, the unavailable ones saying WHY.** A greyed "rewrite
+    from this session" that explains it has no copy in memory tells the user what state
+    they are in; a hidden one reads as a feature that is broken.
+    - **Check again** — always, and advertised as the thing to try first only when
+      waiting can actually help.
+    - **Rewrite from this session** — the answer to the owner's question, *"do we have a
+      local copy cached while it is open?"* Yes, in DuckDB, **but only for sources this
+      session actually loaded or created**. Which crosses over against intuition: the
+      common folder case (the file never arrived) is exactly the case where there is
+      nothing in memory, while the local-corruption case (it went bad AFTER loading) is
+      where it works. It also warns that writing into a synced folder can produce a
+      conflicted copy.
+    - **Ask a collaborator** — gap-fill, enabled only during a live session.
+    - **Delete the unexpected files** — see the bug below.
+
+    **No manifest backup exists, checked rather than assumed:** `project.base.json` is
+    gone, folder-sync derives the common ancestor from op identity instead. So an
+    unreadable `project.json` has no local fallback, and the dialog says so rather than
+    offering a repair that cannot happen. (The stale comment in `project-store.js` still
+    listing that file as one it encrypts is fixed.)
+
+    **Two bugs the browser pass found, neither visible to the test suite:**
+    - **The backing was read off `#backend?.kind`, which is unset for the default OPFS
+      binding** — so it fell through to the FORGIVING answer and told a local project to
+      wait for a sync that is never coming. It now reads the driver's own
+      `externallySynced` capability, which means exactly "something other than this tab
+      may write these bytes" — the actual question. Confirmed `false` for OPFS in the
+      live app.
+    - **"Delete the unexpected files" was wired to `compactProject`, which deliberately
+      will not touch them** — compaction acts on the log's evidence, and an unexpected
+      file has no op at all, which is precisely why it is protected. The button promised
+      an action that would have done nothing and reported a size of zero. It now calls
+      `discardUnreferenced`, a separate method behind a confirmation: compaction needs
+      nobody's permission, while this is a user overriding the rule that the app never
+      deletes what it cannot account for, asserting the one fact the app cannot check —
+      that the sync has finished. It refuses entirely when the manifest is unreadable,
+      since then EVERY file is unaccounted-for.
+
+    Also found: a `ReferenceError` in `#rebuildableFiles` from a helper that never landed
+    when an earlier patch script aborted part-way. Node could not see it — nothing
+    exercises that path — and the first click did.
+
+    **Verified in the browser end to end:** chip absent while healthy; amber "Waiting for
+    1 file" on a folder reading and red "1 file missing" on OPFS, as a real `<button>`
+    beside the status line; the dialog naming both file lists, with "holds the rows for
+    it" (not "1 of the 1 affected file") and "frees 3.0 MB" on the discard action; and
+    Rewrite actually restoring the deleted file, after which the chip correctly
+    downgraded to the one remaining unexpected file.
+
+  - [x] **Project sizes in the manager — DONE 2026-10-21.** The owner asked whether the
+        manager lists sizes to support the "delete old projects to free quota" workflow
+        the storage dialog sends people into. It did not: rows showed
+        "date · N datasets, N rows", and rows are a poor proxy — a ten-row project
+        carrying a video is large, a half-million-row Parquet can be small.
+
+        `ProjectStore#projectSizes()` walks the whole index once (not per project — at
+        ~50 projects that was a stat storm) and counts EVERY file, including unreferenced
+        ones, because the question is "what would deleting this free". A project whose
+        folder cannot be read is omitted rather than reported as zero, since "0 bytes"
+        reads as "nothing to gain here". Remembered locations have no size for the same
+        reason they have no row count: a list cannot reach into a folder.
+
+        `humanBytes` moved to the plugin stdlib on the way — it was defined in the
+        storage-pressure DIALOG module, and importing that into `project-meta.js` to
+        borrow one formatter would have put a DOM dependency inside a string builder that
+        documents being kept cycle-free. `text.js` had already anticipated it: *"If that
+        stops being true — if core wants the formatters…"*.
+
+        Verified live: all 53 projects carry a size, rendering as
+        "1 hour ago · 1 dataset, 30 rows, 41 KB".
 
   - **Core-vs-plugin boundary — apply the doctrine we already have, don't invent one.**
     `import-service.js` states the rule: the engine owns **"only what the security model

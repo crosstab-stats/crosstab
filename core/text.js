@@ -26,4 +26,4 @@
  * hazard, which is why they are not in the same file.
  */
 
-export { escapeHtml, stripEllipsis, cleanName } from './plugin-stdlib.js';
+export { escapeHtml, stripEllipsis, cleanName, humanBytes } from './plugin-stdlib.js';

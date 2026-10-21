@@ -226,7 +226,7 @@ export class ProjectStore {
 
   /** AES-GCM master key for at-rest encryption, or null (plaintext). Set by
    * {@link ProjectStore#unlock}; never persisted. When set, every data file
-   * (`project.json`, `project.base.json`, Parquet) is written as a ciphertext
+   * (`project.json`, the Parquet sources, the asset blobs) is written as a ciphertext
    * envelope and decrypted on read — so a driver / cloud provider that mirrors the
    * folder only ever sees ciphertext. The salt + a verifier live plaintext in
    * `crosstab-encryption.json` (a salt isn't secret). The catalog is always
@@ -892,6 +892,83 @@ export class ProjectStore {
    *
    * Best-effort throughout: a sweep failure must never fail a save.
    */
+  /**
+   * Bytes on disk per project — every file in each project's folder, not just the ones
+   * the log references.
+   *
+   * Everything counts because this answers "what would deleting it free", and an
+   * unreferenced source or a stale asset occupies exactly as much room as a live one.
+   *
+   * ONE walk for the whole index rather than a call per project: at ~50 projects a
+   * per-project version was most of a `stat` storm, and this is called when a human
+   * opens the manager — not on any hot path. A project whose folder cannot be read is
+   * omitted rather than reported as zero, because "0 bytes" would be read as "nothing to
+   * gain by deleting this".
+   *
+   * @returns {Promise<Map<string, number>>} project id → bytes
+   */
+  async projectSizes() {
+    const out = new Map();
+    if (this.#flat) return out; // folder mode is one project, and its size is the folder's
+    let ids;
+    try { ids = await this.#driver.list(ROOT); } catch { return out; }
+    for (const id of ids) {
+      if (id === CATALOG) continue;
+      let total = 0;
+      let seen = false;
+      try {
+        for (const name of await this.#driver.list(`${ROOT}/${id}`)) {
+          if (name === ASSET_DIR) {
+            for (const a of await this.#driver.list(`${ROOT}/${id}/${ASSET_DIR}`)) {
+              const st = await this.#driver.stat(`${ROOT}/${id}/${ASSET_DIR}/${a}`).catch(() => null);
+              if (st) { total += st.size || 0; seen = true; }
+            }
+            continue;
+          }
+          const st = await this.#driver.stat(`${ROOT}/${id}/${name}`).catch(() => null);
+          if (st) { total += st.size || 0; seen = true; }
+        }
+      } catch { continue; }
+      if (seen) out.set(id, total);
+    }
+    return out;
+  }
+
+  /**
+   * Delete the data files nothing in this project's log accounts for.
+   *
+   * **Deliberately not part of {@link ProjectStore#compactProject}**, and the difference
+   * is authority rather than mechanism. Compaction acts on the log's own evidence — an
+   * op that says its bytes are dead — and needs nobody's permission. This deletes files
+   * the log says NOTHING about, which is the exact case the save path was changed to
+   * stop touching, because an unaccounted-for file is routinely a collaborator's data
+   * that arrived before the index explaining it.
+   *
+   * So it exists only as a thing a person can choose, knowing the one fact the app
+   * cannot: that the sync has finished. Callers must confirm before calling.
+   *
+   * @param {string} id
+   * @param {{dryRun?: boolean}} [opts]
+   * @returns {Promise<{files: string[], bytes: number, removed: number}>}
+   */
+  async discardUnreferenced(id, { dryRun = false } = {}) {
+    const out = { files: [], bytes: 0, removed: 0 };
+    const check = await this.projectIntegrity(id);
+    // No manifest means nothing can be called unaccounted-for: every file would qualify,
+    // and deleting the project's data because its index was briefly unreadable is the
+    // worst outcome this whole area has.
+    if (check.manifestUnreadable) return out;
+    for (const name of check.unreferenced) {
+      const st = await this.#driver.stat(this.#file(id, name)).catch(() => null);
+      out.files.push(name);
+      out.bytes += st?.size ?? 0;
+      if (dryRun) continue;
+      await this.#driver.remove(this.#file(id, name));
+      out.removed += 1;
+    }
+    return out;
+  }
+
   /**
    * How much room is left, as the browser sees it.
    *

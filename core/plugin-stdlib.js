@@ -173,6 +173,27 @@ export function coderName(rec) {
   return String(a.name || a.initials || a.authorId || '').trim() || null;
 }
 
+/**
+ * A file size as a person reads them: `900 B`, `1.5 KB`, `512 MB`, `5.0 GB`.
+ *
+ * Two significant figures below ten and none above, because the digit after the point
+ * stops meaning anything once the unit is right — "9.4 GB" is useful, "9.43 GB" is noise,
+ * and "512.0 MB" is a false claim about precision the estimate never had.
+ *
+ * Clamped at zero: a negative size is nonsense, and `freeBytes` is derived from
+ * `navigator.storage.estimate()`, which can report usage above quota on some engines.
+ * "-5 B free" would make the one dialog that has to be trusted look broken.
+ */
+export function humanBytes(n) {
+  const b = Math.max(0, Number(n) || 0);
+  if (b < 1024) return `${Math.round(b)} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = b / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return `${v >= 10 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
 /** `slug` plus an extension — the exact function three exporters had written out. */
 export function filenameFor(title, ext, opts) {
   return `${slug(title, opts)}.${ext}`;

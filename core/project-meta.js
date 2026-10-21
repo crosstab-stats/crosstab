@@ -30,6 +30,8 @@
  * than the duplication it removed. The data is shared; the widget is not.
  */
 
+import { humanBytes } from './text.js';
+
 /**
  * How a project describes itself in a list: when it was last worked on, and how big it is.
  *
@@ -49,7 +51,8 @@
  * less helpful. Shared by the sidebar's Recent list and the Open-project modal so one
  * project cannot describe itself two ways depending on which list you opened.
  *
- * @param {{savedAt?: number, datasetCount?: number|null, rowCount?: number|null}} entry
+ * @param {{savedAt?: number, datasetCount?: number|null, rowCount?: number|null,
+ *   bytes?: number|null}} entry
  * @param {{date?: 'relative'|'absolute'|'none', now?: number}} [opts]
  *   `relative` (the default) is relative-under-a-week, which is when "which one was I just
  *   in" is the question being asked; `absolute` suits a roomy surface where someone is
@@ -67,6 +70,12 @@ export function projectMetaLine(entry, { date = 'relative', now = Date.now() } =
   if (Number.isFinite(ds)) size.push(`${ds} dataset${ds === 1 ? '' : 's'}`);
   const rows = entry?.rowCount;
   if (Number.isFinite(rows) && rows > 0) size.push(`${rows.toLocaleString()} row${rows === 1 ? '' : 's'}`);
+  // Disk size last, because it is the least interesting answer to "which one was I in"
+  // and the only answer to "which one should I delete". Rows are a poor proxy for it:
+  // a ten-row project carrying a video is large, and a half-million-row Parquet can be
+  // small. Absent rather than zero when unknown, like every other part.
+  const bytes = entry?.bytes;
+  if (Number.isFinite(bytes) && bytes > 0) size.push(humanBytes(bytes));
   if (size.length) parts.push(size.join(', '));
   return parts.join(' \u00b7 ');
 }

@@ -33,6 +33,10 @@
  */
 
 import { el } from './plugin-stdlib.js';
+// Re-exported, not redefined: every surface that prints a size — this dialog, the
+// project manager's rows — must print it the same way.
+export { humanBytes } from './text.js';
+import { humanBytes } from './text.js';
 
 /** Below this share of free space, start offering. ~15% is late enough not to nag and
  * early enough that a few more saves still fit. */
@@ -84,20 +88,6 @@ export function isQuotaError(err) {
     || name === 'NS_ERROR_FILE_NO_DEVICE_SPACE'   // Firefox
     || err.code === 22                            // legacy DOMException.QUOTA_EXCEEDED_ERR
     || err.code === 1014;                         // legacy Firefox
-}
-
-/** Bytes as a person reads them. */
-export function humanBytes(n) {
-  // Clamped: a negative size is nonsense, and `freeBytes` is computed from an estimate
-  // that can report usage above quota on some engines — printing "-5 B free" would make
-  // the one dialog that has to be trusted look broken.
-  const b = Math.max(0, Number(n) || 0);
-  if (b < 1024) return `${Math.round(b)} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let v = b / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
-  return `${v >= 10 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
 
 /**

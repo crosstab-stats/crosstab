@@ -646,6 +646,23 @@
         padding: 6px 12px; font-size: 12px; color: #5a6470;
       }
       .lib-status { margin-left: 16px; color: #646e77; }
+      /* Project health. A button, not a coloured word: it is the way into the
+         explanation, so it has to look clickable and answer the keyboard. Absent
+         entirely when the project is whole — a permanent "healthy" badge trains people
+         to stop reading the place the warning will appear. */
+      .ct-health-chip { margin-left: 10px; font: inherit; font-size: 12px; padding: 2px 8px;
+        border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
+      /* Amber for "this may fix itself", red for "it will not". The two states are the
+         whole point of the feature, so they must not look alike at a glance. */
+      .ct-health-chip.is-waiting { background: #fef3c7; border-color: #f0c674; color: #7d5a00; }
+      .ct-health-chip.is-damaged { background: #fde2e1; border-color: #e6a6a3; color: #8a1f1a; }
+      .ct-health-chip:hover { filter: brightness(0.96); }
+      .ct-health-chip:focus-visible { outline: 2px solid #2980b9; outline-offset: 1px; }
+      /* The file list inside the health dialog: a name is what you look for in the sync
+         client's own progress list, so it has to be readable and copyable. */
+      .ct-health__files { margin: 0 0 12px; font-size: 12px; }
+      .ct-health__files ul { margin: 4px 0 0; padding-left: 18px; }
+      .ct-health__files li { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #5a6470; }
 
       /* dataset library modal: one row per saved entry */
       .ct-lib__list { max-height: 50vh; }

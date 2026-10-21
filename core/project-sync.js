@@ -19,6 +19,8 @@ import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ASSETS_CHANGED } from './asset-store.js';
 import { pressureLevel, showStoragePressure, humanBytes, isQuotaError } from './storage-pressure.js';
+import { projectHealth, recoveryOptions, showProjectHealth } from './project-health.js';
+import { el } from './plugin-stdlib.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest, isSourceFile } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
 import { BlobExchange, sourceRefs, assetRefs } from './gap-fill.js';
@@ -385,6 +387,9 @@ export class ProjectSync {
    */
   /** Set once, by the first check that fires — see `#checkStoragePressure`. */
   #pressureAsked = false;
+
+  /** The last health reading, so the status bar can repaint without re-reading disk. */
+  #health = null;
 
   /**
    * Opens the project manager, set by the app after it exists (it closes over this
@@ -970,6 +975,10 @@ export class ProjectSync {
       }
       this.#dirty = false;
       this.#setStatus('saved');
+      // After a save, because that is when this tab last touched the files and so when
+      // its own view of them is freshest. Not on a timer: a poll would stat every file
+      // all day to catch a sync that announces itself by the next save anyway.
+      void this.refreshHealth();
     } catch (err) {
       console.error('[project] autosave failed', err);
       // Keep the dirty set so the next attempt re-tries those sources.
@@ -1843,6 +1852,10 @@ export class ProjectSync {
       this.#dirty = false;
       this.#setStatus('saved');
       this.#emitProject();
+      // On opening, because a project synced in from a folder is at its most likely to
+      // be mid-delivery right now, and a dataset that came back short should say why
+      // before the user wonders what they did wrong.
+      void this.refreshHealth();
     } catch (err) {
       console.error('[project] load failed', err);
       this.#results.appendError(
@@ -2559,6 +2572,14 @@ export class ProjectSync {
   async listProjects() {
     const out = [];
 
+    // Disk size per project, in ONE walk. It is the number the storage-pressure dialog
+    // sends people here to compare, and rows are a poor proxy for it: a ten-row project
+    // carrying a video is large, a half-million-row Parquet can be small. Only local
+    // projects can be measured — a remembered folder cannot be read from a list — so a
+    // location simply has none, the same way it has no row count.
+    let sizes = new Map();
+    try { sizes = await this.#opfs.projectSizes(); } catch { /* sizes are a nicety */ }
+
     // Local projects, from the store's own catalog.
     try {
       for (const p of await this.#opfs.list()) {
@@ -2572,6 +2593,7 @@ export class ProjectSync {
           lastOpenedAt: p.lastOpenedAt ?? p.savedAt ?? 0,
           datasetCount: p.datasetCount ?? null,
           rowCount: Number.isFinite(p.rowCount) ? p.rowCount : null,
+          bytes: sizes.get(p.id) ?? null,
           // The plugin set this project last had active. The launcher seeds its picker from
           // it on a pick, so you can see and adjust the selection before Start — a feature
           // the old OPFS-only list carried and this one did not, which would have silently
@@ -3487,6 +3509,139 @@ export class ProjectSync {
     return form?.name?.trim() || null;
   }
 
+  /**
+   * Re-read this project's files and paint the result on the status bar.
+   *
+   * Checked after a save and on opening, not on a timer: those are the moments the
+   * answer can have changed for a reason this tab knows about, and a poll would stat
+   * every file of every project all day to catch a sync that will announce itself by
+   * the next save anyway.
+   *
+   * Never throws into its caller — a health check that failed must not look like a save
+   * that failed.
+   */
+  async refreshHealth() {
+    try {
+      if (!this.#binding?.id) { this.#health = null; this.#setStatus(); return; }
+      const integrity = await this.#store.projectIntegrity(this.#binding.id);
+      this.#health = projectHealth({
+        integrity,
+        // The driver's own capability, not the backend kind: `externallySynced` means
+        // exactly "something other than this tab may write these bytes", which IS the
+        // question. Reading it off `#backend` defaulted to the forgiving answer
+        // whenever the backend was unset — telling a local project to wait for a sync
+        // that is never coming, which was the first thing the browser pass showed.
+        backing: this.#syncedElsewhere() ? 'folder' : 'opfs',
+        live: !!this.#liveSession,
+      });
+      this.#health.integrity = integrity;
+      this.#setStatus();
+    } catch (err) {
+      console.warn('[project] health check skipped', err);
+    }
+  }
+
+  /**
+   * Open the health dialog and carry out whatever is chosen.
+   *
+   * The actions live here rather than in the dialog because each one is a real operation
+   * on the store, and the dialog's job is to explain and ask.
+   */
+  async openHealth() {
+    if (!this.#health || !this.#binding?.id) return;
+    const id = this.#binding.id;
+    const integrity = this.#health.integrity ?? await this.#store.projectIntegrity(id);
+    // What DISCARDING would free — not compaction. The two act on different files and
+    // quoting one number for the other was the first thing the browser pass caught.
+    const spare = await this.#store.discardUnreferenced(id, { dryRun: true });
+    const choice = await showProjectHealth({
+      health: this.#health,
+      integrity,
+      options: recoveryOptions({
+        health: this.#health,
+        integrity,
+        rebuildable: this.#rebuildableFiles(),
+        live: !!this.#liveSession,
+        spareBytes: spare.bytes,
+      }),
+    });
+    if (choice === 'recheck') {
+      await this.refreshHealth();
+      this.#results?.appendText?.(
+        this.#health?.level === 'ok'
+          ? '**Project files are complete.** Everything the history refers to is present.'
+          : `**Still ${this.#health?.short ?? 'incomplete'}.**`,
+      );
+    } else if (choice === 'rebuild') {
+      await this.#rebuildSources();
+    } else if (choice === 'discard') {
+      // Confirmed, because this is the user overriding the rule that the app never
+      // deletes what it cannot account for — and the thing they are asserting (that
+      // nothing is still syncing) is the one fact the app has no way to check.
+      const plan = await this.#store.discardUnreferenced(id, { dryRun: true });
+      const ok = await confirmDialog({
+        title: `Delete ${plan.files.length} unexpected file${plan.files.length === 1 ? '' : 's'}?`,
+        message:
+          `This frees ${humanBytes(plan.bytes)}. Nothing in this project's history mentions `
+          + 'these files, so CrossTab cannot tell whether they are a collaborator\'s data '
+          + 'that has arrived ahead of the index explaining it. If any sync is still '
+          + 'running, wait for it to finish instead — this cannot be undone.',
+        okLabel: 'Delete them',
+        danger: true,
+      });
+      if (!ok) return;
+      const done = await this.#store.discardUnreferenced(id);
+      await this.refreshHealth();
+      this.#results?.appendText?.(
+        `**Removed ${done.removed} unexpected file${done.removed === 1 ? '' : 's'}** `
+        + `(${humanBytes(done.bytes)}).`,
+      );
+    }
+  }
+
+  /**
+   * Which of the project's files this session could write back out of memory.
+   *
+   * A source op's rows are in DuckDB only if this session actually loaded or created
+   * them. The common folder case — the file never arrived — is exactly the case where
+   * they are NOT, which is why the rebuild option so often cannot be offered and has to
+   * say why.
+   */
+  #rebuildableFiles() {
+    const absent = new Set();
+    for (const ds of this.#datasets?.list?.() ?? []) {
+      const store = this.#datasets.get?.(ds.id);
+      // The list `rederive` itself built when it skipped these for want of bytes — asking
+      // it rather than forming a second opinion about what is materialised.
+      for (const m of store?.missingSources ?? []) absent.add(`src_${m.id}.parquet`);
+    }
+    // Everything the project's own log still points at, less what is not in memory. The
+    // file name derives from the op id, which is what makes the two lists comparable.
+    const out = new Set();
+    for (const f of this.#health?.integrity ? allKnownSourceFiles(this.#health.integrity) : []) {
+      if (!absent.has(f)) out.add(f);
+    }
+    return out;
+  }
+
+  /** Write the rows this session holds back into the project's data files. */
+  async #rebuildSources() {
+    const id = this.#binding?.id;
+    if (!id) return;
+    try {
+      const bundle = await this.#snapshot(true);
+      await this.#store.writeSourcesOnly(id, bundle);
+      await this.refreshHealth();
+      this.#results?.appendText?.(
+        '**Data files rewritten from this session.** The rows held in memory have been '
+        + 'written back into the project. On a synced folder your sync client may record '
+        + 'this as a conflicting change.',
+      );
+    } catch (err) {
+      this.#results?.appendError?.(`Could not rewrite the data files: ${err.message}`);
+    }
+  }
+
   #setStatus(state, nameOverride) {
     if (!this.#statusEl) return;
     const name = nameOverride ?? this.#binding?.name;
@@ -3502,7 +3657,45 @@ export class ProjectSync {
     else if (!this.#open) text = 'No project open';
     else text = 'Unsaved project';
     this.#statusEl.textContent = text;
+    this.#paintHealth();
   }
+
+  /**
+   * The hazard chip beside the status text.
+   *
+   * A button, not a coloured word: it is the way INTO the explanation, and a thing you
+   * are meant to click has to look like one and answer the keyboard. Absent entirely
+   * when the project is whole — a permanent "healthy" badge is noise that trains people
+   * to stop reading the spot where the warning will appear.
+   */
+  #paintHealth() {
+    if (!this.#statusEl) return;
+    const existing = this.#statusEl.parentElement?.querySelector('.ct-health-chip');
+    const h = this.#health;
+    if (!h || h.level === 'ok') { existing?.remove(); return; }
+    const chip = existing ?? el('button', { class: 'ct-health-chip' });
+    chip.type = 'button';
+    chip.className = `ct-health-chip is-${h.level}`;
+    chip.textContent = `\u26a0 ${h.short}`;
+    chip.title = `${h.title} — click for details`;
+    if (!existing) {
+      chip.addEventListener('click', () => void this.openHealth());
+      this.#statusEl.insertAdjacentElement('afterend', chip);
+    }
+  }
+}
+
+/**
+ * Every file the integrity check had an opinion about — the ones it expected and did not
+ * find, and the ones it found but could not read. The rebuild question is only ever
+ * asked about these; an unreferenced file is not something this session can rewrite,
+ * because nothing in the log claims it.
+ */
+function allKnownSourceFiles(integrity) {
+  return [
+    ...(integrity?.missing ?? []),
+    ...(integrity?.unreadable ?? []),
+  ];
 }
 
 /**
