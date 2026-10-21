@@ -42,6 +42,22 @@ const CATALOG_FLUSH_MS = 400;
 /** A pending catalog change that removes the entry. */
 const REMOVED = Symbol('catalog-entry-removed');
 
+/**
+ * Every file name a manifest's log points at: source Parquet and asset blobs.
+ *
+ * One reader for both, because the sweep and the integrity check have to agree about
+ * what "referenced" means — two slightly different answers would show a file as garbage
+ * in one and as healthy in the other.
+ */
+export function manifestRefs(manifest) {
+  const out = new Set();
+  for (const op of manifest?.log ?? []) {
+    if (isSourceOp(op) && op.payload?.src?.file) out.add(op.payload.src.file);
+    else if (op.type === 'addAsset' && op.payload?.id) out.add(`${ASSET_DIR}/${safeAssetId(op.payload.id)}.bin`);
+  }
+  return out;
+}
+
 /** Do two summaries say the same thing? Compared field by field rather than by
  * stringifying, because key ORDER would otherwise decide whether the index looked
  * stale, and `undefined` and absent have to read as the same. */
@@ -151,6 +167,17 @@ export class ProjectStore {
 
   /** The scheduled flush, so a burst of autosaves writes the catalog once. */
   #flushTimer = null;
+
+  /**
+   * Per project, the set of file names a manifest this session has READ or WRITTEN
+   * referred to — what the sweep is allowed to consider "mine".
+   *
+   * Null for a project neither loaded nor saved here yet, and that distinction is the
+   * whole point: no knowledge means no sweeping, rather than sweeping against an empty
+   * set and deleting everything in the folder.
+   * @type {Map<string, Set<string>>}
+   */
+  #knownRefs = new Map();
 
   /** Ids whose catalog entry this session has already put on disk. The FIRST save of a
    * project flushes immediately, because that is when the entry may need CREATING and a
@@ -658,6 +685,9 @@ export class ProjectStore {
    */
   async load(id) {
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
+    // Opening a project is the other way the sweep learns what belongs to it — and the
+    // better one, since it happens before any save can act on a guess.
+    this.#knownRefs.set(id, manifestRefs(manifest));
     // Reconcile the index against what was just read. A catalog entry left stale by a
     // lost flush would otherwise STAY stale for a project nobody edits: opening one to
     // read its output stamps `lastOpenedAt` and nothing else, and without an edit there
@@ -848,19 +878,98 @@ export class ProjectStore {
    *
    * Best-effort throughout: a sweep failure must never fail a save.
    */
+  /**
+   * Check a project's files against what its manifest expects.
+   *
+   * Four outcomes, and keeping them apart is the whole value — they have different
+   * causes and opposite remedies:
+   *
+   *  - **`missing`** — the log references a file that is not here. A dataset will come
+   *    back short or empty. Usually a sync that delivered `project.json` before the
+   *    Parquet, which are the two ends of the same save and arrive in whatever order the
+   *    sync client feels like; the fix is to wait, or to fetch that one file.
+   *  - **`unreferenced`** — a file is here that nothing in the log points at. The
+   *    opposite order of the same race, or a hand-copied folder. **Not garbage**: until
+   *    the matching manifest arrives this is the only copy of someone's data, which is
+   *    why the sweep no longer deletes it.
+   *  - **`unreadable`** — present, and the bytes are not what they claim. A torn write,
+   *    a half-synced file, bit-rot. This is the only one that is unambiguously damage.
+   *  - **`manifestUnreadable`** — `project.json` itself will not parse. Everything else
+   *    is unknowable, so the check says that and stops rather than reporting every file
+   *    as unreferenced, which would be true and useless.
+   *
+   * It reads no Parquet bodies: a size-zero or truncated file is caught by `stat`, and
+   * decoding every column of a multi-gigabyte project to verify a project the user has
+   * not asked about would cost more than the problem.
+   *
+   * Reports; never repairs. The remedies differ and most of them are the user's — wait
+   * for a sync, re-copy a file, accept a loss. The one time this code acted on its own
+   * judgement it deleted a colleague's data.
+   *
+   * @param {string} id
+   * @returns {Promise<{ok: boolean, manifestUnreadable: boolean, missing: string[],
+   *   unreferenced: string[], unreadable: string[], checked: number}>}
+   */
+  async projectIntegrity(id) {
+    const out = {
+      ok: true, manifestUnreadable: false, missing: [], unreferenced: [], unreadable: [], checked: 0,
+    };
+    let manifest = null;
+    try {
+      manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
+    } catch {
+      // Includes a project encrypted under a key this store does not hold — which is
+      // not damage, and is why this says "unreadable" rather than "corrupt".
+      return { ...out, ok: false, manifestUnreadable: true };
+    }
+    const want = manifestRefs(manifest);
+    const dir = this.#flat ? '' : `${ROOT}/${id}`;
+    const here = new Set();
+    for (const name of await this.#driver.list(dir)) if (isSourceFile(name)) here.add(name);
+    for (const assetId of await this.listAssets(id)) here.add(`${ASSET_DIR}/${safeAssetId(assetId)}.bin`);
+
+    for (const name of want) {
+      out.checked += 1;
+      if (!here.has(name)) { out.missing.push(name); continue; }
+      const st = await this.#driver.stat(this.#file(id, name)).catch(() => null);
+      // A zero-length file is the signature of an interrupted write: the entry exists
+      // because it was created, and the bytes never followed.
+      if (!st || !st.size) out.unreadable.push(name);
+    }
+    for (const name of here) if (!want.has(name)) out.unreferenced.push(name);
+
+    out.ok = !out.missing.length && !out.unreferenced.length && !out.unreadable.length;
+    out.missing.sort();
+    out.unreferenced.sort();
+    out.unreadable.sort();
+    return out;
+  }
+
   async #sweep(id, manifest) {
     try {
-      const keep = new Set();
-      for (const op of manifest.log ?? []) {
-        if (isSourceOp(op) && op.payload?.src?.file) keep.add(op.payload.src.file);
-        else if (op.type === 'addAsset' && op.payload?.id) keep.add(`${ASSET_DIR}/${safeAssetId(op.payload.id)}.bin`);
-      }
-      for (const name of await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`)) {
-        if (!isSourceFile(name)) continue;
-        if (!keep.has(name)) await this.#driver.remove(this.#file(id, name));
-      }
-      for (const assetId of await this.listAssets(id)) {
-        if (!keep.has(`${ASSET_DIR}/${safeAssetId(assetId)}.bin`)) await this.removeAsset(id, assetId);
+      const keep = manifestRefs(manifest);
+      const known = this.#knownRefs.get(id);
+      // Record what the new manifest points at BEFORE the early return, so the first
+      // save of a session teaches the next one.
+      this.#knownRefs.set(id, new Set(keep));
+      // Nothing to go on: a project this session has neither loaded nor saved before.
+      // Abstain rather than treat "I do not recognise it" as "it is garbage".
+      if (!known) return;
+
+      // Delete ONLY what was accounted for and has now been dropped — a dataset removed,
+      // a source superseded. A file in neither set arrived from somewhere this session
+      // cannot see: a peer's sync, another tab, a hand-copied folder. It is unaccounted
+      // for, not garbage, and `projectIntegrity` reports it instead.
+      const drop = [...known].filter((f) => !keep.has(f));
+      if (!drop.length) return;
+      const present = new Set(await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`));
+      for (const name of drop) {
+        if (isSourceFile(name)) {
+          if (present.has(name)) await this.#driver.remove(this.#file(id, name));
+          continue;
+        }
+        const m = /^assets\/(.+)\.bin$/.exec(name);
+        if (m) await this.removeAsset(id, m[1]);
       }
     } catch (err) {
       console.warn('[project] sweep skipped', err);

@@ -1107,13 +1107,65 @@ bottom; they are the project's memory and are not summarised away.
     - *Async/folder mode mostly gets this free* — the sync client mirrors the Parquet
       sources, so gaps appear only inside the sync-latency window; the mechanism is
       chiefly a live-mode concern plus the sneakernet path.
-  - [ ] **Sneakernet index UI — the air-gap fallback, still unbuilt (2026-08-21).** When
-    P2P will not connect, the index should name *exactly which file* to hand over
-    out-of-band, and verify the imported bytes against what the log expects. The engine
-    half exists — `missingSources` / `missingAssets` in `core/gap-fill.js` answer "what do
-    I lack?" — but nothing surfaces that answer to a user outside the automated transfer.
-    Small, and it earns its keep precisely where the automation cannot run, which is the
-    population the air-gap work (#71) exists for.
+  - [~] **RE-SCOPED 2026-10-21 — this is not a sneakernet item, it is a "sync somehow
+    broke" item. The data-loss half is FIXED; the UI half is still unbuilt.**
+
+    The entry asked for an air-gap fallback: when P2P will not connect, name exactly
+    which file to hand over on a USB stick. The owner's question killed that framing —
+    *"how is a sneakernet UI materially different from 'store project in folder', which
+    is what OneDrive sharing already uses?"* For a whole-project hand-off it is not: if
+    you can put a folder on a stick, folder-store already does it.
+
+    **What is real is a GAP, and it has two directions.** A project's `project.json` and
+    its Parquet are the two ends of one save, and a folder sync client delivers them in
+    whatever order it likes:
+    - **Manifest first** — a dataset comes back short or empty. `DataStore` records this
+      on `missingSources` and `console.warn`s it; **nothing surfaces it**, confirmed by
+      grep: zero consumers outside the data store. The user sees an empty dataset and no
+      explanation.
+    - **Bytes first** — the owner asked what happens in the opposite case. The answer
+      was much worse than "nothing": see below.
+
+    **The data loss (found and fixed 2026-10-21).** `ProjectStore#sweep` deleted every
+    `src_*.parquet` and every asset the manifest BEING SAVED did not reference, on every
+    save. In a folder a sync client writes into, my manifest is only half the story until
+    the peer's arrives and merges — so a peer's data file landing before their
+    `project.json` was **deleted by my next autosave**, and their manifest then arrived
+    pointing at bytes I had destroyed. From their side the sync had succeeded.
+
+    Reproduced against the store before fixing: `src_peerop123.parquet` AND a media asset
+    both gone after one ordinary save. **Two tabs on one OPFS project do the same thing
+    to each other**, so `externallySynced` is not the discriminator and local storage is
+    not safe by being local.
+
+    **The rule was already written down twice in this codebase and was not applied here:
+    abstain on partial knowledge.** A memo whose anchor is gone is *surfaced, not swept*;
+    asset GC *"refuses to sweep while ANY item collection is undeclared"*, because a
+    declaration nobody wrote looks exactly like "nothing references this". A file this
+    session has never seen referenced is the same shape of unknown — unaccounted for,
+    not garbage. The sweep now deletes **only what it can prove it dropped**: a file that
+    was in a manifest this session loaded or wrote, and is not in the one being written.
+    The cost of being wrong that way is a few stale megabytes; the cost of being wrong
+    the other way is a colleague's data.
+
+    **`ProjectStore#projectIntegrity(id)`** is the machinery the owner asked for: for
+    every file a project consists of, which of four states is it in — `missing` (the log
+    expects it, it is not here), `unreferenced` (it is here, nothing points at it —
+    **not** a verdict of garbage), `unreadable` (present and zero-length or torn, the one
+    unambiguous damage), or `manifestUnreadable` (the project.json itself will not parse,
+    so nothing else is knowable and it says that rather than reporting every file as
+    unreferenced). It reports and never repairs: the remedies differ and most are the
+    user's, and the one time this code acted on its own judgement it deleted data.
+
+    **Verified on the real 53-project OPFS index:** every project healthy, 64 files
+    checked, 7.3 ms per project. And the bug itself re-run on real OPFS — a peer's file
+    written into a project folder now survives an autosave and is reported as
+    `unreferenced` instead of being deleted. 14 new tests.
+
+    **Still to build:** the UI. `projectIntegrity` has no caller yet — the natural homes
+    are the project manager (a badge on a project that is not whole) and a line in the
+    sync status when `missingSources` is non-empty, which is the thing that today only
+    reaches the console.
 
   - **Core-vs-plugin boundary — apply the doctrine we already have, don't invent one.**
     `import-service.js` states the rule: the engine owns **"only what the security model
