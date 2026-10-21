@@ -1177,6 +1177,57 @@ bottom; they are the project's memory and are not summarised away.
     collects its bytes and leaves the peer's file alone, which `projectIntegrity` then
     reports as `unreferenced`.
 
+    **Then the owner asked the question behind the question (2026-10-21): if the log is
+    append-only and keeps a retracted source's ENVELOPE for audit, should we be deleting
+    the bytes at all?** The answer is that ops and bytes are not comparable — an op is a
+    few hundred bytes, a source Parquet is megabytes to gigabytes, and OPFS does not
+    degrade when it runs out: `write` THROWS, and the write that throws is the one saving
+    your work. "A spammy full log beats compaction" is a claim about the log's economics
+    and does not survive a three-order-of-magnitude change in the unit.
+
+    **But the posture was still wrong, and that part was right.** Deletion was a SIDE
+    EFFECT OF SAVING, which is the wrong moment to make a space decision and is where
+    every bug in this area came from. So, switched 2026-10-21:
+
+    - **A save reclaims nothing.** The save path deletes no files at all.
+    - **Bytes are kept by default**, which deepens undo (data-load undo reached exactly
+      one step back, because `#pruneDeadSources` frees the generation before last) and
+      makes a peer's revival of a retracted op work locally rather than needing gap-fill.
+    - **`compactProject(id, {dryRun})` is the only thing that deletes**, acting on the
+      log's own evidence, and it says what it will free before it does.
+    - **`ProjectStore.storageEstimate()` + `core/storage-pressure.js`** are the guard
+      that makes keeping-by-default safe, because nothing shrinks on its own now.
+
+    **The guard offers two routes and takes neither on its own** — the owner's addition:
+    *"the quota check should also offer a jump to project manager to delete other
+    projects instead of deleting files in this project."* Which is usually the better
+    route, and the dialog says why: the room is normally in projects you have finished
+    with, and deleting one costs nothing in the project you are in. A tool that silently
+    deleted data to keep itself running would be solving its problem with the user's.
+
+    **Three details the wording carries, because this is the one moment a user is asked
+    to trade something away:** it names what compaction would free (a dry run first —
+    asking someone to authorise an unknown quantity is how you get a reflexive yes), it
+    states the COST and not just the benefit (undo depth; a user not told finds out by
+    losing an undo), and when there is nothing to compact it says so and disables the
+    button rather than offering a way out that cannot help.
+
+    **A save that has already FAILED outranks any estimate.** `navigator.storage.estimate`
+    is approximate by design — browsers round it to resist fingerprinting — so a real
+    `QuotaExceededError` is the only reliable signal there is, recognised by name and by
+    legacy code rather than `instanceof` (it can cross a realm boundary from a worker or
+    the plugin frame). The permissive direction is the dangerous one: it would offer to
+    delete data because a file was locked.
+
+    **Verified in the browser:** the dialog reads
+    "9.2 GB of 10 GB used — about 819 MB free", offers
+    "Compact this project (frees 700 MB)" beside "Manage projects…", carries the
+    undo-depth warning with no markdown leaking into the text, and returns `manage` when
+    that route is chosen (wired to the real manager). And end to end on real OPFS: a save
+    leaves a retracted source's bytes alone, a dry run reports 1 file / 4096 bytes and
+    removes nothing, and compaction frees exactly that file while the live one stays.
+    21 + 17 tests.
+
     **`ProjectStore#projectIntegrity(id)`** is the machinery the owner asked for: for
     every file a project consists of, which of four states is it in — `missing` (the log
     expects it, it is not here), `unreferenced` (it is here, nothing points at it —

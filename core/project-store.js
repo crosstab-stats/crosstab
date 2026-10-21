@@ -666,7 +666,11 @@ export class ProjectStore {
     await this.#writeSources(id, bundle, writeSourcesFor);
     const manifest = buildManifest({ name, savedAt, bundle });
     await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
-    await this.#sweep(id, manifest); // drop bytes nothing in the log points at (#149 C2)
+    // NO reclamation here, deliberately (2026-10-21). Saving is about durability; what
+    // to keep is a space decision, and making it as a side effect of every save is where
+    // every bug in this area came from — including one that deleted a peer's half-synced
+    // data. Dead bytes are collected by {@link ProjectStore#compactProject}, which says
+    // what it will free before it does it. See the quota guard in project-sync.
 
     if (this.#flat) {
       // Folder = project: a plaintext marker makes the folder self-describing (and
@@ -889,6 +893,35 @@ export class ProjectStore {
    * Best-effort throughout: a sweep failure must never fail a save.
    */
   /**
+   * How much room is left, as the browser sees it.
+   *
+   * `navigator.storage.estimate()` is the only warning available before a write fails,
+   * and it is approximate on purpose (browsers round it to resist fingerprinting). So it
+   * is used for "you are getting close", never for arithmetic — a decision that needed
+   * the exact number would be wrong on every engine.
+   *
+   * Returns null where the API is absent, which callers must read as "no information",
+   * NOT as "plenty of room".
+   *
+   * @returns {Promise<{usage: number, quota: number, freeBytes: number, usedFraction: number}|null>}
+   */
+  static async storageEstimate() {
+    try {
+      const est = await navigator.storage?.estimate?.();
+      if (!est || !Number.isFinite(est.quota) || !est.quota) return null;
+      const usage = Number(est.usage) || 0;
+      return {
+        usage,
+        quota: est.quota,
+        freeBytes: Math.max(0, est.quota - usage),
+        usedFraction: usage / est.quota,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Check a project's files against what its manifest expects.
    *
    * Four outcomes, and keeping them apart is the whole value — they have different
@@ -955,30 +988,57 @@ export class ProjectStore {
     return out;
   }
 
-  async #sweep(id, manifest) {
+  /**
+   * Free the bytes of source ops this project's own log says are dead.
+   *
+   * **The only thing in the store that deletes data files**, and it is never a side
+   * effect: a save reclaims nothing, so nothing is removed until someone asks. That is
+   * the asset doctrine (#150, #152) applied to sources — reference-counted from the log,
+   * abstaining when unsure, a rare explicit act.
+   *
+   * **What "dead" means is the log's statement, not a set difference** — see
+   * {@link deadSourceFiles}. A source op carries `src.file` only while it is in the live
+   * fold, so a retracted, undone or barrier-superseded op is persisted byte-less on
+   * purpose, and still names its sidecar through its stable id. A file whose op is not in
+   * this log at all yields no evidence and is never touched, which is what a peer's
+   * half-synced data and another tab's new dataset both look like.
+   *
+   * **What it costs, which the caller must say out loud.** Those bytes are what a deep
+   * undo would have revived: the generation a `replace` superseded is kept precisely so
+   * one Ctrl+Z brings it back. Compacting trades that for space, and a user who is not
+   * told is a user who finds out by losing an undo.
+   *
+   * @param {string} id
+   * @param {{dryRun?: boolean}} [opts] `dryRun` reports without removing — what the
+   *   confirmation shows.
+   * @returns {Promise<{files: string[], bytes: number, removed: number}>}
+   */
+  async compactProject(id, { dryRun = false } = {}) {
+    const out = { files: [], bytes: 0, removed: 0 };
+    let manifest;
     try {
-      // Only what the log SAYS is dead — see `deadSourceFiles`. A file whose op this
-      // manifest does not contain yields no evidence and is left alone, which is what a
-      // peer's half-synced data and another tab's new dataset both look like.
-      const dead = deadSourceFiles(manifest);
-      if (!dead.size) return;
-      // A live op must win over a dead one of the same name. The two cannot collide
-      // today (the name is the op id), but a merge that revives a retracted source would
-      // make them, and resurrecting is cheaper to get right than un-deleting.
-      const live = manifestRefs(manifest);
-      const present = new Set(await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`));
-      for (const name of dead) {
-        if (live.has(name) || !present.has(name)) continue;
-        await this.#driver.remove(this.#file(id, name));
-      }
-      // Assets are deliberately NOT swept here. The app owns that: reference-counted
-      // across item fields and dataset cells, refusing to run while any collection is
-      // undeclared, and a rare explicit act rather than a side effect of saving (#150,
-      // #152). Two collectors over the same bytes with different ideas of "referenced"
-      // is how one deletes what the other is keeping.
-    } catch (err) {
-      console.warn('[project] sweep skipped', err);
+      manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
+    } catch {
+      return out; // unreadable or locked: nothing can be proved dead, so nothing goes
     }
+    const dead = deadSourceFiles(manifest);
+    if (!dead.size) return out;
+    // A live op must win over a dead one of the same name. They cannot collide today —
+    // the name IS the op id — but a merge that revived a retracted source would make
+    // them, and resurrecting bytes is cheaper to get right than un-deleting them.
+    const live = manifestRefs(manifest);
+    const present = new Set(await this.#driver.list(this.#flat ? '' : `${ROOT}/${id}`));
+    for (const name of dead) {
+      if (live.has(name) || !present.has(name)) continue;
+      const st = await this.#driver.stat(this.#file(id, name)).catch(() => null);
+      out.files.push(name);
+      out.bytes += st?.size ?? 0;
+      if (dryRun) continue;
+      await this.#driver.remove(this.#file(id, name));
+      out.removed += 1;
+    }
+    out.files.sort();
+    return out;
   }
 
   // --- media assets (#149 A5) -------------------------------------------------

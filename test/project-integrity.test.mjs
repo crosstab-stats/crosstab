@@ -127,15 +127,59 @@ test('a project this session has never seen is not swept at all', async () => {
   assert.ok(d.files.has('projects/p9/src_b.parquet'));
 });
 
-test('what the sweep IS for still works: a RETRACTED source is collected', async () => {
-  // The fix must not turn the sweep off. A source op that is present and byte-less is
-  // the log saying, in as many words, that its bytes are dead.
+test('a SAVE frees nothing, however dead the source is', async () => {
+  // Saving is about durability; what to keep is a space decision, and making it as a
+  // side effect of every save is where every bug in this area came from — including the
+  // one that deleted a peer's half-synced data.
   const { s, d } = store();
   await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: deadSource('op1') });
+  assert.ok(d.files.has('projects/p1/src_op1.parquet'), 'still there after the save');
+});
+
+test('compaction collects a retracted source, and only on being asked', async () => {
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: deadSource('op1') });
+
+  const plan = await s.compactProject('p1', { dryRun: true });
+  assert.deepEqual(plan.files, ['src_op1.parquet']);
+  assert.ok(plan.bytes > 0, 'and it can say how much');
+  assert.equal(plan.removed, 0, 'a dry run removes nothing');
   assert.ok(d.files.has('projects/p1/src_op1.parquet'));
 
-  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: deadSource('op1') });
-  assert.ok(!d.files.has('projects/p1/src_op1.parquet'), 'the retracted source’s bytes went');
+  const done = await s.compactProject('p1');
+  assert.equal(done.removed, 1);
+  assert.ok(!d.files.has('projects/p1/src_op1.parquet'));
+});
+
+test('compaction leaves a live source alone', async () => {
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  const plan = await s.compactProject('p1', { dryRun: true });
+  assert.deepEqual(plan.files, []);
+  assert.ok(d.files.has('projects/p1/src_op1.parquet'));
+});
+
+test('compaction never touches a file whose op it has never heard of', async () => {
+  // The protection the save-time sweep got wrong, now the only place that deletes.
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: empty() });
+  put(d, 'projects/p1/src_peer.parquet');
+  const done = await s.compactProject('p1');
+  assert.deepEqual(done.files, []);
+  assert.ok(d.files.has('projects/p1/src_peer.parquet'));
+});
+
+test('compacting an unreadable or locked project frees nothing', async () => {
+  // Nothing can be proved dead without a manifest, and "I cannot read it" must not
+  // become "none of it is referenced".
+  const { s, d } = store();
+  await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  d.files.set('projects/p1/project.json', new TextEncoder().encode('{ torn'));
+  const done = await s.compactProject('p1');
+  assert.deepEqual(done.files, []);
+  assert.ok(d.files.has('projects/p1/src_op1.parquet'));
 });
 
 test('an op that VANISHES from the log deletes nothing', async () => {
@@ -149,17 +193,17 @@ test('an op that VANISHES from the log deletes nothing', async () => {
     'no evidence, so no deletion — the bytes wait for a log that explains them');
 });
 
-test('the FIRST save of a session can collect — no memory needed', async () => {
-  // The evidence is in the manifest being written, so there is nothing to learn first.
-  // An earlier design kept a per-session record of "what I knew" and had to abstain
-  // until it had one, leaking a retracted source until the second save.
+test('compaction needs no session memory — the manifest carries the evidence', async () => {
+  // A fresh store that has never seen this project can still compact it, because the
+  // proof is in the file it reads rather than in anything it remembers.
   const { s, d } = store();
   await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: withSource('src_op1.parquet') });
+  await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: deadSource('op1') });
 
   const fresh = new ProjectStore();
   fresh.useDriver(d, { flat: false });
-  await fresh.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: deadSource('op1') });
-  assert.ok(!d.files.has('projects/p1/src_op1.parquet'));
+  const done = await fresh.compactProject('p1');
+  assert.equal(done.removed, 1);
 });
 
 test('a live op of the same name beats a dead one', async () => {
@@ -176,10 +220,11 @@ test('a live op of the same name beats a dead one', async () => {
     ],
   };
   await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: both });
+  await s.compactProject('p1');
   assert.ok(d.files.has('projects/p1/src_op1.parquet'), 'something live still names it');
 });
 
-test('assets are not swept by a save at all', async () => {
+test('assets are not collected by a save OR by compaction', async () => {
   // They were, by the same absence rule. The app owns asset GC properly — reference
   // counted across item fields and dataset cells, refusing to run while any collection
   // is undeclared, and a rare explicit act rather than a side effect of saving. Two
@@ -189,6 +234,7 @@ test('assets are not swept by a save at all', async () => {
   await s.save({ id: 'p1', name: 'Study', savedAt: 1000, bundle: empty() });
   put(d, 'projects/p1/assets/orphan.bin', [1, 2, 3]);
   await s.save({ id: 'p1', name: 'Study', savedAt: 2000, bundle: empty() });
+  await s.compactProject('p1');
   assert.ok(d.files.has('projects/p1/assets/orphan.bin'));
 });
 

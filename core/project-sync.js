@@ -18,6 +18,7 @@ import { cleanName } from './text.js';
 import { CoreEvents } from './event-bus.js';
 import { DATASETS_CHANGED } from './dataset-manager.js';
 import { ASSETS_CHANGED } from './asset-store.js';
+import { pressureLevel, showStoragePressure, humanBytes, isQuotaError } from './storage-pressure.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest, isSourceFile } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
 import { BlobExchange, sourceRefs, assetRefs } from './gap-fill.js';
@@ -382,6 +383,18 @@ export class ProjectSync {
    * @param {(keys: string[]) => Promise<void>} [deps.applyActivePlugins] - Restore
    *   a project's saved plugin set on open.
    */
+  /** Set once, by the first check that fires — see `#checkStoragePressure`. */
+  #pressureAsked = false;
+
+  /**
+   * Opens the project manager, set by the app after it exists (it closes over this
+   * object, so it cannot be a constructor argument). The second of the two routes out
+   * of a full disk, and usually the better one: the room is normally in projects you
+   * have finished with, and deleting one costs nothing in the project you are in.
+   * @type {(() => void)|null}
+   */
+  onNeedSpace = null;
+
   constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, items, collections, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers, getSurfaces }) {
     this.#store = projectStore;
     this.#datasets = datasets;
@@ -683,13 +696,63 @@ export class ProjectSync {
     try {
       const out = await fn();
       await this.#stampLocation();
+      void this.#checkStoragePressure();
       return out;
     } catch (err) {
       console.warn('[project] save attempt failed — retrying once:', err?.message || err);
       await new Promise((r) => setTimeout(r, 250));
-      const out = await fn();
-      await this.#stampLocation();
-      return out;
+      try {
+        const out = await fn();
+        await this.#stampLocation();
+        void this.#checkStoragePressure();
+        return out;
+      } catch (again) {
+        // A write that fails twice for want of room is the only RELIABLE signal there
+        // is — the estimate is approximate by design — so it outranks any reading and
+        // the offer is made before the error reaches the caller.
+        if (isQuotaError(again)) await this.#checkStoragePressure({ failed: true });
+        throw again;
+      }
+    }
+  }
+
+  /**
+   * Offer a way to make room, when there is reason to think it is running out.
+   *
+   * Nothing here deletes anything: saving stopped reclaiming space (2026-10-21), which
+   * is what makes undo deeper and a peer's half-synced data safe, and the cost of that
+   * trade is that something has to notice when the room runs out. This is that
+   * something, and it only ever ASKS.
+   *
+   * Asks at most once per session unless a save has actually failed, because a dialog
+   * that returns every thirty seconds is one people learn to dismiss without reading —
+   * and this is the dialog that must be read.
+   */
+  async #checkStoragePressure({ failed = false } = {}) {
+    if (this.#pressureAsked && !failed) return;
+    try {
+      const est = await ProjectStore.storageEstimate();
+      const pressure = pressureLevel(est, { failed });
+      if (pressure.level === 'none') return;
+      this.#pressureAsked = true;
+      const id = this.#binding?.id ?? null;
+      // What compaction WOULD free, so the offer can name a number instead of asking
+      // the user to authorise an unknown quantity.
+      const plan = id ? await this.#store.compactProject(id, { dryRun: true }) : null;
+      const choice = await showStoragePressure({ pressure, estimate: est, plan });
+      if (choice === 'compact' && id) {
+        const done = await this.#store.compactProject(id);
+        this.#results?.appendText?.(
+          `**Project compacted.** ${done.removed} data file${done.removed === 1 ? '' : 's'} freed `
+          + `(${humanBytes(done.bytes)}). The steps themselves are still in the History; it is their `
+          + 'data that has gone, so a replaced import can no longer be brought back with Ctrl+Z.',
+        );
+      } else if (choice === 'manage') {
+        this.onNeedSpace?.();
+      }
+    } catch (err) {
+      // Housekeeping must never be the reason a save reports failure.
+      console.warn('[project] storage pressure check skipped', err);
     }
   }
 

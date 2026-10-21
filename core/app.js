@@ -1874,6 +1874,13 @@ export async function boot(mounts) {
     openHowto: () => services.howto.open(),
   });
 
+  // The second route out of a full disk (2026-10-21). Set here rather than passed in:
+  // `openManager` closes over `projects`, so it does not exist when ProjectSync is
+  // constructed. The room is usually in projects you have finished with, and deleting
+  // one costs nothing in the project you are working in — which is why this is offered
+  // beside compaction rather than instead of it.
+  projects.onNeedSpace = () => void openManager('manage');
+
   // The sidebar project manager: the open project and its datasets, plus the other
   // projects. Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {
