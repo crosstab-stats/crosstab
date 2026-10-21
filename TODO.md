@@ -481,229 +481,6 @@ bottom; they are the project's memory and are not summarised away.
       should a folder project warn on open that a co-holder disabled sharing, or just
       quietly refuse?
 
-- [ ] **#149 — GATE LIFTED (2026-08-04). 14/16 done; the 2 left are not bugs.**
-      A9b wants a project-level setting, not a fix, and A9c is a design note re-homed to
-      [[first-class-plugin-data]] / #150. Every correctness and data-corruption item is
-      closed and evidenced, and #152–#158 shipped on top of this foundation with live
-      two-window co-authoring verified. Treat the "blocks all new features" line below as
-      historical.
-      **One-true-log stability gate (post-#148 fresh-eyes audit). ORIGINALLY BLOCKED ALL
-      NEW FEATURES.** A full cross-model review of the #148 migration (done with a
-      different model as proofreader) found the gaps below. Several are silent data
-      corruption; nothing new ships until this list is cleared. Grouped by severity.
-      The test for "done": every user-data change is an appended op (or is
-      *deliberately* declared scalar/out-of-log and merges sanely), and no feature
-      path physically removes durable ops.
-
-  **A. Edits that escape the log / merge-safety violations**
-
-  - [x] **A1 (serious): `analysisLog.clear()` physically deleted durable ops
-        mid-session — DONE.** Both halves fixed. (a) *Merge resurrection:* `clear()`
-        now appends a `removeAnalysis` op per live run instead of `clearWhere`, so
-        the deletion propagates rather than dropping the runs out of the shared-id
-        ancestor for a peer to re-contribute. (b) *Overbroad trigger:* `replace` is
-        now emitted only when a load actually **destroyed existing data** — filling a
-        fresh dataset (`createWithData`, `extractColumns`, seeding a blank) reports
-        the new `load` reason — and the clear is scoped to the replaced dataset via
-        `clearFor(datasetId)`, with `datasetId` stamped on each entry by
-        `PluginActions`. Entries predating the field are left alone rather than
-        guessed at. Downstream consumers of the reason were updated with it:
-        `project-sync` marks sources dirty on `load` too (else a first import's
-        Parquet never gets written), and `undo-coordinator` resets on `switch`
-        (project open / new project) rather than relying on the seed's `replace`.
-  - [x] **A2 (serious): `library.pullLatest` rewrote a live dataset's history outside
-        the log — DONE.** The pull ran `restoreState` → `#resetDataHard` →
-        `clearWhere(#mine)`, physically dropping an established (possibly already
-        synced) slice and re-minting the ops. On the next merge the peer's copies of
-        the dropped ops read as *their additions* and unioned back in alongside the
-        re-minted duplicates — a doubled pipeline, the delete-inference class again.
-        *Fixed:* the pull now APPENDS (`replaceHistory: false`). Nothing is removed
-        from anyone's log; the recipe opens with a `load`, and B1's replace barrier
-        folds the superseded ops away identically on every peer. Verified: after a
-        pull every pre-pull op id is still present, only the new pipeline is live, the
-        data is v2 and the local transform is re-applied on top. (`#add` was always
-        safe — a fresh dataset has an empty slice.)
-  - [x] **A3: project NAME is user data and is now an op — DONE.** *Decision: name as
-        an op, not a merged scalar* — it's user data, and with `author` on every op it
-        answers "who named this project that?". `setProjectName` on target
-        `project/name`, folded by the `PROJECT_META` projection, carried in
-        `manifest.log`, applied on every load/merge path, and the folded value WINS over
-        `manifest.name` so a co-author's rename actually lands. Gotcha found in
-        testing: `store.rename` only patches `manifest.name` in place, so the rename now
-        also marks dirty + schedules a real save, or the op never reached disk.
-  - [x] **A4 (serious for qual): recycle-bin round-trip lost workspace/coding
-        state — DONE.** Restore minted a NEW dataset id, but `ws:` leaves are keyed
-        by dataset id, so a deleted-then-restored coded dataset came back with its
-        CAQDAS codebook silently gone. *Fixed by restoring under the ORIGINAL id*
-        (`DatasetManager.restoreDeleted`; the bin entry now carries `datasetId` in
-        its catalog record) — the leaves re-attach with nothing to re-home. The
-        replay is appended *alongside* the deleted dataset's orphaned ops rather than
-        clearing them (`restoreState(..., {replaceHistory:false})`): physically
-        dropping them is the A2 resurrection pattern, and the B1 replace barrier
-        already keeps them dead on every peer. `WorkspaceStore.dropDataset`'s fate
-        decided: **delete no longer calls it** (deletion must stay recoverable) — it
-        now runs on *permanent purge*, guarded to the project that's actually open.
-        Added `rehomeDataset(old,new)` as the log-native fallback for the
-        should-never-happen case where the original id is taken.
-  - [x] **A5: media assets are now INSIDE the project — DONE (bar gap-fill).** They
-        lived in their own OPFS root (`media-assets/`) with a `.json` metadata sidecar
-        per asset, so a shared project's audio/video/images simply weren't there for
-        the recipient. Now: bytes go to the project's own `assets/<id>.bin` through
-        `ProjectStore` (so at-rest encryption, folder mode and the project layout all
-        apply for free), and the metadata is an **op** — `addAsset`/`removeAsset` on
-        target `asset:<id>` — folded by the new `ASSETS` projection, so the index
-        merges, undoes and travels like every other tier. Writes stream through the
-        driver (`writeStream`), and an unprotected read hands back the file handle's
-        own Blob, so a multi-GB movie is never materialised in either direction; a
-        *protected* project buffers, deliberately, rather than storing media in the
-        clear. `.crosstab` carries `assets/<id>.bin` + the ops. Adding media to a
-        never-saved project creates the project first (`ProjectSync.ensureProject`).
-        **DONE (#155):** live-P2P gap-fill for assets — see below. The rest of this note
-        is the original state.
-        **Was open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
-        hook), and a one-time cleanup of the now-stale `media-assets/` and `recycle/`
-        OPFS roots left over from the old stores.
-  - [x] **A8: destructive replace-import — CLOSED by removing "Replace" entirely.**
-        *Decision:* a dataset can be created, deleted, and have rows/columns added or
-        removed — but NOT wholesale cleared and refilled. The import dialog's `Replace`
-        is gone; in its place `Swap in (old one goes to the bin)` imports into a NEW
-        dataset that **inherits the outgoing dataset's name**, then bins the old one —
-        after the import succeeds, so a failed import never costs data you still have.
-        Same one-click gesture, none of the machinery: nothing is superseded within a
-        dataset, so there is no generation to bin (A8a) and nothing is stranded (A7).
-        The old dataset keeps its rows, its id, and its coding, and is restorable for
-        free. NOTE: the engine's `loadDataset({mode:'replace'})` remains — it is how any
-        *empty* dataset gets filled, and `restoreState`/`pullLatest` rely on `load` as
-        the replace barrier (B1). Only the destructive user-facing option is gone.
-  - [x] **A9: project export now asks about linked building blocks — DONE (bundle
-        path).** *Finding that reshaped it:* the three options in the original plan
-        (embed / keep link / unlink) collapse to two, because a bundle already carries
-        every dataset's own sources — the DATA travels either way, so there is no
-        embed-vs-reference size trade-off. All that's at stake is the `libraryLink`
-        badge and its Pull-update button. *And that link is local by construction:* a
-        block's id is a `crypto.randomUUID()` minted on whichever machine first saved
-        it, and there is **no mechanism to share a block between machines at all**, so a
-        recipient's library will never hold that id — not even if they independently
-        imported the identical file. Keeping the link is only useful for a copy coming
-        back to the same machine. So: `.crosstab` export detects linked datasets and
-        asks Keep / **Drop (default)**, saying plainly that the link won't resolve for
-        anyone else. Drop nulls `libraryLink` in the exported `datasetMeta`.
-  - [ ] **A9b: the same prompt for the folder + live paths.** A folder-backed project
-        and a live hand-off leak the same dangling link, but they're *continuously*
-        synced — a one-shot modal is the wrong shape. Wants a project-level setting
-        ("share links to my building blocks: no") rather than a prompt per save.
-  - [ ] **A9c (design): building-block ids aren't portable.** The deeper issue A9
-        surfaced. Blocks are addressable only by a locally-minted random UUID, so a
-        shared block is *impossible*, not merely unsupported — two people who import the
-        same file get different ids. If cross-machine blocks should ever work, ids need
-        to be content- or origin-derived and blocks need an export/import path. Belongs
-        with [[first-class-plugin-data]] and #150.
-        *Related, measured:* adding a block **instantiates** it — `library.#add` creates a
-        real dataset and `restoreState`s the block's Parquet into the project — so the
-        link is pure provenance (`{id, version, baseLen}`), never a data reference. A
-        project with two native datasets plus one from a block holds three Parquet
-        sidecars of its own, and the block's bytes exist twice on the machine (library +
-        project) before any export. That's the honest cost of the template model, and it
-        is *why* dropping the link on export is harmless: the recipient already has the
-        data as an ordinary dataset. The library COULD be content-addressed to dedupe
-        instantiations (as media now is), but that would make projects non-self-contained
-        — directly against what A5/A8 established. Self-containment wins; recorded so the
-        trade-off is a decision, not an oversight. It also fits the design that upgrading
-        a project to a newer block version is deliberately opt-in (`pullLatest`).
-
-  **B. Bugs introduced/exposed by the rewrite**
-
-  - [x] **B1 (serious): undo past a replace-import bricks the dataset — DONE.**
-        `#resetData` retracted the old steps but `#dropDuckDB` physically dropped
-        their bytes, and the retracts stayed undoable: import-replace → Ctrl+Z ×2
-        revived a byte-less source, `rederive` threw, and kept throwing.
-        *Fixed by deriving the reset instead of logging it.* A `load` already
-        restarts the projection, so `foldDataOps` now treats the last live `load` as
-        a **replace barrier** and drops what precedes it (fixed by HLC order, so a
-        reorder moves steps but never resurrects them). A replace therefore appends
-        no ops at all — nothing is retracted, so one undo of the `load` lifts the
-        barrier and the whole previous pipeline returns. `#pruneDeadSources` frees
-        only what is *already* behind a barrier, so exactly one generation stays
-        materialised for that undo. And `rederive` now **skips** a source op whose
-        bytes this peer lacks (reporting it on `missingSources`) instead of throwing
-        — a durable op can no longer poison every later fold. That last part is also
-        the landing pad for B3 and for live gap-fill's byte-less window.
-  - [x] **B2 (serious, silent wrong data): row-id collision after reload — DONE.**
-        Restores restarted `#sourceSeq` at 0 while restored Parquet kept row ids
-        baked from the ORIGINAL seq, so with a gap in the log (routine after #148 —
-        every replace leaves a byte-less source that consumes no seq on restore) the
-        next appended file was handed a live range: duplicate `__ct_rid` across the
-        UNION, and a `setCell` CASE editing TWO rows. Verified in-browser both ways
-        (fix off → 2 rows changed by one edit; fix on → 1). *Fixed:* `#ensureRowId`
-        now returns the base actually in the table (read back off a restored source
-        via `min(__ct_rid)`), and every source-materialising path feeds it to
-        `#noteRowidBase`, which advances `#sourceSeq` past it.
-  - [x] **B3 (serious): a failed `rawRestore` dropped a dataset's ops from the next
-        save — DONE.** `receiveOps` ran only after ALL sources materialised, so one
-        unreadable Parquet threw, the dataset was dropped, and its data ops never
-        reached the in-memory log — while its collection membership survived. The next
-        save is a blind overwrite, not a merge, so it wrote a manifest permanently
-        missing that dataset's entire history. *Fixed:* materialisation is now guarded
-        **per source op** — a failure lands the envelope byte-less (bytes stripped,
-        `file` ref kept so it can heal) instead of aborting, and `receiveOps` always
-        runs before the re-derive, so the history is durable even if the re-derive
-        itself throws. B1's `missingSources` tolerance does the rest: the pipeline
-        replays without the dead source and names it. Verified by corrupting a
-        `src_<opId>.parquet` on disk and reopening: the dataset stays, reports
-        `missingSources: [{label: 'A'}]`, keeps all three steps applied, and after a
-        further edit the re-saved manifest still carries every op. The live-P2P
-        byte-less window (ops ahead of their gap-filled bytes) rides the same path.
-  - [x] **B4: deterministic workspace merge-op ids could violate op immutability —
-        DONE.** The id hashed only (target + resolved value), so a later merge that
-        resolved to a previously-emitted value re-minted the SAME id with a HIGHER hlc
-        — reachable via delete-and-redo cycles under add-wins. `receiveOps` dedups by
-        id, so the newer copy was dropped and the leaf's fold could then pick an
-        ordinary write over the merge result: peers genuinely out of step while
-        `manifestsEqual` (an id-set comparison) reported them in sync. *Fixed:* the
-        contributing op-id set (sorted, so operand order can't matter) is mixed into
-        the hash. Covered by a unit test on `deterministicOpId` plus a re-run
-        determinism test.
-  - [x] **B5: identical concurrent intents surfaced phantom conflicts — DONE.**
-        `threeWayLog`'s add/add target pass flagged two peers both undoing (or both
-        retracting) the SAME op as a conflict, though every resolution yields the
-        identical outcome. *Fixed:* an exemption for `undo`/`redo`/`retract` ops whose
-        `payload.opId` matches. Deliberately EXCLUDES `reorder` — rival orderings are a
-        real disagreement, and a reorder names no single op. Four tests pin it,
-        including two negative controls (undoing *different* ops on one target, and
-        rival reorders, both still conflict); verified load-bearing by disabling the
-        guard and watching exactly the two positive cases fail.
-
-  **C. Hygiene / decisions**
-
-  - [x] **C1: live-P2P applied peer ops never marked `#dirty` — DONE.** *Decision:
-        peer work is work.* Applied ops lived in memory until our OWN next edit, so a
-        crash, a closed tab or a power cut lost a co-author's contribution locally —
-        "it's still on their machine" isn't persistence. `#persistPeerWork` now marks
-        the project dirty and schedules a save on every successful live apply.
-        Deliberately NOT routed through `#onChange`, which would also fire
-        `#scheduleLivePublish` and echo the just-received state back at the peer — this
-        takes only the persistence half. When the data tier was rebuilt it also marks
-        every live dataset's sources dirty, or the incremental save would write a
-        manifest referencing `src_<opId>.parquet` sidecars never written for a peer's
-        new dataset.
-  - [x] **C2: byte files were never pruned — DONE.** A purged dataset's Parquet and
-        every replaced import's sidecar stayed on disk forever (`orphanDataOps` stripped
-        the `file` ref; nothing removed the file). `ProjectStore.#sweep` now runs after
-        each save, keyed on **the manifest just written**: a file survives iff some op in
-        the saved log names it. That rule can't drift from what a load will read, covers
-        source sidecars and media assets alike, and stays correct when #150 adds asset
-        ownership — and when A8a starts binning replaced generations, their ops will name
-        their files, so the sweep keeps them with no change. Runs after the manifest is
-        durable, so a crash mid-sweep loses only garbage; best-effort, never fails a save.
-        Verified: after a replace-import the superseded generation's sidecar is gone and
-        only the live one remains.
-  - [x] **C7 (decision): post-merge Undo semantics — DECIDED, no code change.**
-        Edit ▸ Undo targets the highest-HLC live op in the active dataset regardless of
-        author, so right after a sync Ctrl+Z can undo a COLLABORATOR's newest edit (and
-        the marker syncs back). *Decision: keep it.* Either rule disappoints someone;
-        this one is simple, matches "the log is shared history", and the History panel
-        already exists for undoing a specific action further back. Documented rather
-        than changed.
 
 - [ ] **Quantitising: the two pieces shapes A–D left open (2026-10-18).** The four
       shapes are built and their reasoning is under *Completed*; these are what that work
@@ -7807,6 +7584,244 @@ The record of what shipped and why. Kept in full, in the original sections.
         Not silently wrong — those cases land in the `outside` count rather than in a neighbouring
         region. Projected coordinate systems are the user's to reconcile: the failure message says
         so rather than guessing at a datum.
+
+- [x] **#149 — COMPLETE (gate lifted 2026-08-04; closed 2026-10-21). 16/16.**
+      It stood at "14/16 done; the 2 left are not bugs" for two and a half months. Both
+      of those — A9b and A9c — are about the **building-block library, removed on
+      2026-10-02**, so they had outlived their subject: A9b would govern a `libraryLink`
+      field that no longer exists anywhere in the tree, and A9c is a portability problem
+      for ids nothing mints any more. Nothing live is lost by closing them; A9c's
+      surviving generalisation is recorded under [[first-class-plugin-data]].
+
+      Every correctness and data-corruption item was closed and evidenced, and
+      #152–#158 shipped on top of this foundation with live two-window co-authoring
+      verified. Treat the "blocks all new features" line below as historical.
+      **One-true-log stability gate (post-#148 fresh-eyes audit). ORIGINALLY BLOCKED ALL
+      NEW FEATURES.** A full cross-model review of the #148 migration (done with a
+      different model as proofreader) found the gaps below. Several are silent data
+      corruption; nothing new ships until this list is cleared. Grouped by severity.
+      The test for "done": every user-data change is an appended op (or is
+      *deliberately* declared scalar/out-of-log and merges sanely), and no feature
+      path physically removes durable ops.
+
+  **A. Edits that escape the log / merge-safety violations**
+
+  - [x] **A1 (serious): `analysisLog.clear()` physically deleted durable ops
+        mid-session — DONE.** Both halves fixed. (a) *Merge resurrection:* `clear()`
+        now appends a `removeAnalysis` op per live run instead of `clearWhere`, so
+        the deletion propagates rather than dropping the runs out of the shared-id
+        ancestor for a peer to re-contribute. (b) *Overbroad trigger:* `replace` is
+        now emitted only when a load actually **destroyed existing data** — filling a
+        fresh dataset (`createWithData`, `extractColumns`, seeding a blank) reports
+        the new `load` reason — and the clear is scoped to the replaced dataset via
+        `clearFor(datasetId)`, with `datasetId` stamped on each entry by
+        `PluginActions`. Entries predating the field are left alone rather than
+        guessed at. Downstream consumers of the reason were updated with it:
+        `project-sync` marks sources dirty on `load` too (else a first import's
+        Parquet never gets written), and `undo-coordinator` resets on `switch`
+        (project open / new project) rather than relying on the seed's `replace`.
+  - [x] **A2 (serious): `library.pullLatest` rewrote a live dataset's history outside
+        the log — DONE.** The pull ran `restoreState` → `#resetDataHard` →
+        `clearWhere(#mine)`, physically dropping an established (possibly already
+        synced) slice and re-minting the ops. On the next merge the peer's copies of
+        the dropped ops read as *their additions* and unioned back in alongside the
+        re-minted duplicates — a doubled pipeline, the delete-inference class again.
+        *Fixed:* the pull now APPENDS (`replaceHistory: false`). Nothing is removed
+        from anyone's log; the recipe opens with a `load`, and B1's replace barrier
+        folds the superseded ops away identically on every peer. Verified: after a
+        pull every pre-pull op id is still present, only the new pipeline is live, the
+        data is v2 and the local transform is re-applied on top. (`#add` was always
+        safe — a fresh dataset has an empty slice.)
+  - [x] **A3: project NAME is user data and is now an op — DONE.** *Decision: name as
+        an op, not a merged scalar* — it's user data, and with `author` on every op it
+        answers "who named this project that?". `setProjectName` on target
+        `project/name`, folded by the `PROJECT_META` projection, carried in
+        `manifest.log`, applied on every load/merge path, and the folded value WINS over
+        `manifest.name` so a co-author's rename actually lands. Gotcha found in
+        testing: `store.rename` only patches `manifest.name` in place, so the rename now
+        also marks dirty + schedules a real save, or the op never reached disk.
+  - [x] **A4 (serious for qual): recycle-bin round-trip lost workspace/coding
+        state — DONE.** Restore minted a NEW dataset id, but `ws:` leaves are keyed
+        by dataset id, so a deleted-then-restored coded dataset came back with its
+        CAQDAS codebook silently gone. *Fixed by restoring under the ORIGINAL id*
+        (`DatasetManager.restoreDeleted`; the bin entry now carries `datasetId` in
+        its catalog record) — the leaves re-attach with nothing to re-home. The
+        replay is appended *alongside* the deleted dataset's orphaned ops rather than
+        clearing them (`restoreState(..., {replaceHistory:false})`): physically
+        dropping them is the A2 resurrection pattern, and the B1 replace barrier
+        already keeps them dead on every peer. `WorkspaceStore.dropDataset`'s fate
+        decided: **delete no longer calls it** (deletion must stay recoverable) — it
+        now runs on *permanent purge*, guarded to the project that's actually open.
+        Added `rehomeDataset(old,new)` as the log-native fallback for the
+        should-never-happen case where the original id is taken.
+  - [x] **A5: media assets are now INSIDE the project — DONE (bar gap-fill).** They
+        lived in their own OPFS root (`media-assets/`) with a `.json` metadata sidecar
+        per asset, so a shared project's audio/video/images simply weren't there for
+        the recipient. Now: bytes go to the project's own `assets/<id>.bin` through
+        `ProjectStore` (so at-rest encryption, folder mode and the project layout all
+        apply for free), and the metadata is an **op** — `addAsset`/`removeAsset` on
+        target `asset:<id>` — folded by the new `ASSETS` projection, so the index
+        merges, undoes and travels like every other tier. Writes stream through the
+        driver (`writeStream`), and an unprotected read hands back the file handle's
+        own Blob, so a multi-GB movie is never materialised in either direction; a
+        *protected* project buffers, deliberately, rather than storing media in the
+        clear. `.crosstab` carries `assets/<id>.bin` + the ops. Adding media to a
+        never-saved project creates the project first (`ProjectSync.ensureProject`).
+        **DONE (#155):** live-P2P gap-fill for assets — see below. The rest of this note
+        is the original state.
+        **Was open:** live-P2P gap-fill for assets (`MediaStore.missing()` is the
+        hook), and a one-time cleanup of the now-stale `media-assets/` and `recycle/`
+        OPFS roots left over from the old stores.
+  - [x] **A8: destructive replace-import — CLOSED by removing "Replace" entirely.**
+        *Decision:* a dataset can be created, deleted, and have rows/columns added or
+        removed — but NOT wholesale cleared and refilled. The import dialog's `Replace`
+        is gone; in its place `Swap in (old one goes to the bin)` imports into a NEW
+        dataset that **inherits the outgoing dataset's name**, then bins the old one —
+        after the import succeeds, so a failed import never costs data you still have.
+        Same one-click gesture, none of the machinery: nothing is superseded within a
+        dataset, so there is no generation to bin (A8a) and nothing is stranded (A7).
+        The old dataset keeps its rows, its id, and its coding, and is restorable for
+        free. NOTE: the engine's `loadDataset({mode:'replace'})` remains — it is how any
+        *empty* dataset gets filled, and `restoreState`/`pullLatest` rely on `load` as
+        the replace barrier (B1). Only the destructive user-facing option is gone.
+  - [x] **A9: project export now asks about linked building blocks — DONE (bundle
+        path).** *Finding that reshaped it:* the three options in the original plan
+        (embed / keep link / unlink) collapse to two, because a bundle already carries
+        every dataset's own sources — the DATA travels either way, so there is no
+        embed-vs-reference size trade-off. All that's at stake is the `libraryLink`
+        badge and its Pull-update button. *And that link is local by construction:* a
+        block's id is a `crypto.randomUUID()` minted on whichever machine first saved
+        it, and there is **no mechanism to share a block between machines at all**, so a
+        recipient's library will never hold that id — not even if they independently
+        imported the identical file. Keeping the link is only useful for a copy coming
+        back to the same machine. So: `.crosstab` export detects linked datasets and
+        asks Keep / **Drop (default)**, saying plainly that the link won't resolve for
+        anyone else. Drop nulls `libraryLink` in the exported `datasetMeta`.
+  - [x] **A9b — MOOT (closed 2026-10-21): there is no link left to leak.** It wanted a
+        project-level setting ("share links to my building blocks: no") for the folder
+        and live paths, which are continuously synced and so cannot use A9's one-shot
+        prompt. The **building-block library was removed on 2026-10-02**, and with it the
+        `libraryLink` field the setting would have governed — `grep libraryLink` over
+        `core/` and `plugins/` now returns nothing. A dangling link cannot leak on any
+        path when the field does not exist.
+  - [x] **A9c — MOOT here (closed 2026-10-21); the general problem lives elsewhere.**
+        Blocks were addressable only by a locally-minted `crypto.randomUUID()`, so a
+        *shared* block was impossible rather than merely unsupported. That is now a fact
+        about a feature that no longer exists.
+
+        **What survives is the generalisation, and it is already recorded where it
+        belongs:** plugin records have no reuse path, under
+        [[first-class-plugin-data]] — which also notes that the 2026-10-02 removal took
+        the "promote to a block" goal with it, so the remaining debt is about plugin
+        data being second-class to datasets, not about block ids. Kept as a pointer so
+        anyone arriving here from the four other places that still cite "#149 A9c" finds
+        where the live version went.
+        *Related, measured:* adding a block **instantiates** it — `library.#add` creates a
+        real dataset and `restoreState`s the block's Parquet into the project — so the
+        link is pure provenance (`{id, version, baseLen}`), never a data reference. A
+        project with two native datasets plus one from a block holds three Parquet
+        sidecars of its own, and the block's bytes exist twice on the machine (library +
+        project) before any export. That's the honest cost of the template model, and it
+        is *why* dropping the link on export is harmless: the recipient already has the
+        data as an ordinary dataset. The library COULD be content-addressed to dedupe
+        instantiations (as media now is), but that would make projects non-self-contained
+        — directly against what A5/A8 established. Self-containment wins; recorded so the
+        trade-off is a decision, not an oversight. It also fits the design that upgrading
+        a project to a newer block version is deliberately opt-in (`pullLatest`).
+
+  **B. Bugs introduced/exposed by the rewrite**
+
+  - [x] **B1 (serious): undo past a replace-import bricks the dataset — DONE.**
+        `#resetData` retracted the old steps but `#dropDuckDB` physically dropped
+        their bytes, and the retracts stayed undoable: import-replace → Ctrl+Z ×2
+        revived a byte-less source, `rederive` threw, and kept throwing.
+        *Fixed by deriving the reset instead of logging it.* A `load` already
+        restarts the projection, so `foldDataOps` now treats the last live `load` as
+        a **replace barrier** and drops what precedes it (fixed by HLC order, so a
+        reorder moves steps but never resurrects them). A replace therefore appends
+        no ops at all — nothing is retracted, so one undo of the `load` lifts the
+        barrier and the whole previous pipeline returns. `#pruneDeadSources` frees
+        only what is *already* behind a barrier, so exactly one generation stays
+        materialised for that undo. And `rederive` now **skips** a source op whose
+        bytes this peer lacks (reporting it on `missingSources`) instead of throwing
+        — a durable op can no longer poison every later fold. That last part is also
+        the landing pad for B3 and for live gap-fill's byte-less window.
+  - [x] **B2 (serious, silent wrong data): row-id collision after reload — DONE.**
+        Restores restarted `#sourceSeq` at 0 while restored Parquet kept row ids
+        baked from the ORIGINAL seq, so with a gap in the log (routine after #148 —
+        every replace leaves a byte-less source that consumes no seq on restore) the
+        next appended file was handed a live range: duplicate `__ct_rid` across the
+        UNION, and a `setCell` CASE editing TWO rows. Verified in-browser both ways
+        (fix off → 2 rows changed by one edit; fix on → 1). *Fixed:* `#ensureRowId`
+        now returns the base actually in the table (read back off a restored source
+        via `min(__ct_rid)`), and every source-materialising path feeds it to
+        `#noteRowidBase`, which advances `#sourceSeq` past it.
+  - [x] **B3 (serious): a failed `rawRestore` dropped a dataset's ops from the next
+        save — DONE.** `receiveOps` ran only after ALL sources materialised, so one
+        unreadable Parquet threw, the dataset was dropped, and its data ops never
+        reached the in-memory log — while its collection membership survived. The next
+        save is a blind overwrite, not a merge, so it wrote a manifest permanently
+        missing that dataset's entire history. *Fixed:* materialisation is now guarded
+        **per source op** — a failure lands the envelope byte-less (bytes stripped,
+        `file` ref kept so it can heal) instead of aborting, and `receiveOps` always
+        runs before the re-derive, so the history is durable even if the re-derive
+        itself throws. B1's `missingSources` tolerance does the rest: the pipeline
+        replays without the dead source and names it. Verified by corrupting a
+        `src_<opId>.parquet` on disk and reopening: the dataset stays, reports
+        `missingSources: [{label: 'A'}]`, keeps all three steps applied, and after a
+        further edit the re-saved manifest still carries every op. The live-P2P
+        byte-less window (ops ahead of their gap-filled bytes) rides the same path.
+  - [x] **B4: deterministic workspace merge-op ids could violate op immutability —
+        DONE.** The id hashed only (target + resolved value), so a later merge that
+        resolved to a previously-emitted value re-minted the SAME id with a HIGHER hlc
+        — reachable via delete-and-redo cycles under add-wins. `receiveOps` dedups by
+        id, so the newer copy was dropped and the leaf's fold could then pick an
+        ordinary write over the merge result: peers genuinely out of step while
+        `manifestsEqual` (an id-set comparison) reported them in sync. *Fixed:* the
+        contributing op-id set (sorted, so operand order can't matter) is mixed into
+        the hash. Covered by a unit test on `deterministicOpId` plus a re-run
+        determinism test.
+  - [x] **B5: identical concurrent intents surfaced phantom conflicts — DONE.**
+        `threeWayLog`'s add/add target pass flagged two peers both undoing (or both
+        retracting) the SAME op as a conflict, though every resolution yields the
+        identical outcome. *Fixed:* an exemption for `undo`/`redo`/`retract` ops whose
+        `payload.opId` matches. Deliberately EXCLUDES `reorder` — rival orderings are a
+        real disagreement, and a reorder names no single op. Four tests pin it,
+        including two negative controls (undoing *different* ops on one target, and
+        rival reorders, both still conflict); verified load-bearing by disabling the
+        guard and watching exactly the two positive cases fail.
+
+  **C. Hygiene / decisions**
+
+  - [x] **C1: live-P2P applied peer ops never marked `#dirty` — DONE.** *Decision:
+        peer work is work.* Applied ops lived in memory until our OWN next edit, so a
+        crash, a closed tab or a power cut lost a co-author's contribution locally —
+        "it's still on their machine" isn't persistence. `#persistPeerWork` now marks
+        the project dirty and schedules a save on every successful live apply.
+        Deliberately NOT routed through `#onChange`, which would also fire
+        `#scheduleLivePublish` and echo the just-received state back at the peer — this
+        takes only the persistence half. When the data tier was rebuilt it also marks
+        every live dataset's sources dirty, or the incremental save would write a
+        manifest referencing `src_<opId>.parquet` sidecars never written for a peer's
+        new dataset.
+  - [x] **C2: byte files were never pruned — DONE.** A purged dataset's Parquet and
+        every replaced import's sidecar stayed on disk forever (`orphanDataOps` stripped
+        the `file` ref; nothing removed the file). `ProjectStore.#sweep` now runs after
+        each save, keyed on **the manifest just written**: a file survives iff some op in
+        the saved log names it. That rule can't drift from what a load will read, covers
+        source sidecars and media assets alike, and stays correct when #150 adds asset
+        ownership — and when A8a starts binning replaced generations, their ops will name
+        their files, so the sweep keeps them with no change. Runs after the manifest is
+        durable, so a crash mid-sweep loses only garbage; best-effort, never fails a save.
+        Verified: after a replace-import the superseded generation's sidecar is gone and
+        only the live one remains.
+  - [x] **C7 (decision): post-merge Undo semantics — DECIDED, no code change.**
+        Edit ▸ Undo targets the highest-HLC live op in the active dataset regardless of
+        author, so right after a sync Ctrl+Z can undo a COLLABORATOR's newest edit (and
+        the marker syncs back). *Decision: keep it.* Either rule disappoints someone;
+        this one is simple, matches "the log is shared history", and the History panel
+        already exists for undoing a specific action further back. Documented rather
+        than changed.
 
 ### Hardening before any public/shared deploy
 
