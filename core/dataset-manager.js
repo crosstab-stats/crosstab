@@ -595,6 +595,25 @@ export class DatasetManager {
    *
    * @param {{log?: object[], activeId?: number}} bundle
    */
+  /**
+   * The per-dataset non-log state a save carries: currently just the grid's variable
+   * selection.
+   *
+   * `datasetMeta` is keyed by dataset id and merged key-by-key on sync, so a dataset the
+   * other peer does not have cannot disturb theirs. A dataset with nothing selected
+   * contributes NO key rather than an empty array — absent and "deliberately nothing"
+   * read the same here, and writing `{selected: []}` for every dataset in every save
+   * would grow the manifest for no information.
+   */
+  datasetMeta() {
+    const out = {};
+    for (const [id, ds] of this.#datasets) {
+      const selected = ds.getSelectedVariables?.() ?? [];
+      if (selected.length) out[String(id)] = { selected };
+    }
+    return out;
+  }
+
   async loadBundle({ log = [], activeId, datasetMeta = {}, empty = false }) {
     for (const ds of this.#datasets.values()) await ds.dispose();
     for (const ds of this.#binned.values()) await ds.dispose();
@@ -642,6 +661,22 @@ export class DatasetManager {
         console.error('[dataset] restore failed; dropping until its data arrives:', id, err);
         into.delete(id);
         try { await ds.dispose(); } catch { /* best-effort */ }
+      }
+    }
+    // The grid selection, after the datasets exist and their columns are known —
+    // `setSelectedVariables` drops names it does not recognise, so restoring earlier
+    // would silently discard the lot. A variable renamed or removed since the save
+    // falls out here, which is the right outcome and needs no special case.
+    //
+    // Driven from the DATASETS rather than from the meta, because the two are keyed
+    // differently: these Maps are keyed by the numeric dataset id, while JSON object
+    // keys are always strings — so `datasetMeta[id]` looked up with the Map's own key
+    // finds it, and `#datasets.get(objectKey)` silently never does. That mismatch is
+    // invisible in a unit test of the shape and cost a browser round trip to find.
+    for (const map of [this.#datasets, this.#binned]) {
+      for (const [id, ds] of map) {
+        const names = datasetMeta?.[String(id)]?.selected;
+        if (Array.isArray(names) && names.length) ds.setSelectedVariables?.(names);
       }
     }
     // Ops of PURGED datasets — keep them in the log for audit + merge-safety; nothing

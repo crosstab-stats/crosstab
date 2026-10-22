@@ -606,6 +606,14 @@ export class ProjectSync {
     // existed — the record lives in memory and is gone on reload. Same failure the asset
     // tier hit in #149 A5; verified in-browser before the fix (item ops absent from
     // project.json) and after (present, no manual nudge).
+    // A selection change has to make the project dirty or it would persist only by
+    // accident, whenever some other edit happened to trigger a save afterwards — which
+    // is the most confusing possible version of "sometimes it remembers".
+    //
+    // `null` marks no DATASET dirty: the selection rides in the manifest, so no Parquet
+    // needs rewriting for it. That matters at this frequency — a save that re-wrote
+    // every source because someone clicked a column header would be a real cost.
+    this.#bus.on(CoreEvents.SELECTION_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.ITEMS_CHANGED, () => this.#onChange(null));
     this.#bus.on('output:written', () => this.#onChange(null));
     // Restyling a chart edits saved output in place. Distinct from 'output:written'
@@ -1685,7 +1693,10 @@ export class ProjectSync {
     // strip → op-id sidecars), then a deleted dataset's orphaned ops, then the analysis
     // ops. buildManifest persists this verbatim as `manifest.log`; merge unions it by id.
     const log = [...this.#datasets.collectionOps()];
-    const datasetMeta = {};
+    // Per-dataset state that is NOT an op: the grid's variable selection. Clicking a
+    // column header is not a change to the data, and logging it would put a
+    // high-frequency, zero-audit entry in the History panel and the do-file.
+    const datasetMeta = this.#datasets.datasetMeta?.() ?? {};
     // Live datasets AND binned ones. A deleted dataset is retained, not copied to some
     // other store (#149 A8), so it serialises through exactly the same path — its ops
     // and its op-id-keyed Parquet sidecars just stay in the project. Purging is what

@@ -10124,6 +10124,67 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Nice-to-have / optimisations
 
+- [x] **The grid's variable selection survives a reload — DONE 2026-10-21.** The owner's
+      question, and they were undecided: *"We've decided selections in the picker are
+      ephemeral, but the selection set on the data grid is more sticky, and having it
+      evaporate across save/load boundaries feels like 'something wasn't saved'. But only
+      minorly so."*
+
+      **Worth it, and for a reason bigger than tidiness: the selection is the PRE-FILL
+      for the next thing you do.** Tracing the consumers — the variable picker, Compute,
+      Recode, the sidebar, the data view, and plugins through the broker — it is what
+      makes the next action cheap. Losing it means the FIRST analysis after reopening
+      costs more clicks than the second, at the moment the user is least oriented. The
+      "something wasn't saved" feeling is also worth taking literally, in a project that
+      has spent real effort on the save promise.
+
+      **Not the same call as the picker's, on both halves of that rule.** The picker's
+      selections are one RUN's inputs; the grid's are the project's own working state.
+      And the grid SHOWS its selection, so persisting it cannot violate
+      [[preselect-dont-apply-invisibly]] the way a hidden sticky setting would.
+
+      **It went into a slot that already existed and was empty.** `datasetMeta` is
+      described in `buildManifest` as "per-dataset non-log state", is plumbed manifest →
+      bundle → `loadBundle`, and `collab-sync` already declares its merge rule (mine wins
+      per key). Its only tenant was `libraryLink`, gone with the building-block library on
+      2026-10-02 — so the plumbing had been carrying `{}` ever since. No new storage tier,
+      no new merge rule.
+
+      **Deliberately NOT an op.** Clicking a column header is not a change to the data,
+      and logging it would put a high-frequency, zero-audit entry in the History panel and
+      in the exported do-file. The one-true-log rule that "a spammy full log beats
+      compaction" is about changes to DATA; this is a view onto it.
+
+      **Three details that decide whether it behaves:**
+      - A selection change marks the project dirty with **no dataset dirty** (`null`), so
+        it rewrites `project.json` and no Parquet. Verified: a selection change touched
+        exactly one file.
+      - Restoring runs AFTER the datasets are rebuilt and goes through
+        `setSelectedVariables`, which drops names it does not recognise — so a variable
+        renamed or deleted since the save falls out with no special case.
+      - Restoring cannot dirty the project (`#onChange` returns while `#loading`), or
+        merely OPENING one would bump its `savedAt` and conflate "looked at" with
+        "saved" — the exact distinction `markOpened` exists to keep. Verified.
+
+      **A bug only the browser could find.** The restore iterated `datasetMeta` and called
+      `#datasets.get(objectKey)` — but those Maps are keyed by the NUMERIC dataset id and
+      JSON object keys are always strings, so it never matched and the selection came back
+      empty. Nothing in Node noticed: the shape was right. Driving from the datasets and
+      indexing the meta with `String(id)` fixes it, and a test now forbids indexing the
+      Map with a JSON key.
+
+      **Verified live:** selected `age, income`, saw `datasetMeta` carry exactly that and
+      the log carry no selection op, reloaded, reopened, got `age, income` back, with
+      `savedAt` unchanged by the open. Clearing the selection persists as cleared.
+
+      Owner's note: *"We can test run this a few times and see if it generates
+      problems."* The one to watch is collaboration — `datasetMeta` merges mine-wins-per-
+      key, so a peer's selection is overwritten by yours on sync. Known, judged minor and
+      self-correcting against losing it on every reload, and the alternative (per-device)
+      would have lost the case where handing someone a 900-variable project with eight
+      marked is genuinely useful.
+
+
 - [x] **Frequencies measures every variable in ONE R call (2026-10-14).** It used to
       issue one `webr.run` per variable. `WEIGHTED_R` + the measurement are now defined
       once as `.freq1(x, codes, mlo, mhi)` and called per column, with the missing codes
