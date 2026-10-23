@@ -388,7 +388,7 @@ test('another owner’s declarations are not consulted', () => {
 test('the record slice matches EXACT targets, never a prefix', () => {
   // The difference from a dataset: a dataset owns an address space, a record is one address.
   // A prefix match would take the entire collection — every codebook in the project.
-  const t = (coll, id) => `item:${OWNER} ${coll} ${id}`;
+  const t = (coll, id) => `item:${OWNER}\x00${coll}\x00${id}`;
   const log = [
     op(t('codebooks', 'bk1'), 'put', { name: 'Wave 1' }),
     op(t('codebooks', 'bk10'), 'put', { name: 'A DIFFERENT book' }),
