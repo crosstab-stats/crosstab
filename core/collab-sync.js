@@ -144,9 +144,24 @@ function concurrentItemConflicts(mo, to, owner, surfaces) {
 export function mergeDatasetMeta(mine, theirs) {
   const out = { ...(theirs ?? {}) };
   for (const [id, m] of Object.entries(mine ?? {})) {
-    const t = out[id];
-    out[id] = newerMeta(m, t) ? m : t;
+    out[id] = mergeOneDataset(m, out[id]);
   }
+  return out;
+}
+
+/** Union the AUTHORS of one dataset's selections; newest wins within a single author's
+ * key. Add-wins is safe here precisely because each peer only ever writes its own key,
+ * so two sides disagreeing about the same key means one person on two devices. */
+function mergeOneDataset(mine, theirs) {
+  const out = { ...(theirs ?? {}), ...(mine ?? {}) };
+  const a = mine?.selections;
+  const b = theirs?.selections;
+  if (!a && !b) return out;
+  const sel = { ...(b ?? {}) };
+  for (const [who, entry] of Object.entries(a ?? {})) {
+    sel[who] = newerMeta(entry, sel[who]) ? entry : sel[who];
+  }
+  out.selections = sel;
   return out;
 }
 

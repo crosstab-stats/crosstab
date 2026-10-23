@@ -10124,6 +10124,71 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Nice-to-have / optimisations
 
+- [x] **The grid selection is per AUTHOR — a co-author's selection cannot move your
+      grid. 2026-10-23.** The owner's challenge to the recency rule below: *"so if two
+      people are doing work in the same dataset in a co-authoring scenario the selection
+      group for bob will change as soon as sally makes a new selection?"*
+
+      Measured, the truthful answer was **worse than a plain yes.** A selection change
+      appends no op, so `needsDataRebuild` compared identical logs, the live apply skipped
+      `loadBundle`, and Bob saw nothing when Sally selected (verified: selection-only →
+      `false`, any data op → `true`). But the merged manifest Bob then saved carried HER
+      selection, and the next time **anyone** touched the data — a recode, an import, a
+      join — the rebuild branch ran `loadBundle(…, datasetMeta: manifest.datasetMeta)` and
+      Bob's grid jumped. Stable, then a silent jump triggered by something unrelated.
+      Either consistent answer would have been better than that.
+
+      **A selection is a cursor, and cursors are keyed by author.** So the slot is now
+      `{selections: {<authorId>: {selected, at}}}`, each peer writing only its own key. In
+      a live session there is nothing left to conflict over.
+
+      **A peer with no key of its own adopts the newest entry**, and that one rule is what
+      makes all three cases come out right:
+      - **Bob and Sally, live.** Bob has his own key, so Sally's changes never reach his
+        grid — whatever else arrives with them.
+      - **One student, lab then home.** `authorId` is minted **per device**
+        (`user-identity.js`), so her home machine is a different author with no key yet:
+        it adopts the lab's selection on first open, she changes it, and from then on it
+        prefers its own. Her original question is now literally true of *both* halves.
+      - **Handing over a 900-variable project with eight marked.** The recipient has no
+        key either, so they get the eight. This case is the reason the selection is synced
+        at all.
+
+      Recency did not become redundant — it still arbitrates two writes to the SAME key
+      (one identity, two places; a replay) and picks the newest for the fallback. The
+      sort-order bug fixed in the entry below was a separate defect living in the same
+      line of code.
+
+      **A second bug, found while checking the first.** `#mergeSave` — the path that
+      unions with a peer's manifest — runs only when the store is `externallySynced`. A
+      plain OPFS project with a live co-author takes the ordinary save path, which writes
+      the snapshot verbatim, and the snapshot is built from the live datasets, which know
+      only their own selection. So Sally's key vanished from Bob's copy the next time Bob
+      saved *anything*. Self-healing (her machine kept hers; the next live merge re-unions
+      them) but still silent loss of someone else's state on an unrelated save. The
+      manager now remembers the foreign keys it loaded and re-emits them, stamps
+      untouched. It deliberately never retains MY key — otherwise deselecting everything
+      would write back the selection I had just cleared, which is the likeliest form of
+      the bug.
+
+      A departed co-author's key lingers, by choice: it costs a names array, and pruning
+      "inactive" authors is a guess about whether someone is coming back — the same reason
+      compaction is explicit everywhere else here.
+
+      No migration for the old flat `{selected, at}` shape (pre-release policy). A
+      selection is a view onto the data, so the cost of ignoring one is a re-click;
+      verified that an old-shape project loads with an empty selection and no error.
+
+      **Verified live, all three cases, through real header clicks and the real load
+      path:** my grid opened with MY `gender, education` while Sally's newer `region, age`
+      sat in the same manifest; my next change saved without touching her key (both keys
+      on disk afterwards, her names intact); and swapping the device identity made the
+      next open adopt the newest `region, age`, after which its own choice stuck across a
+      reopen. One harness mistake along the way is worth recording: driving `loadBundle`
+      with a **byte-less** log emptied the dataset (0 rows), so `setSelectedVariables`
+      correctly filtered every name and the selection looked broken — the live path
+      attaches Parquet bytes first. 2341 tests pass.
+
 - [x] **`datasetMeta` merges by recency, not by how the names happen to sort — 2026-10-23.**
       Found by the owner asking a specific question rather than a general one: a student
       uses CrossTab in the campus lab, saves to her OneDrive folder, and opens the project

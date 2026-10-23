@@ -34,6 +34,40 @@ import { ProjectLog } from './project-log.js';
 import { liveOps } from './op-log.js';
 import { currentAuthor } from './user-identity.js';
 
+/**
+ * Which stored grid selection should `authorId` see for one dataset?
+ *
+ * **Mine if I have one**, so a co-author's choices never move my grid — in a live
+ * session each peer writes only its own key, so this is the whole conflict story.
+ *
+ * **Otherwise the newest**, which is what makes a first open adopt something useful: a
+ * second device (`authorId` is minted per device, so the same person is a new author
+ * there) and a colleague opening a shared project both land here, and both want the
+ * selection someone actually left behind rather than an empty grid.
+ *
+ * @param {{selections?: Record<string, {selected?: string[], at?: string}>}} [meta]
+ * @param {string} authorId
+ * @returns {{selected: string[], at: string|null}|null}
+ */
+export function pickSelection(meta, authorId) {
+  const all = meta?.selections;
+  if (!all || typeof all !== 'object') return null;
+  const usable = (e) => Array.isArray(e?.selected) && e.selected.length;
+  const take = (e) => ({ selected: e.selected, at: typeof e.at === 'string' ? e.at : null });
+
+  if (usable(all[authorId])) return take(all[authorId]);
+
+  let best = null;
+  for (const [who, entry] of Object.entries(all)) {
+    if (who === authorId || !usable(entry)) continue;
+    // Unstamped entries lose to any stamped one, and sort among themselves by key only
+    // to stay deterministic — an encoded HLC compares correctly as a plain string.
+    const key = typeof entry.at === 'string' ? `1${entry.at}` : `0${who}`;
+    if (!best || key > best.key) best = { key, entry };
+  }
+  return best ? take(best.entry) : null;
+}
+
 /** Bus event: the set of datasets or the active one changed (drives the switcher). */
 export const DATASETS_CHANGED = 'datasets:changed';
 
@@ -606,15 +640,39 @@ export class DatasetManager {
    * would grow the manifest for no information.
    */
   datasetMeta() {
+    const me = this.#authorId();
     const out = {};
     for (const [id, ds] of this.#datasets) {
+      const key = String(id);
+      // Co-authors' keys, carried through from the manifest this session loaded. The
+      // merge would union them on a folder-backed save, but a plain OPFS project with a
+      // LIVE co-author takes the ordinary save path, which writes this snapshot verbatim
+      // — and without this, Sally's key disappeared from Bob's copy the next time Bob
+      // saved anything. Their stamps come along unchanged, so the merge still resolves
+      // by the author's own clock.
+      const selections = { ...(this.#foreignSelections.get(key) ?? {}) };
+      // Mine, and only mine, is the one this session is entitled to author. That is what
+      // keeps a co-author's selection out of reach of my save, and so keeps Bob's grid
+      // from ever jumping to Sally's.
+      // `at` orders two writes to the SAME key (one person on two devices, or a replay);
+      // it also picks the newest entry for a peer that has no key yet. Omitted rather
+      // than written as null, so an entry either carries a stamp or does not.
       const selected = ds.getSelectedVariables?.() ?? [];
-      // `at` is what lets two machines' selections be ordered rather than sorted — see
-      // `mergeDatasetMeta`. Omitted when absent rather than written as null, so an entry
-      // either carries a stamp or does not.
-      if (selected.length) out[String(id)] = { selected, ...(ds.selectedAt ? { at: ds.selectedAt } : {}) };
+      if (selected.length) selections[me] = { selected, ...(ds.selectedAt ? { at: ds.selectedAt } : {}) };
+      else delete selections[me]; // clearing my selection is a real state, not an absence
+      if (Object.keys(selections).length) out[key] = { selections };
     }
     return out;
+  }
+
+  /** Co-authors' stored selections from the last loaded manifest, by dataset key —
+   * see {@link DatasetManager#datasetMeta}. */
+  #foreignSelections = new Map();
+
+  /** My device's author id — the key my selection is stored under. Read fresh rather
+   * than cached: the identity module mints it lazily on first use. */
+  #authorId() {
+    return currentAuthor()?.authorId || 'local';
   }
 
   async loadBundle({ log = [], activeId, datasetMeta = {}, empty = false }) {
@@ -678,14 +736,21 @@ export class DatasetManager {
     // invisible in a unit test of the shape and cost a browser round trip to find.
     for (const map of [this.#datasets, this.#binned]) {
       for (const [id, ds] of map) {
-        const meta = datasetMeta?.[String(id)];
-        const names = meta?.selected;
+        const key = String(id);
+        const me = this.#authorId();
+        const stored = datasetMeta?.[key]?.selections;
+        if (stored && typeof stored === 'object') {
+          const foreign = Object.fromEntries(Object.entries(stored).filter(([who]) => who !== me));
+          if (Object.keys(foreign).length) this.#foreignSelections.set(key, foreign);
+          else this.#foreignSelections.delete(key);
+        } else {
+          this.#foreignSelections.delete(key);
+        }
+        const pick = pickSelection(datasetMeta?.[key], me);
         // The saved stamp travels with it: restoring must not claim to be a change made
         // now, or merely opening a project on a second machine would outrank the
         // selection the first one is still editing.
-        if (Array.isArray(names) && names.length) {
-          ds.setSelectedVariables?.(names, { at: typeof meta.at === 'string' ? meta.at : null });
-        }
+        if (pick) ds.setSelectedVariables?.(pick.selected, { at: pick.at });
       }
     }
     // Ops of PURGED datasets — keep them in the log for audit + merge-safety; nothing
