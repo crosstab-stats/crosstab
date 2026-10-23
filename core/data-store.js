@@ -211,6 +211,8 @@ export class DataStore {
    * @type {string[]}
    */
   #selected = [];
+  /** HLC stamp of the last selection change, for the per-key merge in `datasetMeta`. */
+  #selectedAt = null;
 
   /**
    * @param {import('./event-bus.js').EventBus} bus - App event bus.
@@ -1841,9 +1843,22 @@ export class DataStore {
    * @param {string[]} names - Variable names now selected. Unknown names are
    *   dropped silently so callers can pass UI state without pre-filtering.
    */
-  setSelectedVariables(names) {
+  setSelectedVariables(names, { at = null } = {}) {
     this.#selected = names.filter((n) => this.#byName.has(n));
+    // When, on this project's own clock — so a merge can tell a selection made at home
+    // from one made in the lab. `at` is passed when RESTORING a saved one, which must
+    // keep the stamp it was saved with rather than claiming to be the newest thing that
+    // ever happened.
+    // A loaded stamp advances the clock past itself first, so the NEXT local change
+    // outranks it even if the machine that wrote it had a faster wall clock.
+    if (at) this.#log?.receiveStamp?.(at);
+    this.#selectedAt = at ?? this.#log?.stampNow?.() ?? null;
     this.#bus.emit(CoreEvents.SELECTION_CHANGED, [...this.#selected]);
+  }
+
+  /** The stamp of the last selection change — see {@link DataStore#setSelectedVariables}. */
+  get selectedAt() {
+    return this.#selectedAt;
   }
 
   // ---------------------------------------------------------------------------

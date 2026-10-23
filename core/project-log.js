@@ -14,7 +14,7 @@
  */
 
 import { resolveMerger } from './merge.js';
-import { HLC, hlcEncode, hlcCompare } from './hlc.js';
+import { HLC, hlcEncode, hlcDecode, hlcCompare } from './hlc.js';
 import { makeOp, orderByHlc, sharedAncestor, unresolvedReads, opIds, appliedState } from './op-log.js';
 
 /**
@@ -159,6 +159,41 @@ export class ProjectLog {
    */
   mint(body) {
     return makeOp(body, { hlc: this.#hlc.tick(), author: body.author ?? this.#author() });
+  }
+
+  /**
+   * A stamp for state that is NOT an op but still has to be ordered across machines —
+   * currently the grid's variable selection, which rides in `datasetMeta`.
+   *
+   * Uses this project's own clock, so a selection made on a laptop and one made on a lab
+   * PC order the same way a pair of ops would. The alternative, a raw `Date.now()`, is
+   * exactly what the HLC exists to avoid: two machines sharing a OneDrive folder are the
+   * case where wall clocks disagree.
+   *
+   * It ticks, so two changes in the same millisecond still order. That makes it a
+   * mutation of the clock rather than a read, which is why it is a method on the log and
+   * not a getter somewhere convenient.
+   */
+  stampNow() {
+    return hlcEncode(this.#hlc.tick());
+  }
+
+  /**
+   * Fold a **loaded** {@link ProjectLog#stampNow} stamp into the clock — the non-op
+   * counterpart of {@link ProjectLog#receiveOps}, and required for the same reason
+   * {@link ProjectLog#restore} gives: the next local change must sort after everything
+   * already saved.
+   *
+   * Without it the ordering only works while both machines' wall clocks agree. A lab PC
+   * running ten minutes fast would write a stamp from the future, and the next click at
+   * home would be stamped behind it and lose — the precise skew an HLC exists to absorb.
+   *
+   * A malformed stamp decodes to zero rather than throwing, so it simply fails to
+   * advance the clock instead of breaking a load.
+   */
+  receiveStamp(stamp) {
+    if (typeof stamp !== 'string' || !stamp) return;
+    this.#hlc.receive(hlcDecode(stamp));
   }
 
   /**

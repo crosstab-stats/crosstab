@@ -609,7 +609,10 @@ export class DatasetManager {
     const out = {};
     for (const [id, ds] of this.#datasets) {
       const selected = ds.getSelectedVariables?.() ?? [];
-      if (selected.length) out[String(id)] = { selected };
+      // `at` is what lets two machines' selections be ordered rather than sorted — see
+      // `mergeDatasetMeta`. Omitted when absent rather than written as null, so an entry
+      // either carries a stamp or does not.
+      if (selected.length) out[String(id)] = { selected, ...(ds.selectedAt ? { at: ds.selectedAt } : {}) };
     }
     return out;
   }
@@ -675,8 +678,14 @@ export class DatasetManager {
     // invisible in a unit test of the shape and cost a browser round trip to find.
     for (const map of [this.#datasets, this.#binned]) {
       for (const [id, ds] of map) {
-        const names = datasetMeta?.[String(id)]?.selected;
-        if (Array.isArray(names) && names.length) ds.setSelectedVariables?.(names);
+        const meta = datasetMeta?.[String(id)];
+        const names = meta?.selected;
+        // The saved stamp travels with it: restoring must not claim to be a change made
+        // now, or merely opening a project on a second machine would outrank the
+        // selection the first one is still editing.
+        if (Array.isArray(names) && names.length) {
+          ds.setSelectedVariables?.(names, { at: typeof meta.at === 'string' ? meta.at : null });
+        }
       }
     }
     // Ops of PURGED datasets — keep them in the log for audit + merge-safety; nothing

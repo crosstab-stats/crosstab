@@ -17,6 +17,7 @@
 
 import { threeWayLog, resolveMerger, deterministicOpId, stableStringify } from './merge.js';
 import { sharedAncestor, orderByHlc, liveOps } from './op-log.js';
+import { hlcCompare, hlcDecode } from './hlc.js';
 
 const isCore = (op) => op.owner === 'core';
 const isWs = (op) => typeof op?.target === 'string' && op.target.startsWith('ws:');
@@ -119,6 +120,47 @@ function concurrentItemConflicts(mo, to, owner, surfaces) {
   return out;
 }
 
+/**
+ * Merge the per-dataset non-log state, newest wins per dataset.
+ *
+ * **Not a spread.** It used to be `{...theirs, ...mine}` — "mine wins per key" — which
+ * reads as "this machine wins" and is not what happens: `decideSync` chooses which side
+ * is `mine` by comparing content SIGNATURES as strings, so that both peers compute the
+ * same merge whoever runs it. For the log that is harmless (it merges by op-union and
+ * HLC, which is order-independent anyway); for this slot it meant the winner was decided
+ * by how the selections happened to SORT.
+ *
+ * That is not merely arbitrary, it is a lock. The merge result is written back and
+ * reloaded, so if `["age","sex"]` outsorts `["income"]`, a user whose folder holds the
+ * first can never switch to the second — every save puts it back. Measured at 4 of 8
+ * cases reverting the change just made.
+ *
+ * So each entry carries the HLC stamp of when it last changed and the later stamp wins.
+ * HLC rather than a wall clock because two machines sharing a OneDrive folder are
+ * exactly the case where clocks disagree, and it is what the rest of the project already
+ * orders events by. An entry with no stamp is older than one with any — it predates this
+ * rule, so anything explicit beats it.
+ */
+export function mergeDatasetMeta(mine, theirs) {
+  const out = { ...(theirs ?? {}) };
+  for (const [id, m] of Object.entries(mine ?? {})) {
+    const t = out[id];
+    out[id] = newerMeta(m, t) ? m : t;
+  }
+  return out;
+}
+
+/** Is `a` the later of the two? Ties and missing stamps fall to `a`, which keeps the
+ * result deterministic given `decideSync` already fixed the argument order. */
+function newerMeta(a, b) {
+  if (!b) return true;
+  if (!a) return false;
+  const av = typeof a.at === 'string' ? a.at : null;
+  const bv = typeof b.at === 'string' ? b.at : null;
+  if (av && bv) return hlcCompare(hlcDecode(av), hlcDecode(bv)) >= 0;
+  return !!av || !bv; // a stamped entry beats an unstamped one
+}
+
 export function mergeProjects(mine, theirs, mergers = {}, resolutions = null, opts = {}) {
   const conflicts = [];
   const mineLog = mine?.log ?? [];
@@ -206,7 +248,7 @@ export function mergeProjects(mine, theirs, mergers = {}, resolutions = null, op
     // through here untouched; nothing reads it back.
     activePlugins: mine?.activePlugins ?? theirs?.activePlugins ?? null,
     output: Array.isArray(mine?.output) ? mine.output : (theirs?.output ?? null), // regenerable
-    datasetMeta: { ...(theirs?.datasetMeta ?? {}), ...(mine?.datasetMeta ?? {}) }, // mine wins per key
+    datasetMeta: mergeDatasetMeta(mine?.datasetMeta, theirs?.datasetMeta),
     collabId: mine?.collabId ?? theirs?.collabId ?? null,
     collabSecret: mine?.collabSecret ?? theirs?.collabSecret ?? null,
     log: orderByHlc(merged),

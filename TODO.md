@@ -10124,6 +10124,68 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Nice-to-have / optimisations
 
+- [x] **`datasetMeta` merges by recency, not by how the names happen to sort — 2026-10-23.**
+      Found by the owner asking a specific question rather than a general one: a student
+      uses CrossTab in the campus lab, saves to her OneDrive folder, and opens the project
+      at home — *"will the home system adopt the selection choices made in the lab on
+      first load but from then on it will prefer its own selection group?"*
+
+      Yes to the first half. No to the second, and the second half was broken.
+
+      **The first open is a plain load, not a merge.** `#mergeSave` runs on SAVE; opening
+      from a folder just reads `project.json`. So she does adopt the lab's selection.
+
+      **Her first change at home then goes through the merge, and "mine" does not mean
+      "this machine".** `decideSync` normalises the argument order by comparing content
+      SIGNATURES as strings — deliberately, so both peers compute the same merge whoever
+      runs it. For the log that is harmless, because it merges by op-union and HLC and is
+      order-independent anyway. For `datasetMeta`'s `{...theirs, ...mine}` it meant the
+      winner was **whichever selection sorted lexicographically first**. My earlier
+      summary to the owner — "a peer's selection is overwritten by yours on sync" — was
+      simply wrong about which side wins.
+
+      **And it was not a coin flip, it was a lock.** Probed over eight lab/home pairs:
+      4 of 8 reverted the change just made, e.g. `lab=["age","sex"] home=["income"] →
+      ["age","sex"]`. Because the merge result is written back and reloaded, a user whose
+      folder holds the lexicographically smaller selection could *never* switch — every
+      save put the old one back. The same eight pairs are now a test, and they fail
+      against the old rule.
+
+      **The fix is to give the slot a real rule: each entry carries the HLC stamp of when
+      the selection changed, and the later stamp wins, per dataset key.** HLC rather than
+      `Date.now()` because two machines sharing a OneDrive folder are exactly the case
+      where wall clocks disagree, and because it is what the rest of the project already
+      orders events by. Per KEY so two peers editing different datasets' selections both
+      survive. An unstamped entry predates the rule, so anything explicit outranks it —
+      no migration needed.
+
+      Convergence is preserved, which is the property `decideSync`'s sort exists for: ties
+      and missing stamps both resolve to the first argument, so either peer computes the
+      same result. Tested from both sides.
+
+      **The gap the browser found, and the comment that was lying.** After a reload a
+      fresh click DID outrank the restored stamp — but only because both clocks agreed.
+      The stamp was never fed back INTO the clock, so a lab PC running ten minutes fast
+      would hand home a stamp from the future and her next click would be stamped behind
+      it and lose. `ProjectLog.restore` already documents the rule for ops (*"advances it
+      past every op via `receiveOps` … so a reloaded project's next local op always sorts
+      after everything saved"*); the selection stamp was skipping it. `receiveStamp` is
+      the non-op counterpart, called when a saved selection is restored. The test for it
+      carries a **negative control** — the same scenario without the fold-in, asserting
+      the naive clock really does stamp behind the fast peer — because the first draft of
+      that test passed for the wrong reason (it gave the "fast" peer a 2023 wall time
+      while the home log used the real clock, making it three years *behind*).
+
+      **Restoring must not re-stamp,** or merely opening the project on a second machine
+      would outrank the selection the first one is still editing. The saved `at` travels
+      with the names into `setSelectedVariables`.
+
+      **Verified live:** real column-header clicks produced `{selected, at}` with the
+      stamp advancing per change; it reached `project.json` on disk; a reload restored the
+      selection with the stamp byte-identical; a later click outranked it; and planting a
+      stamp ten minutes in the future still left the next local stamp sorting after it.
+      2328 tests pass.
+
 - [x] **The grid's variable selection survives a reload — DONE 2026-10-21.** The owner's
       question, and they were undecided: *"We've decided selections in the picker are
       ephemeral, but the selection set on the data grid is more sticky, and having it
@@ -10145,10 +10207,11 @@ The record of what shipped and why. Kept in full, in the original sections.
 
       **It went into a slot that already existed and was empty.** `datasetMeta` is
       described in `buildManifest` as "per-dataset non-log state", is plumbed manifest →
-      bundle → `loadBundle`, and `collab-sync` already declares its merge rule (mine wins
-      per key). Its only tenant was `libraryLink`, gone with the building-block library on
-      2026-10-02 — so the plumbing had been carrying `{}` ever since. No new storage tier,
-      no new merge rule.
+      bundle → `loadBundle`, and `collab-sync` already declared a merge rule for it. Its
+      only tenant was `libraryLink`, gone with the building-block library on 2026-10-02 —
+      so the plumbing had been carrying `{}` ever since. No new storage tier. The merge
+      rule did have to change, though, and that turned out to be the interesting part —
+      see the entry below.
 
       **Deliberately NOT an op.** Clicking a column header is not a change to the data,
       and logging it would put a high-frequency, zero-audit entry in the History panel and
@@ -10178,11 +10241,10 @@ The record of what shipped and why. Kept in full, in the original sections.
       `savedAt` unchanged by the open. Clearing the selection persists as cleared.
 
       Owner's note: *"We can test run this a few times and see if it generates
-      problems."* The one to watch is collaboration — `datasetMeta` merges mine-wins-per-
-      key, so a peer's selection is overwritten by yours on sync. Known, judged minor and
-      self-correcting against losing it on every reload, and the alternative (per-device)
-      would have lost the case where handing someone a 900-variable project with eight
-      marked is genuinely useful.
+      problems."* It did, immediately, in collaboration — see the entry below. The
+      alternative design (per-device, never synced) was rejected because it would have
+      lost the case where handing someone a 900-variable project with eight marked is
+      genuinely useful.
 
 
 - [x] **Frequencies measures every variable in ONE R call (2026-10-14).** It used to
