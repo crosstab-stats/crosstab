@@ -4,6 +4,131 @@
 # appear in core/howto-core.js. This file is read exactly the way a plugin's sidecar is.
 # Anything before the first delimiter — including this note — is ignored.
 
+--- id: task-choose-a-test
+What you can ask depends on how your variables are measured, so start there: open the **Variables** tab and look at the Measure column. Nominal is a set of unordered categories, ordinal is ranked, scale is a number you can average.
+
+Then read down this list until one matches what you have.
+
+- **One variable** — its distribution → [describe one variable](howto:task-describe-one-variable)
+- **Two nominal or ordinal variables** — whether they are related → [two categorical variables](howto:task-two-categorical)
+- **One scale variable and one grouping variable** — whether the groups differ → [compare a mean across groups](howto:task-compare-groups)
+- **Two scale variables** — whether they move together → [two numeric variables](howto:task-two-numeric)
+- **One outcome and several predictors** — the effect of each, holding the others still → [predict an outcome](howto:task-predict-an-outcome)
+
+Two things worth knowing before you read a p-value.
+
+**A test answers the question you actually asked, not the one you meant.** “Are these groups different?” and “does this variable predict that one, controlling for age?” are different questions with different answers from the same data, and no amount of significance makes one stand in for the other.
+
+**Significance is not size.** With enough rows almost everything is significant; with few rows almost nothing is. Report the difference or the coefficient alongside the p-value, and the confidence interval if you have one — the [confidence interval for a mean](howto:descriptives-explore) is the usual place to start.
+
+If what you want is a picture rather than a test, [choose the right chart](howto:plots-choosing) instead.
+
+--- id: task-prepare-data
+Four things, and they are worth doing before the first analysis rather than after the first confusing result.
+
+1. **[Open the file](howto:import-data).** SPSS, Stata, SAS, CSV, Excel and Parquet all come in the same way. Labels and value labels come with it where the format carries them.
+2. **[Check the types, labels and missing values](howto:variable-types)** in the **Variables** tab. This is the step people skip. A survey that codes *refused* as 98 and *don’t know* as 99 will happily average them into your mean until you declare them missing.
+3. **[Recode what needs grouping](howto:recode-a-variable).** Age into bands, a seven-point scale into three. Name the new variable and its values while you are there — the recode dialog takes both, and a variable called `age_r` with no labels is a variable you will not recognise next week.
+4. **[Restrict the rows if you need to](howto:select-cases).** A filter is visible and reversible, which is why it is a better idea than deleting rows.
+
+Everything here is recorded as a step you can see, reorder and undo — see [go back and see what you did](howto:history-and-undo).
+
+--- id: task-describe-one-variable
+Which tool depends on the measure, and the quickest way to see it is that one of them counts and the other averages.
+
+- **Categories** — [make a frequency table](howto:frequencies-basics). Counts and percents per category, which is the only sensible summary of a nominal variable.
+- **Numbers** — [summarise the variable](howto:descriptives-basics) for the mean, standard deviation, minimum and maximum.
+- **Either** — [add a mode, median or variance](howto:frequencies-statistics) to a frequency table. The mode is the one statistic defined for a nominal variable, and it is reported through the value label rather than the code.
+- **A mean you intend to quote** — [get a confidence interval for it](howto:descriptives-explore), at a level you choose.
+
+Look at it as well as summarising it: a [histogram](howto:plots-histogram) for a number, a [bar chart](howto:plots-bar) for categories. A mean of 3.4 on a bimodal variable is arithmetically correct and substantively a lie, and the histogram is where you notice.
+
+If your data came with a sampling weight, [use it](howto:task-weighted-analysis).
+
+--- id: task-two-categorical
+A crosstab, and then a test.
+
+1. **[Cross-tabulate the two variables](howto:crosstabs-basics).** Independent variable in the columns, dependent in the rows, is the usual convention.
+2. **[Choose the percentages](howto:crosstabs-percentages).** This is the decision that makes the table readable or useless. Percent *within* the independent variable — column percents if the IV is in the columns — so each column sums to 100 and you are comparing like with like. Total percents almost never answer the question.
+3. **Read chi-square.** It comes with the table and tells you whether the pattern is more than sampling noise. It does not tell you how strong the relationship is, or which cell drives it.
+4. **[Add an association measure](howto:crosstabs-measures)** for the strength — Cramér’s V for nominal, gamma or Kendall’s tau for ordinal. For a 2×2, [risk and odds ratios](howto:epi-measures) are usually what a reader wants.
+
+If chi-square’s expected counts are small, the same page offers a Monte Carlo p-value, which is the honest answer when the approximation does not hold.
+
+--- id: task-compare-groups
+Count the groups first, and whether they are the same people measured twice.
+
+- **Two groups, different people** — [independent-samples t-test](howto:compare-independent)
+- **Two measurements of the same people** — [paired-samples t-test](howto:compare-paired)
+- **Three or more groups, different people** — [one-way ANOVA](howto:compare-oneway)
+- **Three or more measurements of the same people** — [repeated-measures ANOVA](howto:anova-repeated)
+- **One group against a known value** — [one-sample t-test](howto:compare-one-sample)
+
+**Read the equal-variances row before the p-value.** The independent-samples output carries [Levene’s test](howto:assumptions-levene) and both versions of the t-test; if Levene’s is significant, the groups’ spreads differ and the row that does not assume equal variances is the one to quote.
+
+**If the grouping variable is one you recoded,** it is available here — the picker reads the measure you set, not the storage type, so a dichotomy recoded to 1/2 shows up as a grouping variable.
+
+ANOVA tells you *that* the groups differ, not *which* ones. Its page covers the post-hoc comparisons that answer the second question.
+
+--- id: task-two-numeric
+Look, then measure.
+
+1. **[Plot them](howto:plots-scatter).** A correlation of 0.0 can hide a perfect U-shape, and a correlation of 0.9 can be two clusters with nothing in between. The scatter plot shows you which world you are in, and it carries an optional fit line with the regression equation on it.
+2. **[Correlate them](howto:correlation-bivariate).** Pearson’s r for two scale variables that look roughly linear; Spearman’s rho if either is ordinal or badly skewed, since it works on ranks.
+3. **If a third variable might explain the whole thing,** [control for it](howto:correlation-partial). Height and reading ability correlate strongly in children, and the explanation is age.
+
+A correlation is symmetric and says nothing about direction. When you want to say “a one-unit change in X goes with so much change in Y”, that is [linear regression](howto:regression-linear).
+
+--- id: task-predict-an-outcome
+What kind of outcome you have decides the model, and getting this wrong is the most common way a regression table ends up meaningless.
+
+- **A number** — [linear regression](howto:regression-linear)
+- **Yes or no** — [binary logistic regression](howto:logistic-binary)
+- **Ordered categories** — [ordinal logistic regression](howto:ordinal-ordinal)
+- **A count of events** — [Poisson regression](howto:count-poisson)
+
+**Categorical predictors need a reference category,** and the one the software picks is rarely the one you want to compare against. [Set it deliberately](howto:logistic-categorical) — every coefficient in the table is a comparison with it, so it decides what the table says.
+
+“Controlling for” is a claim about your model, not about the world. A coefficient is adjusted for the variables you put in, and silent about the ones you did not.
+
+--- id: task-weighted-analysis
+Survey data usually comes with a weight, and ignoring it gives you the wrong numbers with full confidence.
+
+1. **[Set the dataset’s weight](howto:weight-cases)** once, in **Transform ▸ Weight cases…**.
+2. **Run your analysis as normal.** Each one offers the weight as its default, pre-filled into that analysis’s own control and still changeable there. CrossTab never applies a weight you cannot see — the alternative is how a result ends up unreproducible.
+3. **Check the caption.** Every weighted result names the weight it used, which is what you quote in your write-up.
+
+Weighting is read as a **frequency weight**: N becomes the sum of the weights. [Frequency tables](howto:frequencies-weighted), crosstabs, t-tests, ANOVA and correlation all take one.
+
+**For standard errors that account for the sampling design** — strata, clusters, finite population correction — a frequency weight is not enough. Use the survey procedures instead: [weighted means](howto:survey-means), [weighted crosstabs](howto:survey-crosstab), [survey regression](howto:survey-regression).
+
+--- id: task-build-a-scale
+Several questions, one score. Two routes depending on what the items look like.
+
+- **Counting how many apply** — **Transform ▸ Count values within cases…** gives the number of listed variables where a case holds a value you name. “How many of these eight symptoms did they report” is this.
+- **Adding or averaging** — [compute a new variable](howto:compute-a-variable) from an expression across the items.
+
+Two things to do before you trust the score.
+
+**[Reverse the reversed items](howto:recode-a-variable)** first. One item worded the other way round will cancel out the agreement you are trying to measure, and the score will quietly understate it.
+
+**[Check the reliability](howto:reliability-alpha).** Cronbach’s alpha says whether the items behave as though they measure one thing. A low alpha means your score is a sum of unrelated answers, which is still a number and no longer a scale.
+
+Then [describe the score](howto:task-describe-one-variable) before using it — a scale where everyone lands on the same value cannot explain anything.
+
+--- id: task-write-up
+Everything you did is already written down. You do not have to remember it.
+
+**[Open the history](howto:history-and-undo)** — **Edit ▸ History…** — for the numbered list of every import, transform and analysis, in order.
+
+**[Switch it to Syntax](howto:syntax-basics)** for the same thing as text. This is not an export that approximates what you did; it *is* the history, and editing it and pressing **Run** rebuilds the data and re-runs the analyses.
+
+**[Save or send it](howto:syntax-save-load)** as `.ctscript`, or as a Stata `.do` or SPSS `.sps` file if that is what your reader uses.
+
+**[Export the output](howto:export-data)** for the tables and charts themselves.
+
+Two habits worth having. **Quote the weight and the filter**, both of which the captions name for you — a mean from weighted, filtered data is a different number from the one a reader will get otherwise. And **keep the project file**, not just the report: it holds the data, the history and the analyses together, so a question about your numbers in six months is answerable rather than archaeology.
+
 --- id: import-data
 CrossTab opens the file formats you already have: **SPSS** (`.sav`), **Stata** (`.dta`), **CSV**, **Excel**, **Parquet** and more. Nothing is converted to a house format on the way in — see [the export topic](howto:export-data).
 

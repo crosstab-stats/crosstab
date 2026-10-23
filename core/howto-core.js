@@ -18,9 +18,19 @@ const FILE = 'docs/howto-core.md';
 /**
  * The host's topics: the things that are nobody's plugin.
  *
- * Kept to what core actually owns — importing, the data grid, weighting, history,
- * projects — because a topic claiming to teach an analysis would be documenting a plugin
- * from outside it, which is the coupling this design exists to avoid.
+ * Two layers, and the distinction is load-bearing.
+ *
+ * **Procedure pages** are kept to what core actually owns — importing, the data grid,
+ * weighting, history, projects — because a topic claiming to teach an analysis would be
+ * documenting a plugin from outside it, which is the coupling this design exists to
+ * avoid.
+ *
+ * **Task pages** (`How do I…`, #184) are the layer above: the questions that span several
+ * plugins, which is exactly why they are not any one plugin's. They route and they do not
+ * restate — a task page that explained how to run a crosstab would be a second copy of
+ * `crosstabs-basics`, free to drift, while the plugin's own page is the one maintained
+ * alongside the dialog. Core is not privileged in holding them; it is simply the only
+ * participant that spans everything.
  */
 export const CORE_HOWTO = {
   id: 'crosstab',
@@ -28,6 +38,109 @@ export const CORE_HOWTO = {
   enabled: true,
   howtoFile: FILE,
   howtoIndex: [
+    // ---------------------------------------------------------------------------------
+    // The TASK layer (#184). Everything below the next divider is a PROCEDURE page,
+    // owned by whoever owns the procedure. These are the questions that span several of
+    // them, which is why they are core's: no single plugin owns "which test do I use".
+    //
+    // Each one routes onward and restates nothing. A task page that explained how to run
+    // a crosstab would be a second copy of `crosstabs-basics`, free to drift from it, and
+    // the plugin's own page is the one that gets updated when the dialog changes.
+    //
+    // Listed FIRST because `pluginPage` reads declaration order, and because the reader
+    // who needs this layer most is the one who does not yet know what to search for.
+    // ---------------------------------------------------------------------------------
+    {
+      id: 'task-choose-a-test',
+      title: 'How do I choose a test?',
+      category: 'How do I…',
+      keywords: ['which test', 'choose', 'what test should i use', 'pick a test', 'decide',
+        'significance', 'hypothesis', 'nominal', 'ordinal', 'scale', 'measure', 'help'],
+      seeAlso: ['task-compare-groups', 'task-two-categorical', 'task-two-numeric',
+        'task-predict-an-outcome', 'plots-choosing'],
+    },
+    {
+      id: 'task-prepare-data',
+      title: 'How do I get my data ready to analyse?',
+      category: 'How do I…',
+      keywords: ['prepare', 'clean', 'ready', 'labels', 'missing', 'types', 'first steps',
+        'before analysis', 'tidy', 'setup'],
+      seeAlso: ['import-data', 'variable-types', 'recode-a-variable', 'select-cases'],
+    },
+    {
+      id: 'task-describe-one-variable',
+      title: 'How do I describe one variable?',
+      category: 'How do I…',
+      keywords: ['describe', 'one variable', 'univariate', 'summary', 'mean', 'median',
+        'mode', 'frequency', 'distribution', 'spread', 'variance', 'range'],
+      seeAlso: ['frequencies-basics', 'descriptives-basics', 'frequencies-statistics',
+        'descriptives-explore', 'plots-histogram'],
+    },
+    {
+      id: 'task-two-categorical',
+      title: 'How do I report a relationship between two categorical variables?',
+      category: 'How do I…',
+      keywords: ['crosstab', 'cross tabulation', 'contingency', 'chi square', 'chi-square',
+        'two categorical', 'nominal', 'percentages', 'association', 'odds ratio'],
+      seeAlso: ['crosstabs-basics', 'crosstabs-percentages', 'crosstabs-measures',
+        'epi-measures', 'task-choose-a-test'],
+    },
+    {
+      id: 'task-compare-groups',
+      title: 'How do I compare a mean across groups?',
+      category: 'How do I…',
+      keywords: ['compare', 'groups', 'means', 't test', 't-test', 'anova', 'difference',
+        'two groups', 'three groups', 'levene', 'equal variances'],
+      seeAlso: ['compare-independent', 'compare-oneway', 'compare-paired',
+        'assumptions-levene', 'task-choose-a-test'],
+    },
+    {
+      id: 'task-two-numeric',
+      title: 'How do I see whether two numeric variables move together?',
+      category: 'How do I…',
+      keywords: ['correlation', 'correlate', 'scatter', 'relationship', 'two numeric',
+        'pearson', 'spearman', 'r', 'association', 'linear'],
+      seeAlso: ['correlation-bivariate', 'plots-scatter', 'correlation-partial',
+        'regression-linear', 'task-choose-a-test'],
+    },
+    {
+      id: 'task-predict-an-outcome',
+      title: 'How do I predict an outcome from several variables?',
+      category: 'How do I…',
+      keywords: ['regression', 'predict', 'model', 'several predictors', 'multivariate',
+        'control for', 'adjust', 'logistic', 'count', 'ordinal'],
+      seeAlso: ['regression-linear', 'logistic-binary', 'logistic-categorical',
+        'count-poisson', 'ordinal-ordinal'],
+    },
+    {
+      id: 'task-weighted-analysis',
+      title: 'How do I use my survey’s weight?',
+      category: 'How do I…',
+      keywords: ['weight', 'weighted', 'survey', 'sampling weight', 'wtssall', 'design',
+        'representative', 'population', 'gss'],
+      seeAlso: ['weight-cases', 'frequencies-weighted', 'survey-means', 'survey-crosstab',
+        'survey-regression'],
+    },
+    {
+      id: 'task-build-a-scale',
+      title: 'How do I build an index or scale score?',
+      category: 'How do I…',
+      keywords: ['index', 'scale', 'score', 'composite', 'sum', 'count values', 'alpha',
+        'reliability', 'cronbach', 'combine variables'],
+      seeAlso: ['compute-a-variable', 'reliability-alpha', 'recode-a-variable',
+        'task-describe-one-variable'],
+    },
+    {
+      id: 'task-write-up',
+      title: 'How do I write up exactly what I did?',
+      category: 'How do I…',
+      keywords: ['write up', 'report', 'methods', 'reproduce', 'replicate', 'what did i do',
+        'syntax', 'do file', 'audit', 'share', 'hand in', 'assignment'],
+      seeAlso: ['history-and-undo', 'syntax-basics', 'syntax-save-load', 'export-data'],
+    },
+    // ---------------------------------------------------------------------------------
+    // Procedure pages for the things core itself owns.
+    // ---------------------------------------------------------------------------------
     {
       id: 'import-data',
       title: 'Open a data file',

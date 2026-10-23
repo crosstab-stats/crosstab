@@ -23,9 +23,7 @@ Syntax:
 
 1. Pick the variables to correlate.
 2. Pick the **controls** to partial out.
-3. Choose the **type**:
-   - **partial** (the default) — the control is removed from BOTH variables.
-   - **semipartial** (part) — removed from one of them only.
+3. Choose the **type**: **partial** (the default) removes the control from BOTH variables; **semipartial** (part) removes it from one of them only.
 
 The two answer different questions and routinely give different numbers, so name which you ran.
 

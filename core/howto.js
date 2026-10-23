@@ -146,7 +146,8 @@ export function collectTopics(catalogue) {
     });
   }
   return out.sort((a, b) =>
-    a.category.localeCompare(b.category)
+    categoryRank(a.category) - categoryRank(b.category)
+    || a.category.localeCompare(b.category)
     || a.title.localeCompare(b.title)
     || String(a.pluginId).localeCompare(String(b.pluginId)));
 }
@@ -265,6 +266,27 @@ export function filterTopics(topics, query) {
     const hay = `${t.title} ${t.category} ${t.keywords.join(' ')} ${t.pluginName ?? ''}`.toLowerCase();
     return terms.every((term) => hay.includes(term));
   });
+}
+
+/**
+ * Categories a reader meets before the alphabet starts.
+ *
+ * Alphabetical is the right default for 160 procedure pages and the wrong answer for the
+ * top of the list: it filed `How do I…` between `Graphs` and `Import`, below a hundred
+ * pages named for procedures, when the reader who needs it most is the one who does not
+ * yet know which procedure to search for.
+ *
+ * The rank belongs to the CATEGORY, not to whoever provided the topic — a plugin filing
+ * under one of these names sorts here too. That is the difference between an ordering
+ * policy and a privilege of being the host.
+ */
+const PINNED_CATEGORIES = ['How do I…', 'Getting started', 'Working with data'];
+
+/** Position of a category in {@link PINNED_CATEGORIES}; everything else ties and falls
+ * through to the alphabetical comparison. */
+function categoryRank(category) {
+  const i = PINNED_CATEGORIES.indexOf(category);
+  return i < 0 ? PINNED_CATEGORIES.length : i;
 }
 
 /** Group an ordered topic list into `[category, topics[]]` pairs, keeping the order. */
