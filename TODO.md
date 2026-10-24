@@ -2077,15 +2077,6 @@ bottom; they are the project's memory and are not summarised away.
 > These three were captured during the college tour and lived only in the memory
 > notes, so this section read as complete when it was not (spotted 2026-08-05).
 
-- [ ] **#142 — Distance sampling — PARKED, possibly out of scope (user's call,
-      2026-08-05).** The `Distance` R package (CRAN, GPL-2+) fits detection functions
-      for line/point transect surveys; anthropology faculty use it alongside Raven.
-      Parked on a SCOPE question rather than a technical one: distance sampling is a
-      field-survey / data-collection method, and CrossTab is not a data collection
-      tool — the downstream statistics (frequency tables, chi-square, ANOVA) are
-      already covered. Decide scope before spending a feasibility probe.
-      https://distancesampling.org/Distance/
-
 - [~] **Linear regression** (`plugins/builtin-regression/`) — `lm()`, SPSS-style
       Model Summary + Coefficients; factor IVs dummy-coded; honours missingValues.
       *R/stats verified; two-dialog UI click-through NOT auto-confirmed* (harness
@@ -2346,9 +2337,10 @@ bottom; they are the project's memory and are not summarised away.
       **Re-counted 2026-10-15** — the groups below had kept every chart listed in August,
       the ones since migrated to model kinds included, so this read as 16 plugins of work
       when 7 of those entries no longer call `appendPlot` at all:
-      - *Marginal-fit charts (weren't worth a Layer-2 model) — 1:* `ecology` NMDS.
-        *(`decisions` tornado + CE plane, `inequality` Lorenz, `cointegration` volatility
-        and `timeseries` ARIMA forecast have migrated.)*
+      - *Marginal-fit charts (weren't worth a Layer-2 model) — 2:* `ecology` NMDS,
+        `detection` fitted detection function (added 2026-10-23 with #142; its blocker is
+        named below). *(`decisions` tornado + CE plane, `inequality` Lorenz,
+        `cointegration` volatility and `timeseries` ARIMA forecast have migrated.)*
       - *New-glyph charts (Tier B — no existing kind) — 2:* `ordination` CA biplot,
         `ordination` MDS map. *(`plots` boxplot, `meta` forest and `survival`
         Kaplan-Meier have migrated — box, forest and steps are kinds now.)*
@@ -2357,10 +2349,21 @@ bottom; they are the project's memory and are not summarised away.
         `var` IRF (multi-panel). *(Word clouds and the Q-Q/residual diagnostics have
         migrated.)*
 
-      *Coverage re-checked 2026-10-17 by counting the call sites:* **8 sites across 7
+      *Coverage re-checked 2026-10-23 by counting the call sites:* **9 sites across 8
       plugins**, every one of them in a group above — so each remaining chart has a
       recorded disposition, and "still on the old API" is a deliberate outcome rather than
-      a backlog. The inventory is now asserted by `test/baked-plot-inventory.test.mjs`,
+      a backlog.
+
+      *The detection function is the one entry with a NAMED blocker rather than a general
+      one, and it is a cheap one to clear.* The geometry is a histogram with a curve over
+      it, which is not exotic; two specific things stop it being a model. The `histogram`
+      kind bins raw values at render time and has no overlay series. And the curve's
+      values are not ours to compute — for the hazard-rate and cosine-adjusted keys that
+      means reimplementing `mrds`, whose exported `detfct` recycles against the fitted
+      rows rather than a grid, so slicing a curve out of it would depend on recycling
+      order. Give `histogram` an overlay series fed by numbers from R and this one
+      migrates; until then `plot(fit)` is the package's own canonical diagnostic and is
+      correct for every key by construction. The inventory is now asserted by `test/baked-plot-inventory.test.mjs`,
       because a hand-maintained list of what is left is precisely the thing that goes
       stale without anyone noticing. Layer 2 is closed; only Layer 3 itself is unbuilt.
     - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
@@ -9636,6 +9639,112 @@ The record of what shipped and why. Kept in full, in the original sections.
     tie-in); a clear/reset-session action.
 
 ### More analyses (each is just another plugin)
+
+- [x] **#142 — detection-corrected abundance — IN SCOPE and SHIPPED 2026-10-23 as
+      `builtin-detection`, both method families.**
+
+      **My own scope note was wrong, and saying so was the first step.** It read:
+      *"distance sampling is a field-survey / data-collection method, and CrossTab is not
+      a data collection tool — the downstream statistics are already covered."* Fitting a
+      detection function is not data collection, and it is not covered. Checked what we
+      ship: `builtin-ecology` does diversity indices and NMDS, which work on RELATIVE
+      abundance from counts you already hold. Nothing corrected for detection. So the
+      entry had been parked behind a false premise.
+
+      **The feasibility probe the entry deferred cost two minutes and changed the
+      build.** Against repo.r-wasm.org's index: `Distance` resolves to 33 packages /
+      **17 `.so`**, at the ~20 ceiling — and nine of those are a tidyverse chain that
+      computes nothing here, because `Distance` is a convenience wrapper. `mrds`, the
+      estimator underneath, is 17 packages / **8 `.so`**. So the wrapper was rejected and
+      the engine used directly.
+
+      **Owner's decision:** build it, in the ecology area, **both families as one
+      detection-modelling area**.
+
+      **Why it is a new plugin rather than part of `builtin-ecology`.** A plugin's
+      `category` is both its manager section and its top-level menu — the host owns
+      placement and a plugin cannot vary it per item. `builtin-ecology` is **Multivariate**,
+      right for diversity and NMDS and wrong for a detection function. Separate plugin,
+      category **Ecology**, which also means someone who only runs a diversity index never
+      pays for `mrds`.
+
+      **A new WebR failure mode, and it is worth remembering.** The occupancy half was
+      built on `unmarked` and failed live with *"there is no package called 'unmarked'"*.
+      Probed rather than retried: every dependency installs — `Rcpp`, `RcppArmadillo`,
+      `RcppEigen`, `TMB`, `Rdpack`, `rbibutils`, `mrds` — and only `unmarked` does not,
+      while `webr::install("unmarked")` returns **successfully** having installed nothing.
+      Cause: **`unmarked` 1.5.2 is in the PACKAGES index and its wasm binary is a 403.**
+      Confirmed for R 4.4 and 4.5, with `mrds_3.0.1.tgz` and `unmarked`'s own new
+      dependency `reformulas_0.4.1.tgz` as 200 controls. So reading the index settles the
+      dependency CLOSURE, as [[webr-package-feasibility]] says, and does **not** establish
+      that the package exists.
+
+      **So the occupancy likelihoods are hand-rolled in base R** — MacKenzie et al. (2002)
+      single-season occupancy, Royle (2004) N-mixture, `optim` with standard errors from
+      the numerical Hessian — rather than shipping a menu item that always errors. Both
+      validated against `unmarked` on local R 4.6.0, per
+      [[validate-handrolled-vs-official]], with the distance STATED rather than hidden
+      behind a tolerance:
+      - **Occupancy: identical to ten decimal places** — psi 0.8000000207, p 0.5000000078,
+        AIC 43.46002813, and both standard errors.
+      - **N-mixture: AIC identical to seven decimals** (91.0785981 vs 91.0785979), lambda
+        1.9e-4 apart. Two optimisers stopping at different points on the same surface; an
+        identical AIC on a *different* likelihood is not a thing that happens. So the test
+        asserts AIC tightly and lambda loosely, and says why.
+      - **Negative control:** perfect detection recovers the naive figure (psi 0.500004
+        against a naive 0.5, p 0.999979) — without it, a plausible-looking psi would have
+        passed everything else.
+      - Dropping `unmarked` also took the shared-object cost from 11 to 8.
+
+      **Four things verified against mrds before a line was written,** because guessing at
+      an API is how a wrapper ends up confidently wrong. A `dsmodel` built from a STRING
+      and parsed with `as.formula` works, and has to be a string — the key is an input and
+      a literal formula captures the symbol. `ddf` **fits one observation** without
+      complaint, so the sample-size floor is ours. A bare `unif` key fits and reports
+      p = 1 — a flat function asserting you saw everything, the assumption the analysis
+      exists to avoid — so it is offered only with a cosine adjustment. And `detfct`,
+      though exported, recycles against the fitted rows rather than a grid, so
+      `plot(fit)` is used instead.
+
+      **Three bugs the browser found that nothing else could:**
+      - **`plot(fit, …, col = …)` fails** with "formal argument col matched by multiple
+        actual arguments" — mrds supplies its own. My probe had tested the call WITHOUT
+        `col`; I then added it and never re-tested the line I had written. Worse, a
+        `tryCatch` turned the failure into a figure that was simply absent: two tables
+        appeared and nothing said a third output was missing. The silence was the worse
+        half, so the error is now carried back and reported.
+      - **An opaque error for a bad column name** — *"Can't construct `data.frame`. Source
+        object is not eligible."* Unreachable from the menu, where the picker only offers
+        real columns; reachable from a do-file with a typo. Now names the columns it could
+        not read.
+      - **A hand-written CI cell** instead of the shared `ci()` formatter. Caught by the
+        formatter test, which flagged my R-side helper named `ci` inside a template
+        string — a text scan that cannot tell the languages apart, and right anyway,
+        because I should have been calling the shared one.
+
+      **The figure is baked, recorded, and a migration candidate.** Filed in the Layer 3b
+      marginal-fit group with a NAMED blocker: the `histogram` kind bins raw values at
+      render time and has no overlay series, and the curve's values are not ours to
+      compute. Totals updated to 9 sites across 8 plugins.
+
+      **Verified live in Chrome, end to end.** The **Ecology** menu appears with both
+      items; the input dialogs render with radio choices and the right defaults; WebR
+      installed `mrds` and fitted a half-normal (p̂, ESW, density, abundance and the
+      uncorrected count all printed, plus a real 15 KB SVG); and the hand-rolled occupancy
+      ran with **no package at all**, giving psi 0.9674 / p 0.2756 / AIC 108.371 against a
+      naive 0.6000 on 30 sites × 3 visits. That exact matrix was then re-run on local R:
+      hand-rolled 0.967435 / 0.275647 / 108.3710 and **`unmarked` identical** — a
+      three-way agreement between WebR, local R and the authority on real data.
+
+      Two behaviours worth keeping: a singular Hessian withholds the interval instead of
+      inventing one (occupancy pinned at 1.0 shows the estimate and no CI), and an
+      N-mixture run on binary data returns λ with a CI of [0.008, 5454] — the model saying
+      it cannot identify abundance, which is what the how-to warns about.
+
+      Still open: the **faculty conversation** about which family their acoustic/Raven work
+      actually needs. Both are built, so this now refines defaults and documentation rather
+      than blocking anything. https://distancesampling.org/Distance/
+
 
 - [x] **#141 — SUPERSEDED (2026-10-13); shipped 2026-09-29.** A third never-closed
       duplicate, found the same way as #179 and #171. All three bullets below were built:
