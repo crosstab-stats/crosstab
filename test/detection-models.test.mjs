@@ -67,7 +67,7 @@ const YC = [[2, 1, 3], [0, 0, 0], [4, 3, 2], [1, 2, 1], [0, 1, 0],
  * shape `unpackR` produces — so the reporting half can be exercised without R at all.
  */
 function fakeApp(rResult = null) {
-  const log = { code: null, installed: [], tables: [], texts: [], errors: [], plots: [] };
+  const log = { code: null, installed: [], tables: [], texts: [], errors: [], plots: [], charts: [] };
   return {
     log,
     webr: {
@@ -79,6 +79,7 @@ function fakeApp(rResult = null) {
       appendText: async (s) => { log.texts.push(s); },
       appendError: async (s) => { log.errors.push(s); },
       appendPlot: async (svg, o) => { log.plots.push({ svg, ...o }); },
+      appendChart: async (model) => { log.charts.push(model); },
     },
   };
 }
@@ -250,33 +251,69 @@ test('the sample-size check lives in R, because JS never sees the values', async
   assert.match(app.log.code, new RegExp(`length\\(kept\\) < ${MIN_DETECTIONS}`));
 });
 
-test('the plot call passes no col, and a failed draw is REPORTED not hidden', async () => {
-  // plot.ddf supplies its own colour, so passing one fails with "formal argument col
-  // matched by multiple actual arguments" — and a swallowed tryCatch turned that into a
-  // figure that was simply absent through an entire live run. The silence was the worse
-  // half of the bug: two tables appeared, nothing said the third output was missing.
+test('the figure is a chart MODEL, not a finished SVG', async () => {
+  // The #140 rule: ask R for numbers, not pictures. The figure was baked for one day
+  // because the `histogram` kind had no overlay series; it has one now.
   const app = fakeApp(rList({
-    tooFew: 0, aic: 1, npar: 1, p: 0.5, eff: 3, n: 20, W: 6, dropped: 0,
-    dens: NaN, abund: NaN, covered: NaN, svg: '', drawErr: 'something broke',
+    tooFew: 0, aic: 1, npar: 1, p: 0.5, eff: 3, n: 3, W: 6, dropped: 0,
+    dens: NaN, abund: NaN, covered: NaN,
+    gx: [0, 3, 6], fx: [0.3, 0.2, 0.1], curve: [1, 0.6, 0.2], used: [1, 2, 3],
   }));
   await distance(app, { dist: ['d'], shape: 'line', key: 'hn', truncation: 0, effort: 0, area: 0 });
-  assert.match(app.log.code, /plot\(fit, showpoints = FALSE, main = ""\)/);
-  assert.doesNotMatch(app.log.code, /plot\(fit[^)]*col =/, 'no col argument');
-  assert.equal(app.log.plots.length, 0);
-  assert.ok(app.log.texts.some((t) => /could not be drawn: something broke/.test(t)),
-    'the reason is surfaced rather than swallowed');
+  assert.equal(app.log.plots.length, 0, 'nothing is baked');
+  assert.equal(app.log.charts.length, 1);
+  const m = app.log.charts[0];
+  assert.equal(m.kind, 'histogram');
+  assert.deepEqual(m.values, [1, 2, 3], 'the raw distances, so the reader can rebin');
+  assert.deepEqual(m.overlay.x, [0, 3, 6]);
+  assert.deepEqual(m.overlay.y, [0.3, 0.2, 0.1]);
+  // Density, because the bars' measure is a live control and a pre-scaled curve would be
+  // wrong the moment the reader switched it.
+  // `valueMeasure`, not `measure` — the latter is ignored by the kind, which had this
+  // figure rendering as counts while the model asked for a density.
+  assert.equal(m.view.valueMeasure, 'density');
+  assert.equal(m.view.measure, undefined, 'the key that does nothing is not used');
+  assert.match(m.axes.x.title, /Perpendicular/);
 });
 
-test('a drawn figure is appended as a plot', async () => {
+test('the x axis names what was measured, which differs by survey shape', async () => {
+  const mk = () => fakeApp(rList({
+    tooFew: 0, aic: 1, npar: 1, p: 0.5, eff: 3, n: 3, W: 6, dropped: 0,
+    dens: NaN, abund: NaN, covered: NaN,
+    gx: [0, 3, 6], fx: [0.3, 0.2, 0.1], curve: [1, 0.6, 0.2], used: [1, 2, 3],
+  }));
+  const pt = mk();
+  await distance(pt, { dist: ['d'], shape: 'point', key: 'hn', truncation: 0, effort: 0, area: 0 });
+  assert.match(pt.log.charts[0].axes.x.title, /Radial/);
+});
+
+test('a curve that did not evaluate is REPORTED, not silently dropped', async () => {
+  // The lesson from the baked version, which outlived it: passing `col` to plot.ddf
+  // failed, a tryCatch swallowed it, and the figure was simply absent for a whole live
+  // run while two tables appeared as normal. Silence is the worse half of that bug.
   const app = fakeApp(rList({
-    tooFew: 0, aic: 1, npar: 1, p: 0.5, eff: 3, n: 20, W: 6, dropped: 0,
-    dens: NaN, abund: NaN, covered: NaN, svg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
-    drawErr: 'NA',
+    tooFew: 0, aic: 1, npar: 1, p: 0.5, eff: 3, n: 3, W: 6, dropped: 0,
+    dens: NaN, abund: NaN, covered: NaN,
+    gx: [0, 3, 6], fx: [NaN, NaN, NaN], curve: [NaN, NaN, NaN], used: [1, 2, 3],
   }));
   await distance(app, { dist: ['d'], shape: 'line', key: 'hn', truncation: 0, effort: 0, area: 0 });
-  assert.equal(app.log.plots.length, 1);
-  assert.equal(app.log.plots[0].title, 'Fitted detection function');
-  assert.ok(!app.log.texts.some((t) => /could not be drawn/.test(t)));
+  assert.equal(app.log.charts.length, 0);
+  assert.ok(app.log.texts.some((t) => /could not be drawn/.test(t)), 'it says so');
+  assert.equal(app.log.tables.length, 2, 'and the estimates still stand');
+});
+
+test('the curve comes off a GRID, with the design-matrix rows replicated first', async () => {
+  // `detfct` evaluates against the design matrices, which carry one row per observation,
+  // so a grid call recycles — the right values repeated n times. Replicating those rows
+  // to the grid's length is mrds' own technique, from `plot.ds`.
+  const app = fakeApp(rList({ tooFew: 1, n: 0, W: 0 }));
+  await distance(app, { dist: ['d'], shape: 'line', key: 'hn', truncation: 0, effort: 0, area: 0 });
+  assert.match(app.log.code, /dobj\$scale\$dm\[rep\(1, length\(gx\)\)/);
+  assert.match(app.log.code, /dobj\$shape\$dm\[rep\(1, length\(gx\)\)/);
+  assert.match(app.log.code, /detfct\(gx, dobj, width = W\)/);
+  // And no drawing device at all.
+  assert.doesNotMatch(app.log.code, /svgstring|dev\.off|plot\(/, 'R draws nothing now');
+  assert.deepEqual(app.log.installed, ['mrds'], 'svglite is no longer needed');
 });
 
 test('a column that does not exist is NAMED, not reported as an R internals failure', async () => {
@@ -389,7 +426,9 @@ test('the generated R agrees with a canonical mrds call — all three keys', { s
     const ref = referenceDistance({ width: 5.4, dsmodel: DSMODEL[key] });
     assertAgrees(got, ref, ['aic', 'p', 'eff', 'n'], key);
     near(got.aic, aic, 6, `${key} AIC anchor`);
-    assert.match(got.svg, /chars>/, 'the figure is drawn');
+    // The curve is numbers now, so its presence is checked as numbers: a density over
+    // the grid that integrates to 1 by construction.
+    assert.ok(Number(got.fx) > 0, `${key} curve evaluated`);
   }
 });
 

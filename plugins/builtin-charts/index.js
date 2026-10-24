@@ -2672,6 +2672,31 @@ export function chartKinds(lib) {
       .map(Number)
       .filter(Number.isFinite);
 
+  /**
+   * A model-supplied curve to draw over the bars, or null.
+   *
+   * `{x: number[], y: number[], label?, color?}` with **y as a DENSITY**, which is the
+   * one unit that survives the measure control: the renderer scales it by the same
+   * `curveK` it uses for the normal curve, so the curve stays right whether the bars are
+   * counts, percents or densities. A curve pre-scaled by its author would be wrong the
+   * moment the reader switched measure.
+   *
+   * Pairs must be finite and there must be at least two of them — one point is not a
+   * curve, and a single NaN would open a gap in the polyline rather than fail.
+   */
+  function histOverlay(model) {
+    const o = model.overlay;
+    if (!o || !Array.isArray(o.x) || !Array.isArray(o.y)) return null;
+    const pts = [];
+    for (let i = 0; i < Math.min(o.x.length, o.y.length); i++) {
+      const x = Number(o.x[i]);
+      const y = Number(o.y[i]);
+      if (Number.isFinite(x) && Number.isFinite(y)) pts.push([x, y]);
+    }
+    if (pts.length < 2) return null;
+    return { pts, label: typeof o.label === 'string' ? o.label : null, color: o.color };
+  }
+
   /** Are all the bins the same width? (Custom cut points usually are not.) */
   function equalWidth(edges) {
     const w = edges[1] - edges[0];
@@ -2766,6 +2791,16 @@ export function chartKinds(lib) {
       const binW = (edges[edges.length - 1] - edges[0]) / (edges.length - 1);
       const curveK = measure === 'density' ? 1 : measure === 'percent' ? 100 * binW : n * binW;
       const curvePeak = curveOk ? curveK / (sd * Math.sqrt(2 * Math.PI)) : 0;
+      // A supplied curve is scaled by the same factor, and its peak joins the y domain
+      // for the same reason: a curve drawn above the axis maximum claims a height the
+      // axis says is impossible. Unlike the normal curve it does NOT need equal
+      // intervals, because its shape was computed elsewhere and does not depend on them
+      // — only the density-to-measure conversion does, and that is `curveK`.
+      const overlay = histOverlay(model);
+      const overlayOk = !!overlay && (measure === 'density' || equal);
+      const overlayPeak = overlayOk
+        ? curveK * Math.max(...overlay.pts.map(([, y]) => y))
+        : 0;
 
       const yTitle = measure === 'percent' ? 'Percent' : measure === 'density' ? 'Density' : 'Count';
       // The alt text counts what was actually BINNED, not what was handed in, so it
@@ -2776,7 +2811,7 @@ export function chartKinds(lib) {
       // the MODEL's y title first left a density plot labelled "Count".
       const f = xyFrame(model, { ...view, yAxisTitle: view.yAxisTitle ?? yTitle }, {
         xValues: [edges[0], edges[edges.length - 1]],
-        yValues: [0, hiY, curvePeak],
+        yValues: [0, hiY, curvePeak, overlayPeak],
         noun: 'Histogram',
         alt: `${plural(counts.length, 'interval')} over ${plural(binned, 'value')}, ` +
           `from ${fmtNum(edges[0])} to ${fmtNum(edges[edges.length - 1])}.` +
@@ -2840,7 +2875,33 @@ export function chartKinds(lib) {
         f.out.push(`<polyline points="${pts.join(' ')}" fill="none" stroke="#c0392b" stroke-width="2"/>`);
       }
 
+      if (overlayOk) {
+        // Clipped to the frame rather than to the data's range: a curve may be defined
+        // past the last bin (a detection function runs to the truncation width even when
+        // no animal was seen that far out), and that tail is information.
+        const pts = overlay.pts
+          .filter(([x]) => x >= f.xLo && x <= f.xHi)
+          .map(([x, y]) => `${r(f.xScale(x))},${r(f.yScale(curveK * y))}`);
+        if (pts.length >= 2) {
+          f.out.push(
+            `<polyline points="${pts.join(' ')}" fill="none" `
+            + `stroke="${overlay.color || '#2980b9'}" stroke-width="2"/>`,
+          );
+          if (overlay.label) {
+            f.out.push(text(f.box.x1, f.box.y0 + 12, overlay.label, {
+              size: 11, anchor: 'end', fill: overlay.color || '#2980b9',
+            }));
+          }
+        }
+      }
+
       const notes = [];
+      if (overlay && !overlayOk) {
+        // Same limit as the normal curve's, and said for the same reason: with unequal
+        // intervals there is no single width to convert a density by, so the curve would
+        // match nothing on screen.
+        notes.push(`${overlay.label || 'The fitted curve'} needs equal intervals (or Density)`);
+      }
       if (view.normalCurve && !curveOk) {
         notes.push(sd > 0
           ? 'Normal curve needs equal intervals (or Density)'

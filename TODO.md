@@ -2133,8 +2133,10 @@ bottom; they are the project's memory and are not summarised away.
       deferred to Layer 3 (below), not forced into the model.
     - [ ] **Layer 3b — host-mediated controls for BAKED plots.** *(Distinct from Layer
       3a, which shipped 2026-08-06: that one is plugin-supplied model-driven KINDS. This
-      is the story for figures whose geometry only R can produce — the 11 remaining
-      `appendPlot` sites — where the picture stays baked but gains controls.)*
+      is the story for figures whose geometry only R can produce — the 8 remaining
+      `appendPlot` sites (re-counted 2026-10-24; asserted by
+      `test/baked-plot-inventory.test.mjs`) — where the picture stays baked but gains
+      controls.)*
       A plugin draws its own
       SVG (full R power) AND declares the alterations it supports
       (`controls: [{ id, label, type, options }]`); the host renders those controls and
@@ -2156,7 +2158,7 @@ bottom; they are the project's memory and are not summarised away.
       **Assumption 1 that does not hold: "generalises the existing `onRedraw` size-
       recipe".** `onRedraw` has no callers. `results-pane.js` builds the "⟳ Redraw at this
       size" button only `if (typeof onRedraw === 'function')`, and nothing passes one —
-      builtin-plots dropped it when it migrated to kinds, and all 11 remaining sites call
+      builtin-plots dropped it when it migrated to kinds, and all 8 remaining sites call
       `appendPlot(svg, {title})` and nothing else. Worse, **a plugin could never have
       passed one**: the broker dispatches `results.appendPlot` over postMessage, and a
       function does not survive a structured clone. The recipe this layer was to be built
@@ -2185,16 +2187,18 @@ bottom; they are the project's memory and are not summarised away.
       argues for **parameter** controls (things a user expects to recompute — k, a
       distance metric, a forecast horizon) and against **appearance** controls.
 
-      **Assumption 2 that does not hold: that the 11 are one problem.** They split three
-      ways, and each way has a different right answer:
+      **Assumption 2 that does not hold: that they are one problem.** They split three
+      ways, and each way has a different right answer (counts re-checked 2026-10-23):
       - *Geometry genuinely is not ours — 5:* `sna` network (force-directed layout),
         `spatial` choropleth (projection), `ordination` CA biplot (arrow field) and MDS
         map, `ecology` NMDS. These are the real Layer 3b constituency: a re-run is
         defensible because the control would be a parameter the user expects to recompute.
-      - *Appearance wanted, data already in hand — NONE LEFT.* All three migrated:
-        `inequality` Lorenz and `cointegration` conditional volatility (2026-10-16, to
-        `scatter` with `line: true`), and `timeseries` ARIMA forecast (2026-10-17, to the
-        new `band` kind that was blocking it).
+      - *Appearance wanted, data already in hand — NONE LEFT again, and this time the
+        blocker was removed rather than the entry going stale.* `inequality` Lorenz and
+        `cointegration` conditional volatility migrated 2026-10-16 (to `scatter` with
+        `line: true`), `timeseries` ARIMA forecast 2026-10-17 (to the new `band` kind that
+        was blocking it), and `detection`'s fitted detection function 2026-10-24 — see the
+        **histogram overlay** entry under *Completed*. It was baked for exactly one day.
       - *Multi-panel composites — 2 (+1):* `timeseries` STL decomposition and `var` IRF,
         plus `decisions` tree (deliberately JS-drawn — the layout IS the figure). Worth
         noting: **multi-panel is not unprecedented** — the `sced` kind already stacks one
@@ -2325,11 +2329,31 @@ bottom; they are the project's memory and are not summarised away.
         not a row per category, and `legendBlock` has no shape for it. Giving the host a
         live colour-scale layer would be its own piece of work.
 
-      **Recommendation.** Do not build Layer 3b as one feature. The three-of-eleven
-      appearance group should migrate instead; STL should be weighed against the `sced`
-      precedent; and what remains is five parameter-driven figures — at which point the
-      honest question is whether five charts justify a new re-invocation verb, or whether
-      "change the parameter and run it again" is already the answer the menu gives.
+      **CLOSED 2026-10-24 — answered, not deferred (owner's decision).** Layer 3b is not
+      being built. The menu already does the thing it was for: change the parameter, run
+      again, get a new analysis.
+
+      **The argument that settled it**, which this entry's own cost analysis was one step
+      short of making. It concludes that *parameter* controls are the defensible kind — k,
+      a distance metric, a forecast horizon, things a user expects to recompute. But a
+      parameter change is not a view change: it produces **different numbers**, and in
+      this project different numbers are a logged step. Re-running from the menu appends a
+      new analysis carrying its own inputs, visible in History and in the exported script.
+      A control that recomputed a figure in place would change a result without recording
+      that it had — the one thing [[one-true-log-explicit-ops]] exists to prevent. The ⚙
+      panel is safe on model charts precisely because it only touches appearance.
+
+      So the declaration channel, the re-invocation verb, the `seq` guard and the degraded
+      state are all unbuilt and none of them is owed. Nothing is stranded: `onRedraw` was
+      already dead code (see Assumption 1), and `staticChartNotice` has its own job.
+
+      **What remains instead is migration, one figure at a time, when a blocker is
+      specific enough to name.** That is how `detection` left the list a day after joining
+      it: the blocker was "the `histogram` kind has no overlay series", so the overlay got
+      built. Two candidates are left with named blockers — STL weighed against the `sced`
+      precedent, and the choropleth's continuous colour bar, which needs a host colour-scale
+      layer. The other five are genuinely R's geometry and are expected to stay baked; the
+      inventory test keeps that honest.
 
       Original note follows.
 
@@ -2337,10 +2361,10 @@ bottom; they are the project's memory and are not summarised away.
       **Re-counted 2026-10-15** — the groups below had kept every chart listed in August,
       the ones since migrated to model kinds included, so this read as 16 plugins of work
       when 7 of those entries no longer call `appendPlot` at all:
-      - *Marginal-fit charts (weren't worth a Layer-2 model) — 2:* `ecology` NMDS,
-        `detection` fitted detection function (added 2026-10-23 with #142; its blocker is
-        named below). *(`decisions` tornado + CE plane, `inequality` Lorenz,
-        `cointegration` volatility and `timeseries` ARIMA forecast have migrated.)*
+      - *Marginal-fit charts (weren't worth a Layer-2 model) — 1:* `ecology` NMDS.
+        *(`decisions` tornado + CE plane, `inequality` Lorenz, `cointegration` volatility,
+        `timeseries` ARIMA forecast and `detection`'s detection function have migrated —
+        the last of those on 2026-10-24, a day after it joined the list.)*
       - *New-glyph charts (Tier B — no existing kind) — 2:* `ordination` CA biplot,
         `ordination` MDS map. *(`plots` boxplot, `meta` forest and `survival`
         Kaplan-Meier have migrated — box, forest and steps are kinds now.)*
@@ -2349,21 +2373,18 @@ bottom; they are the project's memory and are not summarised away.
         `var` IRF (multi-panel). *(Word clouds and the Q-Q/residual diagnostics have
         migrated.)*
 
-      *Coverage re-checked 2026-10-23 by counting the call sites:* **9 sites across 8
+      *Coverage re-checked 2026-10-24 by counting the call sites:* **8 sites across 7
       plugins**, every one of them in a group above — so each remaining chart has a
       recorded disposition, and "still on the old API" is a deliberate outcome rather than
       a backlog.
 
-      *The detection function is the one entry with a NAMED blocker rather than a general
-      one, and it is a cheap one to clear.* The geometry is a histogram with a curve over
-      it, which is not exotic; two specific things stop it being a model. The `histogram`
-      kind bins raw values at render time and has no overlay series. And the curve's
-      values are not ours to compute — for the hazard-rate and cosine-adjusted keys that
-      means reimplementing `mrds`, whose exported `detfct` recycles against the fitted
-      rows rather than a grid, so slicing a curve out of it would depend on recycling
-      order. Give `histogram` an overlay series fed by numbers from R and this one
-      migrates; until then `plot(fit)` is the package's own canonical diagnostic and is
-      correct for every key by construction. The inventory is now asserted by `test/baked-plot-inventory.test.mjs`,
+      *The detection function was the one entry with a NAMED blocker rather than a
+      general one, and naming it is what got it cleared.* It said: give `histogram` an
+      overlay series fed by numbers from R and this migrates. That is exactly what
+      happened a day later — see the overlay entry under *Completed*. The lesson is worth
+      keeping for the two candidates that remain: a blocker specific enough to write down
+      is a blocker someone can remove, while "the geometry is not ours" is a disposition
+      rather than a task. The inventory is now asserted by `test/baked-plot-inventory.test.mjs`,
       because a hand-maintained list of what is left is precisely the thing that goes
       stale without anyone noticing. Layer 2 is closed; only Layer 3 itself is unbuilt.
     - **Superseded:** the earlier Tier A/B/C "migrate-to-model" matrix. Outliers keep
@@ -9640,6 +9661,61 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### More analyses (each is just another plugin)
 
+- [x] **The histogram kind draws a MODEL-SUPPLIED curve — 2026-10-24.** Built because
+      the owner picked it over Layer 3b, and it took the last figure out of the
+      "appearance wanted, data already in hand" group a day after #142 put one there.
+
+      **Small, because the kind already drew a curve.** `view.normalCurve` computed one
+      from the data's mean and sd, scaled it by `curveK` for whichever measure the bars
+      were showing, and folded its peak into the y domain so it could not run off the top.
+      All of that is reusable; the only thing missing was letting the curve come from
+      somewhere other than `dnorm`. So `model.overlay = {x, y, label?, color?}`, drawn
+      with the existing machinery, independent of the normal curve — a model can ask for
+      either, both or neither.
+
+      **The y values are a DENSITY, and that is the load-bearing decision.** The bars'
+      measure is a live control, so a curve pre-scaled by its author would be wrong the
+      moment the reader switched count → density — and wrong *silently*, because a curve
+      carries no units on screen. A density is the one unit the renderer can convert, with
+      the same `curveK` it already applies to the normal curve. That it works for a
+      detection function is not luck: for a line transect the density of observed
+      distances is exactly g(x) over its own integral.
+
+      **Measured invariant:** the curve's height as a fraction of the tallest bar's is
+      0.768320 / 0.768306 / 0.768306 across density, count and percent. Not pixel-identical
+      — the y axis picks a round maximum, so 0.37 becomes 0.4 while 7.4 becomes 8 — but the
+      bars and the curve move together, which is the property that matters.
+
+      **`detection` migrated the same day.** Getting the curve's values cleanly was the
+      whole blocker, and `mrds` answers it in its own `plot.ds`: `detfct` evaluates against
+      the DESIGN MATRICES, which carry one row per observation, so a grid call recycles and
+      returns the right values repeated n times. Replicating those rows to the grid's length
+      first is the package's own technique. Verified for all three keys, with the
+      half-normal matching exp(-x²/2σ²) to five decimals, and the handed-over density
+      integrating to 1.000000 over its 101-point grid. The baked count is back to **8 sites
+      across 7 plugins** and `svglite` is no longer needed by the distance analysis.
+
+      Normalisation differs by survey shape, which is statistics rather than formatting:
+      a line searches a strip of constant width (f = g / ∫g), a point searches a disc whose
+      area grows with the radius (f = r·g / ∫u·g).
+
+      **A false pass worth recording.** My first test claimed the figure was pixel-identical
+      at every measure, and it passed — because it set `measure`, a key the kind ignores.
+      The real one is **`valueMeasure`**. With the right key the test failed, which was the
+      honest result, and the same typo was in `builtin-detection`'s `view`: the figure had
+      been rendering as COUNTS while the model asked for a density. Both fixed, and the
+      ignored-key trap now has its own test, because a view key that does nothing fails
+      silently in exactly the way a wrong number does not.
+
+      Also added, after hitting the same tooling trap twice in one sitting: a test that no
+      **R comment inside a template literal carries a backtick**. A backtick ends the
+      literal, and the resulting SyntaxError names a token from the middle of an English
+      sentence. Swept all 65 plugins — no other offenders.
+
+      **Verified live:** the figure renders as a density with the curve and its label, the
+      axis reads "Density", rebinning redraws both, and no failure note appears. 2381 tests
+      pass.
+
 - [x] **#142 — detection-corrected abundance — IN SCOPE and SHIPPED 2026-10-23 as
       `builtin-detection`, both method families.**
 
@@ -9725,7 +9801,8 @@ The record of what shipped and why. Kept in full, in the original sections.
       **The figure is baked, recorded, and a migration candidate.** Filed in the Layer 3b
       marginal-fit group with a NAMED blocker: the `histogram` kind bins raw values at
       render time and has no overlay series, and the curve's values are not ours to
-      compute. Totals updated to 9 sites across 8 plugins.
+      compute. (Cleared 2026-10-24: the overlay was built and this figure migrated, so the
+      totals went back to 8 sites across 7 plugins. It was baked for one day.)
 
       **Verified live in Chrome, end to end.** The **Ecology** menu appears with both
       items; the input dialogs render with radio choices and the right defaults; WebR

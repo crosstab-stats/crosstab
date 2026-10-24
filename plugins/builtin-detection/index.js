@@ -67,13 +67,16 @@
  *    offered only with a cosine adjustment term, which is the standard third CDS model.
  *  - `fit$fitted` is constant with no covariates, so `[1]` is the average detection
  *    probability.
- *  - `detfct` is exported but RECYCLES against the fitted rows, so slicing a curve out of
- *    it depends on recycling order. `plot(fit, showpoints = FALSE)` is used instead: it is
- *    the package's own canonical figure and is correct for every key by construction.
+ *  - `detfct` is exported but evaluates against the DESIGN MATRICES, which carry one row
+ *    per observation — so a grid call recycles, returning the right values repeated n
+ *    times. `plot.ds` shows the fix, which is to replicate those rows to the grid's
+ *    length first; that is what this plugin does, and it returns exactly as many values
+ *    as the grid has for all three keys (the half-normal matching exp(-x^2/2sigma^2) to
+ *    five decimals).
  */
 
 /** The host's reporting formatters, from core/plugin-stdlib.js. */
-const { fixed: f, ci, unpackR: flat, cleanSvg } = globalThis.ctStd;
+const { fixed: f, ci, unpackR: flat } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -116,7 +119,7 @@ export const manifest = {
       seeAlso: ['detection-distance', 'ecology-diversity'],
     },
   ],
-  rPackages: ['mrds', 'svglite'],
+  rPackages: ['mrds'],
   menu: [
     {
       howto: 'detection-distance',
@@ -208,13 +211,13 @@ export async function distance(app, { dist, shape, key, truncation, effort, area
   const model = DSMODEL[key] ?? DSMODEL.hn;
   const isPoint = shape === 'point';
   const POINT = isPoint ? 'TRUE' : 'FALSE';
-  await app.webr.installPackages(['mrds', 'svglite']);
+  await app.webr.installPackages(['mrds']);
 
   // The host injects this action's gathered inputs into R by name (`dist`, `truncation`,
   // `effort`, `area`), so `webr.run` takes the code alone — a second argument here would
   // be read as WebR options, not as bindings.
   const rCode = `
-    suppressMessages({library(mrds); library(svglite)})
+    suppressMessages(library(mrds))
     d <- as.numeric(dist); d <- d[is.finite(d) & d >= 0]
     W <- if (truncation > 0) truncation else max(d, 0)
     kept <- d[d <= W]; dropped <- length(d) - length(kept)
@@ -242,20 +245,28 @@ export async function distance(app, { dist, shape, key, truncation, effort, area
       # mrds draws its own canonical figure — histogram of distances with the fitted
       # function over it — which is right for every key. Re-deriving the curve would mean
       # a second implementation of the hazard-rate and adjusted forms to get wrong.
-      .ct_dev <- svgstring(width = 6, height = 4.2, pointsize = 11)
-      # No col argument: plot.ddf supplies its own, and passing one fails with
-      # "formal argument col matched by multiple actual arguments" — which a swallowed
-      # tryCatch turned into a figure that simply was not there. The device colours below
-      # are the ones mrds does NOT set itself.
-      par(mar = c(4.2, 4.2, 2.2, 1), col.axis = "#555555", col.lab = "#333333", fg = "#999999")
-      drawErr <- NA_character_
-      drew <- tryCatch({ plot(fit, showpoints = FALSE, main = ""); TRUE },
-                       error = function(e) { drawErr <<- conditionMessage(e); FALSE })
-      dev.off(); svg <- if (isTRUE(drew)) .ct_dev() else ""
+      # The fitted function as NUMBERS on a grid, which is the #140 rule — the host
+      # draws the picture. detfct evaluates against the design matrices, which carry one
+      # row per observation, so a grid call recycles unless those rows are replicated to
+      # the grid's length first. That replication is mrds' own technique, lifted from
+      # plot.ds; without it the curve comes back as the right values repeated n times.
+      gx <- seq(0, W, length.out = 101)
+      dobj <- fit$ds$aux$ddfobj
+      if (!is.null(dobj$scale)) dobj$scale$dm <- dobj$scale$dm[rep(1, length(gx)), , drop = FALSE]
+      if (!is.null(dobj$shape)) dobj$shape$dm <- dobj$shape$dm[rep(1, length(gx)), , drop = FALSE]
+      g <- tryCatch(as.numeric(detfct(gx, dobj, width = W)),
+                    error = function(e) rep(NA_real_, length(gx)))
+      # Handed over as a DENSITY, the one unit the histogram can rescale as the reader
+      # switches between counts, percent and density. The normalisation differs by shape:
+      # a line searches a strip of constant width, a point searches a disc whose area
+      # grows with the radius, so the radial case carries the extra r.
+      w <- if (${POINT}) gx * g else g
+      area <- if (all(is.na(w))) NA_real_ else sum(diff(gx) * (head(w, -1) + tail(w, -1)) / 2)
+      fx <- if (is.na(area) || area <= 0) rep(NA_real_, length(gx)) else w / area
       list(tooFew = FALSE, aic = as.numeric(fit$criterion), npar = length(fit$par),
            p = p, eff = as.numeric(eff), n = n, W = as.numeric(W), dropped = dropped,
-           dens = dens, abund = abund, covered = covered, svg = svg,
-           drawErr = drawErr)
+           dens = dens, abund = abund, covered = covered,
+           gx = gx, fx = fx, curve = g, used = kept)
     }`;
 
   const { result } = await app.webr.run(rCode);
@@ -317,16 +328,35 @@ export async function distance(app, { dist, shape, key, truncation, effort, area
     },
   );
 
-  const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) {
-    await app.results.appendPlot(cleanSvg(svg), { title: 'Fitted detection function' });
+  // A chart MODEL, not a finished SVG: the observed distances as a histogram with the
+  // fitted function over them. The reader can rebin, which on this figure is not a
+  // cosmetic choice — the agreement between bars and curve is how a detection function is
+  // judged by eye, and that judgement changes with the intervals.
+  const gx = r.nums('gx');
+  const fx = r.nums('fx');
+  const used = r.nums('used');
+  const pairs = gx.map((x, i) => [x, fx[i]]).filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+  if (used.length && pairs.length >= 2) {
+    await app.results.appendChart({
+      kind: 'histogram',
+      title: `Fitted detection function — ${KEY_LABEL[key] ?? key}`,
+      values: used,
+      overlay: {
+        x: pairs.map(([x]) => x),
+        y: pairs.map(([, y]) => y),
+        label: 'Fitted detection function',
+      },
+      axes: { x: { title: isPoint ? 'Radial distance' : 'Perpendicular distance' } },
+      // `valueMeasure`, not `measure` — the latter is silently ignored, which had this
+      // figure rendering as counts while claiming density.
+      view: { valueMeasure: 'density' },
+    });
   } else {
-    // Say so. A result that quietly omits part of itself is worse than one that admits a
-    // gap — this silence is what hid the `col` collision through a whole live run.
-    const why = r.str1('drawErr');
+    // Still said out loud. A result that quietly omits part of itself is worse than one
+    // that admits a gap — that silence is what hid the `col` collision for a whole run.
     await app.results.appendText(
-      `*The detection-function figure could not be drawn${why && why !== 'NA' ? `: ${why}` : ''}.*`
-      + ' The estimates above are unaffected.',
+      '*The detection-function figure could not be drawn — the fitted function did not'
+      + ' evaluate.* The estimates above are unaffected.',
     );
   }
 

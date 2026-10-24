@@ -30,13 +30,11 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
  */
 const BAKED = {
   'builtin-decisions': 1, // decision tree — JS-drawn, deliberately (layout is the figure)
-  // Detection function over a histogram of distances. The geometry is easy; the CURVE
-  // VALUES are not ours — for the hazard-rate and cosine-adjusted keys, evaluating the
-  // fitted function means reimplementing mrds internals, and exported `detfct` recycles
-  // against the fitted rows rather than a grid. A migration candidate rather than a
-  // permanent exemption: the `histogram` kind bins raw values at render time and has no
-  // overlay series, and with one this becomes a model like the rest.
-  'builtin-detection': 1,
+  // `builtin-detection` was here for one day (2026-10-23) and migrated the next. Its
+  // blocker was named rather than general — the `histogram` kind had no overlay series —
+  // so the fix was to add one and hand the host the curve's NUMBERS, which is the #140
+  // rule. `detfct` evaluates against the design matrices, so the grid call needed their
+  // rows replicated to the grid's length first; `plot.ds` shows the technique.
   'builtin-ecology': 1, // NMDS ordination configuration
   'builtin-ordination': 2, // CA biplot (arrow field) + MDS perceptual map
   'builtin-sna': 1, // network — force-directed layout
@@ -56,6 +54,25 @@ function actual() {
   return out;
 }
 
+test('no R comment inside a template literal carries a backtick', () => {
+  // A backtick inside a JS template literal ENDS it, and plugins write their R as
+  // template literals. The failure is a SyntaxError at a line that looks fine, naming a
+  // token from the middle of a sentence — it cost two round trips in one sitting.
+  // Checked across every plugin because every plugin writes R the same way.
+  const offenders = [];
+  for (const d of readdirSync('plugins', { withFileTypes: true })) {
+    if (!d.isDirectory() || !existsSync(`plugins/${d.name}/index.js`)) continue;
+    const src = readFileSync(`plugins/${d.name}/index.js`, 'utf8');
+    src.split(/\r?\n/).forEach((line, i) => {
+      // An R comment: whitespace, then `#`, then a space. JS comments start with `//`.
+      if (/^\s*# /.test(line) && line.includes('`')) {
+        offenders.push(`plugins/${d.name}/index.js:${i + 1}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, [], 'a backtick here would terminate the R template literal');
+});
+
 test('the recorded inventory of baked figures is the real one', () => {
   assert.deepEqual(actual(), BAKED);
 });
@@ -64,8 +81,8 @@ test('the totals TODO.md quotes still hold', () => {
   const counts = actual();
   const sites = Object.values(counts).reduce((a, b) => a + b, 0);
   const plugins = Object.keys(counts).length;
-  assert.equal(sites, 9, `TODO.md says 9 baked sites; found ${sites}`);
-  assert.equal(plugins, 8, `TODO.md says 8 plugins; found ${plugins}`);
+  assert.equal(sites, 8, `TODO.md says 8 baked sites; found ${sites}`);
+  assert.equal(plugins, 7, `TODO.md says 7 plugins; found ${plugins}`);
 
   const todo = readFileSync('TODO.md', 'utf8');
   assert.match(todo, new RegExp(`\\*\\*${sites} sites across ${plugins}\\n?\\s*plugins\\*\\*`),
