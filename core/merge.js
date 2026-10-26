@@ -35,6 +35,8 @@
  * is testable headlessly — see `test/merge.test.mjs`.
  */
 
+import { addressPart } from './op-log.js';
+
 // ---------------------------------------------------------------------------
 // Op identity — the primitive both transports need.
 // ---------------------------------------------------------------------------
@@ -167,11 +169,11 @@ export function opTarget(op) {
     case 'setVariable':
     case 'recodeVar':
     case 'computeVar':
-      return `var:${op.name}`;
+      return `var:${addressPart(op.name)}`;
     case 'renameVar':
-      return `var:${op.from ?? op.name}`;
+      return `var:${addressPart(op.from ?? op.name)}`;
     case 'setCell':
-      return `cell:${op.column}:${op.rid}`;
+      return `cell:${addressPart(op.column)}:${op.rid}`;
     case 'dropVars':
     case 'keepVars':
       return 'schema'; // structural — conservative: two schema edits collide

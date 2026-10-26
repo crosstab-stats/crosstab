@@ -24,6 +24,7 @@ import {
   describeStep as describeTransform, buildTimeline, staleAnalyses, analysisOrder, stepsAbove,
 } from './timeline.js';
 import { el } from './plugin-stdlib.js';
+import { addressPart } from './op-log.js';
 
 /** Syntax editor metrics: the textarea uses a FIXED line-height so the step gutter
  * can place each marker at `PAD + lineIndex * LINE_H` (and the textarea is no-wrap,
@@ -579,7 +580,7 @@ export class DataView {
 
   /** The anchor for one cell — the same target `setCell` writes (see memo-store.js). */
   #cellAnchor(column, rid) {
-    return { kind: 'cell', target: `ds:${this.store.activeId ?? this.store.id}/cell:${column}:${rid}` };
+    return { kind: 'cell', target: `ds:${this.store.activeId ?? this.store.id}/cell:${addressPart(column)}:${rid}` };
   }
 
   /** Mark a cell that carries notes, and open its thread on right-click. The marker is

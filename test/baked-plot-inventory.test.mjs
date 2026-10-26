@@ -54,6 +54,27 @@ function actual() {
   return out;
 }
 
+test('no source file carries a raw NUL byte', () => {
+  // A raw NUL makes a file BINARY, and ripgrep skips binary files silently — which is
+  // how a search of core/howto-library.js for its own API returned nothing and read as
+  // "the function does not exist". Fixed across seven files on 2026-10-23; I then typed
+  // literal NULs into a test ABOUT NUL handling three days later, which is the argument
+  // for checking core/ and test/ and not only plugins/.
+  //
+  // The convention itself stands — a NUL separator in an item key is deliberate. Only
+  // its SPELLING is checked: write the escape (\\x00) or build it at run time with
+  // String.fromCharCode(0).
+  const offenders = [];
+  for (const dir of ['core', 'test', 'plugins']) {
+    for (const f of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+      if (!f.isFile() || !/\.(m?js|md|html|css|json)$/.test(f.name)) continue;
+      const path = `${f.parentPath ?? f.path ?? dir}/${f.name}`;
+      if (readFileSync(path).includes(0)) offenders.push(path);
+    }
+  }
+  assert.deepEqual(offenders, [], 'a raw NUL makes the file invisible to ripgrep');
+});
+
 test('no R comment inside a template literal carries a backtick', () => {
   // A backtick inside a JS template literal ENDS it, and plugins write their R as
   // template literals. The failure is a SyntaxError at a line that looks fine, naming a

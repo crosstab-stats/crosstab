@@ -18,7 +18,11 @@
  *    touch the DB or the real disk. The import step is the only R→CrossTab path.
  */
 
-import { el } from './plugin-stdlib.js';
+// `rStr` is the stdlib's rather than a local copy. The copy that used to live here
+// escaped only backslash and quote, so a newline in a path or a label reached R
+// unescaped and broke the generated source — the same divergence that had 32 copies of
+// `fmtP` spelling "p < .001" three ways.
+import { el, rStr } from './plugin-stdlib.js';
 
 const FILE_ACCEPT = '.R,.r,.txt,text/plain';
 
@@ -221,10 +225,4 @@ function bitmapToPng(img) {
   } catch {
     return null;
   }
-}
-
-
-/** A double-quoted R string literal. */
-function rStr(s) {
-  return '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }

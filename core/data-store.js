@@ -49,7 +49,7 @@ import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
 import { isCategorical, isQuantitative } from './var-role.js';
 import { ProjectLog } from './project-log.js';
-import { appliedState } from './op-log.js';
+import { appliedState, addressPart } from './op-log.js';
 
 /** Column auto-added when stacking files, tagging each row with its origin so a
  * pooled multi-file/multi-year dataset stays distinguishable (group/filter by
@@ -1162,7 +1162,7 @@ export class DataStore {
         value: value === '' ? null : value,
         row: Math.max(0, Math.floor(Number(displayRow) || 0)),
       },
-      `cell:${column}:${String(rid)}`,
+      `cell:${addressPart(column)}:${String(rid)}`,
     );
   }
 
@@ -1592,11 +1592,11 @@ export class DataStore {
       case 'setVariable':
       case 'computeVar':
       case 'recodeVar':
-        return `var:${t.name}`;
+        return `var:${addressPart(t.name)}`;
       case 'renameVar':
-        return `var:${t.from}`;
+        return `var:${addressPart(t.from)}`;
       case 'setCell':
-        return `cell:${t.column}:${t.rid}`;
+        return `cell:${addressPart(t.column)}:${t.rid}`;
       case 'setWeight':
         // One weight per dataset, so two peers setting it are editing the same thing and
         // must collide rather than both "winning" into an undefined order.

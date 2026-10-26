@@ -48,6 +48,7 @@
 
 import { newItemId } from './item-store.js';
 import { normalizeRef } from './anchors.js';
+import { addressPart } from './op-log.js';
 
 /** The collection memos live in, owned by core. See CORE_COLLECTIONS in collections.js. */
 export const MEMO_COLLECTION = 'memos';
@@ -57,10 +58,10 @@ const OWNER = 'core';
  * writes, so a note about a value and a note about changing it share one anchor. Keyed by
  * the row's STABLE id, not its position, so the note follows the row through sorts,
  * appends and reorders. */
-export const cellTarget = (dsId, column, rid) => `ds:${dsId}/cell:${column}:${rid}`;
+export const cellTarget = (dsId, column, rid) => `ds:${dsId}/cell:${addressPart(column)}:${rid}`;
 
 /** The address of a VARIABLE — what `setVariable` writes. */
-export const variableTarget = (dsId, name) => `ds:${dsId}/var:${name}`;
+export const variableTarget = (dsId, name) => `ds:${dsId}/var:${addressPart(name)}`;
 
 /** The dataset id an anchor belongs to, or null — `ds:3` and `ds:3/cell:age:1` alike.
  * Used to scope a memo so it nests under its dataset in the sidebar. */

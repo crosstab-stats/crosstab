@@ -9788,6 +9788,86 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### More analyses (each is just another plugin)
 
+- [x] **A COLON in an imported column name addressed the wrong column — FIXED
+      2026-10-26.** Found while preparing the NUL question below for a decision; the same
+      boundary had a far more reachable hole, and this one was not loud.
+
+      **The defect.** Op-log addresses are built from names and delimited by `:`, and
+      `readAncestors` strips `:`-segments from the right **on purpose** — that is what lets
+      a whole-dataset `load` satisfy a read of one of its cells, which is why anchors
+      stopped reporting as dangling on every merge (#166). So a colon inside a name is not
+      cosmetic; it addresses something else:
+
+          readAncestors('ds:7/cell:time:start:1000003')
+            → [..., 'ds:7/cell:time:start', 'ds:7/cell:time', 'ds:7/cell', 'ds:7']
+                                             ^^^^^^^^^^^^^^^ a DIFFERENT column
+
+      **I over-claimed the blast radius first, and the test caught it.** I told the owner
+      "both consumers go wrong, in opposite directions". Measured:
+
+      - `staleReaders` — editing `time` marked readers of `time:start` **stale**, naming
+        `ds:7/cell:time` as the writer. **1 stale unescaped, 0 escaped.** This is the
+        defect: the badge is shown to the reader, it says "a variable this result used was
+        changed", and it pointed at the wrong column.
+      - `unresolvedReads` — **0 problems either way.** It is permissive whatever the name,
+        because `ds:7/cell` is itself an ancestor: stripping `:`-segments leaves an
+        intermediate that collapses every column. Pre-existing, independent of the colon,
+        and harmless for the question it asks (a `load` of `ds:7` already satisfies
+        everything inside it). Now asserted so nobody mistakes it for this bug.
+
+      **Reachability is the point.** Typed names are validated — `#assertNewVarName`
+      rejected `time:start` when I tried to create one, exactly as the NUL entry said. But
+      IMPORT takes a header as the file gives it: `builtin-csv-codec` passes `header[c]`
+      through `uniqueName`, which only de-duplicates and strips nothing. So `time:start`,
+      `Q1: satisfaction` and `10:30` all become column names verbatim. SPSS and Stata
+      forbid colons in their own names, which makes this a delimited-text problem.
+
+      **Owner's decision: escape it in the address, keep the name.** Fix the grammar, not
+      the user's data — a header is what the file said, and the variable list is where
+      someone looks for the name they expect.
+
+      `addressPart()` lives in `op-log.js`, where the delimiters are given their meaning.
+      Percent-encoding, so it reverses (`decodeAddressPart`), and `%` is encoded too or it
+      would not. Only `%`, `/` and `:` are touched, so **every ordinary name is unchanged
+      and every existing address still matches** — which is what makes this safe without a
+      migration.
+
+      **It had to be applied to all six builders at once.** `memo-store.js` documents
+      `cellTarget` as *"byte-identical to what `DataStore#setCell` writes"* and
+      `data-views.js` builds the same string for its anchors, so escaping in one and not
+      another would silently stop anchors matching — worse than the ambiguity being fixed.
+      Patched in `data-store.js` (the `setCell` target plus the `var:`/`cell:` target map),
+      `data-views.js`, `memo-store.js` (`cellTarget`, `variableTarget`) and `merge.js` (its
+      conflict key, or two peers would disagree about what an edit touched). A test asserts
+      each one and forbids a bare `${column}` in a target.
+
+      A slash turned out to be safe here — `a/b` yields `ds:7/cell:a/b` and never
+      `ds:7/cell:a` — but it is escaped anyway, because being safe by accident in one
+      function is not a property worth relying on.
+
+      **Verified live:** created a column literally named `time:start` and edited a cell in
+      it; the op recorded `ds:229087172614438/cell:time%3Astart:1`. 12 new tests, including
+      the reproduction against the unescaped form and a check that a whole-dataset write
+      still covers its own cells (the #166 behaviour the `:`-splitting exists for).
+
+      **Also converged: a second `rStr`.** `core/r-script.js` had its own, escaping only
+      backslash and quote — so a newline in a path or a label reached R unescaped and broke
+      the generated source. Now imports the stdlib's, which escapes LF and CR too. Same
+      de-duplication that ended 32 copies of `fmtP` spelling "p < .001" three ways.
+
+      **And the NUL guard now covers `core/` and `test/`, not just `plugins/`.** I typed
+      literal NULs into a test ABOUT NUL handling, three days after fixing seven files that
+      had the same problem — a raw NUL makes a file binary and ripgrep skips it silently.
+      The convention (a NUL separator in an item key) is unchanged; only its spelling is
+      checked.
+
+      **Still open and still deliberate: the NUL in a column name itself.** An R character
+      string cannot hold one, so there is no escape to emit, and the failure is R's parser
+      rejecting the source — loud, and a NUL in a CSV header means the file is damaged.
+      Asserted as a recorded decision so nobody later "fixes" it by inventing an escape
+      that does not exist. A NUL is also not a delimiter, so unlike a colon it cannot
+      address another column. Original entry below.
+
 - [x] **The histogram kind draws a MODEL-SUPPLIED curve — 2026-10-24.** Built because
       the owner picked it over Layer 3b, and it took the last figure out of the
       "appearance wanted, data already in hand" group a day after #142 put one there.

@@ -193,6 +193,42 @@ export function unresolvedReads(orderedOps, { base } = {}) {
  * Splitting on both `/` and `:` is what lets a whole-dataset write cover one of its
  * cells; the aggregate root (`ds:7`) is the coarsest thing anyone can write.
  */
+/**
+ * Escape one NAME for use inside an address.
+ *
+ * Addresses are delimited by `/` and `:`, and {@link readAncestors} relies on that —
+ * stripping `:`-segments from the right is what lets a whole-dataset write satisfy a read
+ * of one of its cells. A name containing a delimiter therefore does not merely look odd,
+ * it addresses something else: `ds:7/cell:time:start:3` has `ds:7/cell:time` among its
+ * ancestors, so an edit to a column called `time` was read as covering cells of a column
+ * called `time:start`. Confirmed in both directions — `unresolvedReads` called the read
+ * satisfied and `staleReaders` called the reader stale.
+ *
+ * Reachable through IMPORT, where headers are taken as the file gives them: `time:start`,
+ * `Q1: satisfaction` and `10:30` are ordinary CSV headers. Typed names are validated, and
+ * SPSS and Stata forbid colons in their own names, so this is a delimited-text problem.
+ *
+ * Percent-encoded rather than substituted, so the name survives for display; `%` is
+ * encoded too or the encoding would not be reversible. Only the two delimiters and the
+ * escape character are touched, so every ordinary name is unchanged and old addresses
+ * still match.
+ *
+ * **Every address builder must use this**, including the ones that only build a fragment:
+ * `memo-store.js` documents `cellTarget` as byte-identical to what `DataStore#setCell`
+ * writes, and `data-views.js` builds the same string for its anchors. Encoding in one and
+ * not another would stop anchors matching, which is worse than the ambiguity it fixes.
+ *
+ * @param {string} name @returns {string}
+ */
+export function addressPart(name) {
+  return String(name ?? '').replace(/[%/:]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/** Undo {@link addressPart} — for showing a name read back out of an address. */
+export function decodeAddressPart(part) {
+  return String(part ?? '').replace(/%(25|2F|3A)/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 export function readAncestors(target) {
   const t = String(target ?? '');
   if (!t) return [];
