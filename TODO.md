@@ -304,15 +304,50 @@ bottom; they are the project's memory and are not summarised away.
         equal billing. A bundle also cannot be ENUMERATED (there is no index of
         `.crosstab` files on a disk), so the provider declares `enumerable: false` and
         the pane says what it is instead of reporting an empty list. 3 tests.
+  - [ ] **Can the project manager be redesigned so the shared row becomes reasonable?
+        (owner's question, 2026-10-26.)** Deliberately a question about the MANAGER, not
+        about `project-list.js`.
+
+        The row is shareable because it is opinion-free — it draws name, location, date and
+        size, and holds no view about what a click does. The manager is a `<dialog>` with
+        five modes (recents / open / store / manage / export) and a verb set per mode, so
+        consuming that row would mean teaching it about modes, which would cost it the
+        property that makes three other surfaces able to use it. The owner's reading:
+        *"the current 'tabbed dialog with five modes' does not seem a reasonable candidate
+        for using the shared component."*
+
+        So the duplication — its own `renderList`, `renderRail` and `describeRow`, plus
+        the line `[what.detail, projectMetaLine(row)].filter(Boolean).join(' · ')` repeated
+        verbatim from `project-list.js` — is a **symptom of the manager's shape**, and the
+        honest question is whether that shape is right.
+
+        What would make it one: if the five tabs turned out to be fewer surfaces than they
+        look. "Recents" and "Open" are both *pick a project to open*; "Store" is *pick a
+        destination*; "Manage" is *act on a project in place*. A manager that was a list
+        plus per-row verbs — the sidebar's shape, which already uses the shared row — might
+        need no tabs at all, at which point sharing is free rather than forced. That is a
+        redesign with a user-visible cost (the tabs are discoverable), so it is a question
+        and not a task.
+
+        Not urgent: nothing is broken, and the thing most likely to drift is already
+        shared (`projectMetaLine`, in `project-meta.js`). Worth revisiting if the manager
+        grows a sixth mode, which would be evidence the tabs are doing too much.
+
   - [ ] **STILL OPEN — and NOT a menu move.** *(Flagged 2026-09-21: the other two
         sub-items were "move some menu items" and took an afternoon. This one is a
         refactor and should not be waved through on the same estimate.)*
-        `core/project-manager.js` is written as a `<dialog>`-based modal that resolves a
-        promise on close; the launcher needs the same rail rendered INLINE in its
-        overlay. So reusing it means first extracting the rail/list rendering from the
-        dialog shell — a real change to a component that was browser-verified two days
-        ago — and it lands on top of #167 and #161, which both also rewrite the
-        launcher. Do the three together, deliberately, not as a follow-on.
+        **SUPERSEDED 2026-10-26 — this paragraph described the opposite of the code, and
+        the task it warns about was already done.** It said: `project-manager.js` is a
+        `<dialog>` resolving a promise on close, the launcher needs the same rail inline,
+        so reusing it means first extracting the rail from the dialog shell. In fact
+        `core/project-list.js` IS that extracted row and **the launcher already uses it**
+        (`launcher.js:18`), alongside the sidebar (`app.js:63`); the manager is the surface
+        that never adopted it. The direction was inverted, which would have sent whoever
+        picked this up to do the harder half of a job already finished.
+
+        Resolved by deciding that the manager keeps its own rendering — see the cluster note
+        and the redesign question above. Kept here because the lesson is reusable: a
+        warning about effort is a claim about the code, and it rots like any other.
 
         **The launcher should reuse the manager component instead of its own rail.**
         `core/launcher.js` builds its own saved-project list, remembered folders and
@@ -4753,10 +4788,47 @@ The record of what shipped and why. Kept in full, in the original sections.
 > stays**, so the launcher's commit gesture is settled; and **#171 is DONE** — the
 > launcher rail renders the one shared list, which this note previously claimed it did
 > not. (It said the rail *"still builds TWO lists"*. It had not done so for weeks; the
-> claim was copied forward rather than checked.) What actually remains is the #181
-> follow-on — reuse the project-manager rail inline instead of the launcher keeping its
-> own — and the sidebar grouping question. One decision, much smaller than this note made
-> it look.
+> claim was copied forward rather than checked.)
+>
+> **Update 2026-10-26 — the remaining task was pointing the wrong way.** This note said it
+> was "reuse the project-manager rail inline instead of the launcher keeping its own", and
+> #181 added that the rail must first come out of `project-manager.js`'s dialog shell. Both
+> describe the opposite of the code:
+>
+> - `core/project-list.js` IS that extracted row, and the **launcher already uses it**
+>   (`core/launcher.js:18`), as does the sidebar (`core/app.js:63`). Its header says the
+>   row was *"lifted out so there is no fourth"*.
+> - The outlier is the **project manager**, which still draws its own `renderList`,
+>   `renderRail` and `describeRow`.
+> - The data layer really is unified — all three call `listProjects()`, and
+>   `folder-handle.js`, `webdav-connections.js` and `listProjectLocations()` are all gone.
+> - What duplicates is the row DOM, the where-it-lives description, and verbatim in both
+>   files the line `[what.detail, projectMetaLine(row)].filter(Boolean).join(' · ')`.
+>
+> **CLOSED 2026-10-26 (owner's decision), and the remaining duplication is reframed
+> rather than scheduled.** The manager keeps its own rendering:
+>
+> *"leave it, the manager is currently a different surface. the unified row list is
+> opinion-free on purpose… The current 'tabbed dialog with five modes' does not seem a
+> reasonable candidate for using the shared component."*
+>
+> The reasoning matters more than the outcome. `project-list.js` is shareable **because**
+> it has no opinion about what a click means — a line that survived a direct challenge on
+> the owner's own iPhone evidence. A dialog with five modes cannot consume a component like
+> that without pushing its modes into it, which would cost the row exactly the property
+> that makes it worth sharing. So this is **not two renderings that failed to converge**:
+> it is one rendering plus a surface whose shape rules it out, and the duplication is a
+> direct consequence of the manager's design. Recorded as an open question about the
+> MANAGER, below — not as a missing abstraction in the row.
+>
+> **The sidebar grouping question is answered**, by the unified registry rather than by a
+> redesign: location is an attribute printed on a row, not a category that puts a project
+> in a different list. The bug that motivated it — a project moved to Dropbox vanishing
+> from the Projects list while a folder-backed one did not — cannot recur now that
+> `folder-handle.js` and `webdav-connections.js` are gone and every surface reads
+> `listProjects()`.
+>
+> So the cluster is done: five entries resolved, one closed as answered, nothing owed.
 >
 > Each one rewrites part of the launcher. #181 already says it: *"do the three together,
 > deliberately, not as a follow-on"*, or the launcher gets rebuilt twice. **Parked on the owner**,
