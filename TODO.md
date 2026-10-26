@@ -2433,6 +2433,61 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Nice-to-have / optimisations
 
+- [ ] **A busy project index — re-measured 2026-10-26 at 60 projects; it caught a
+      regression I had introduced.** The watch worked, and not on the axis it was set up
+      for. Three of the four baseline numbers scaled exactly as projected; the fourth had
+      gone up **51x for a 36% increase in project count**, which is not a growth curve.
+
+      **At 60 projects, against the 44-project baseline below:**
+      - `catalog.json` — 44,972 bytes, **750 bytes per project** (was 697)
+      - reading it **1.54 ms** (was 1.11), parsing **0.07 ms** (was 0.06) — still free
+      - enumerating `projects/` — **2.4 ms** (was 1.7)
+      - `listProjects()` — **261 ms** (was 5.1)
+
+      So the catalog is fine and the projection holds for it. `listProjects()` was the
+      problem, and it was mine: the storage-pressure work gave it a disk-size column, and
+      `projectSizes()` asked `driver.stat(path)` once per FILE. Every `stat` resolves its
+      path from the root — `#dirOf` walks `getDirectoryHandle` per segment — so each of
+      131 files paid `getDirectoryHandle('projects')` and `getDirectoryHandle(id)` again
+      before its `getFile()`. Two of four handle operations per file were pure repetition.
+
+      **Fix 1 — `statDir(dirPath)` on the driver (new).** One directory, one pass, returning
+      `Map(name -> {size, mtime})`. Implemented on `HandleDriver`, so OPFS and the folder
+      driver both get it; optional, with `projectSizes` falling back to looping `stat` so
+      `storage-dropbox.js` and `storage-webdav.js` keep working untouched. **261 -> 174 ms.**
+      Both remote drivers should override it eventually: their list responses already carry
+      sizes they currently re-request one network round trip at a time.
+
+      **Fix 2 — sizes are opt-in, which is where the real win was.** Decomposing what was
+      left: 46.65 ms of directory traversal plus 62.4 ms of `getFile()` over 131 files, or
+      about **0.5 ms per OPFS handle operation**, one of which a size needs per file. There
+      is no cleverer walk — there is only not walking. And the number answers one question:
+      `projectMetaLine` says so itself, *"the least interesting answer to 'which one was I
+      in' and the only answer to 'which one should I delete'"*. That is the project
+      manager's question — it is where the storage-pressure dialog sends people, and it is
+      what sizes were added for. The launcher and the sidebar were paying for a column they
+      never show.
+
+      So `listProjects({sizes})` defaults to **off** and the manager passes `{sizes: true}`.
+      `projectMetaLine` already omits an absent size, so the other two degrade by design.
+
+      **Measured, same machine, same 60 projects:**
+      - `listProjects()` — **5.65 ms** (from 261; back in line with 5.1 ms at 44)
+      - `listProjects({sizes: true})` — **172.7 ms**, paid only when the manager opens,
+        which this entry already judged survivable for a deliberately-opened dialog
+
+      **Verified live:** the launcher rail renders rows with no size and no `undefined`;
+      the manager's Manage tab still reads "This browser · 1 day ago · 1 dataset, 30 rows,
+      45 KB". 2381 tests pass; the one-list-function test now pins the FUNCTION rather than
+      its arity, with the reason recorded.
+
+      **What to watch next.** The per-project catalog cost crept 697 -> 750 bytes, which is
+      worth a glance if it keeps climbing — at 1000 projects the difference is 53 KB of a
+      750 KB file. And the manager's 173 ms is now the only size-dependent cost, so it is
+      the number to re-measure rather than `listProjects()`.
+
+      Original baseline below.
+
 - [ ] **A busy project index — baseline measured 2026-10-17, watch it grow.** The owner's
       call: the dev machine's accumulated test projects stay rather than being swept,
       because *"this is actually a good stress test for a busy index… I don't think we've

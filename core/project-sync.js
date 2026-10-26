@@ -2580,16 +2580,27 @@ export class ProjectSync {
    *   datasetCount: (number|null), entry: (object|null), isOpen: boolean,
    * }>>}
    */
-  async listProjects() {
+  async listProjects({ sizes: wantSizes = false } = {}) {
     const out = [];
 
-    // Disk size per project, in ONE walk. It is the number the storage-pressure dialog
-    // sends people here to compare, and rows are a poor proxy for it: a ten-row project
-    // carrying a video is large, a half-million-row Parquet can be small. Only local
-    // projects can be measured — a remembered folder cannot be read from a list — so a
-    // location simply has none, the same way it has no row count.
+    // Disk size per project — OPT-IN, and measured as the cost of asking.
+    //
+    // It is the number the storage-pressure dialog sends people to the manager to
+    // compare, and rows are a poor proxy for it: a ten-row project carrying a video is
+    // large, a half-million-row Parquet can be small. Only local projects can be measured
+    // — a remembered folder cannot be read from a list — so a location simply has none,
+    // the same way it has no row count.
+    //
+    // But it costs a file-system walk, and at 60 projects that measured **169 ms of the
+    // 174 ms** `listProjects()` took. The walk is already per-directory rather than
+    // per-file (see `projectSizes`), and what remains is irreducible: ~0.5 ms per OPFS
+    // handle operation, one per file. So the fix is not a faster walk, it is not walking
+    // for the two surfaces that never show the number. `projectMetaLine` omits an absent
+    // size, so the launcher and the sidebar lose nothing they were using.
     let sizes = new Map();
-    try { sizes = await this.#opfs.projectSizes(); } catch { /* sizes are a nicety */ }
+    if (wantSizes) {
+      try { sizes = await this.#opfs.projectSizes(); } catch { /* sizes are a nicety */ }
+    }
 
     // Local projects, from the store's own catalog.
     try {

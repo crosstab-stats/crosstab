@@ -45,9 +45,51 @@ test('there is exactly ONE project-list function left', () => {
   // callers had to know which storage a project sat on before they could ask about it,
   // which is the knowledge the backend abstraction exists to remove.
   assert.doesNotMatch(sync, /listAllProjects|listProjectLocations\(\) \{/);
-  assert.match(sync, /^  async listProjects\(\) \{/m);
+  // Its options bag is allowed — `{sizes}` was added 2026-10-26 after measuring that the
+  // size walk was 169 ms of a 174 ms call at 60 projects. What must stay singular is the
+  // FUNCTION, not its arity.
+  assert.match(sync, /^  async listProjects\(\{[^)]*\} = \{\}\) \{/m);
+  assert.equal((sync.match(/^  async listProjects\(/gm) ?? []).length, 1, 'exactly one');
   // And the dead "Open project" browse modal it fed, superseded by the manager in #173.
   assert.doesNotMatch(sync, /#showBrowseModal|#entryRow/);
+});
+
+test('the size walk is OPT-IN, and only the manager opts in', () => {
+  // Measured 2026-10-26 at 60 projects: the disk-size walk was 169 ms of a 174 ms
+  // `listProjects()`, because a size needs one OPFS handle operation per file at ~0.5 ms
+  // each. There is no faster walk, only not walking — so the two surfaces that never show
+  // the number stopped paying for it, and the one that answers "which should I delete"
+  // asks for it explicitly.
+  assert.match(sync, /if \(wantSizes\) \{/, 'guarded');
+  assert.match(sync, /async listProjects\(\{ sizes: wantSizes = false \} = \{\}\)/, 'default off');
+
+  const manager = readFileSync('core/project-manager.js', 'utf8');
+  assert.match(manager, /listProjects\(\{ sizes: true \}\)/, 'the manager asks');
+
+  // And nobody else does. A size on the launcher or the sidebar is 169 ms they do not
+  // spend, for a column they do not draw.
+  for (const path of ['core/launcher.js', 'core/app.js']) {
+    const src = readFileSync(path, 'utf8');
+    assert.doesNotMatch(src, /listProjects\(\{[^)]*sizes/, `${path} must not ask for sizes`);
+  }
+});
+
+test('one pass per directory, not one stat per file', () => {
+  // `stat` resolves its path from the root on every call (`#dirOf` walks
+  // getDirectoryHandle per segment), so statting a directory's files re-resolved that
+  // directory once per file. `statDir` exists to ask once.
+  const store = readFileSync('core/project-store.js', 'utf8');
+  assert.match(store, /typeof this\.#driver\.statDir === 'function'/, 'uses it when present');
+  assert.match(store, /for \(const name of await this\.#driver\.list\(dirPath\)\)/,
+    'and falls back for drivers without it — dropbox and webdav are untouched');
+
+  const driver = readFileSync('core/storage-driver.js', 'utf8');
+  assert.match(driver, /^  async statDir\(dirPath\) \{/m);
+  // Deliberately not recursive: a project's assets are a second directory, asked for
+  // separately, and a recursive default would hide an expensive call behind a cheap name.
+  const body = driver.slice(driver.indexOf('async statDir('), driver.indexOf('async statDir(') + 700);
+  assert.doesNotMatch(body, /await this\.statDir/, 'no recursion');
+  assert.match(body, /if \(h\.kind !== 'file'\) continue;/, 'subdirectories are skipped');
 });
 
 test('the unified row carries activePlugins, or the picker seeding dies silently', () => {

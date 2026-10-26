@@ -912,24 +912,39 @@ export class ProjectStore {
     if (this.#flat) return out; // folder mode is one project, and its size is the folder's
     let ids;
     try { ids = await this.#driver.list(ROOT); } catch { return out; }
+    // One question per DIRECTORY, not one per file. `stat` resolves its path from the
+    // root on every call, so statting a project's files re-resolved that project's folder
+    // once per file — which is how a size column turned `listProjects()` from 5.1 ms at
+    // 44 projects into 261 ms at 60. `statDir` is optional, so a driver that has not
+    // overridden it (Dropbox, WebDAV) still works via the fallback below.
+    const sizeOf = async (dirPath) => {
+      if (typeof this.#driver.statDir === 'function') {
+        const stats = await this.#driver.statDir(dirPath).catch(() => null);
+        if (stats) {
+          let bytes = 0;
+          for (const st of stats.values()) bytes += st?.size || 0;
+          return { bytes, files: stats.size };
+        }
+      }
+      let bytes = 0;
+      let files = 0;
+      for (const name of await this.#driver.list(dirPath)) {
+        const st = await this.#driver.stat(`${dirPath}/${name}`).catch(() => null);
+        if (st) { bytes += st.size || 0; files += 1; }
+      }
+      return { bytes, files };
+    };
+
     for (const id of ids) {
       if (id === CATALOG) continue;
-      let total = 0;
-      let seen = false;
       try {
-        for (const name of await this.#driver.list(`${ROOT}/${id}`)) {
-          if (name === ASSET_DIR) {
-            for (const a of await this.#driver.list(`${ROOT}/${id}/${ASSET_DIR}`)) {
-              const st = await this.#driver.stat(`${ROOT}/${id}/${ASSET_DIR}/${a}`).catch(() => null);
-              if (st) { total += st.size || 0; seen = true; }
-            }
-            continue;
-          }
-          const st = await this.#driver.stat(`${ROOT}/${id}/${name}`).catch(() => null);
-          if (st) { total += st.size || 0; seen = true; }
-        }
+        const own = await sizeOf(`${ROOT}/${id}`);
+        // Assets live in their own folder, so they are a second directory rather than a
+        // recursive walk — `statDir` deliberately does not recurse.
+        const assets = await sizeOf(`${ROOT}/${id}/${ASSET_DIR}`);
+        const files = own.files + assets.files;
+        if (files) out.set(id, own.bytes + assets.bytes);
       } catch { continue; }
-      if (seen) out.set(id, total);
     }
     return out;
   }

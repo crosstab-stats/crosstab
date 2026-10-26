@@ -201,7 +201,9 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
       body.replaceChildren(el('div', { class: 'ctpm__loading', text: 'Loading…' }));
       rows = [];
       try {
-        rows = await projects.listProjects();
+        // The one surface that asks "which should I delete", so the one that pays for
+        // the size walk — see `listProjects`.
+        rows = await projects.listProjects({ sizes: true });
       } catch (err) {
         debug('project', 'manager list failed', err);
       }
