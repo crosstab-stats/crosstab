@@ -116,7 +116,7 @@ const SHELL_PRECACHE = [
 // are cached automatically as they're used (they download anyway) and served
 // cache-first — so "used online once → works offline" + faster boot, with no opt-in.
 // Restricted to these known hosts so we never auto-cache arbitrary fetched *data*
-// (e.g. a plugin's app.web request, the FRED/Wikipedia importers).
+// (e.g. a plugin's app.web request, the Wikipedia importer).
 // hosts:start — a test seam. sw.js cannot be imported (it is a classic worker script that
 // touches `self` and `caches` on load), so test/runtime-hosts.test.mjs extracts these lines
 // and runs them. Keep the region self-contained; see the test for what it asserts.

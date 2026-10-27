@@ -261,6 +261,11 @@ function probeServices() {
  *   `{variables, columns|parquet}` (or null to abort). Returns the dataset; the
  *   host commits it.
  * @property {'file'|'web'} [source='file'] - `'web'` opens no picker.
+ *   Declare it only when the endpoint is **directly fetchable from a browser** — i.e. it
+ *   sends its own `Access-Control-Allow-Origin`. Needing a CORS proxy is a sign the source
+ *   wants a file importer instead: the FRED importer was removed on 2026-10-26 for exactly
+ *   that, having routed a user's API key through a third party to reach data that
+ *   downloads keylessly.
  * @property {string[]} [extensions] - Picker filter (file source).
  * @property {boolean} [multiple] - Allow several files (pooled).
  * @property {boolean} [stage] - Host-mount the upload into WebR and pass `parse`

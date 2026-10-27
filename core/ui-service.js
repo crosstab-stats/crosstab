@@ -639,7 +639,7 @@ export class UiService {
   /**
    * Show a modal form of text inputs and resolve with the entered values (or
    * `null` if cancelled). The general declarative input dialog — for analysis
-   * options or, e.g., a FRED importer asking for a series ID and API key.
+   * options or, e.g., an importer asking which article and which table.
    *
    * @param {Object} [options]
    * @param {string} [options.title='Form']

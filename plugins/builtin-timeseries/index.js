@@ -9,7 +9,7 @@
  *  - **ARIMA forecast** — auto.arima picks the model (forecast), then forecasts h
  *    steps with 95% intervals and a plot.
  *
- * Pairs with the FRED importer. The series is the column in its current row order;
+ * Takes a series as the column in its current row order;
  * non-finite values are dropped.
  */
 

@@ -9243,6 +9243,58 @@ The record of what shipped and why. Kept in full, in the original sections.
     `.sas7bcat` is listed among the residuals both fixed, via a
     `readstat_parse_sas7bcat` value-label shim.
 
+- [x] **FRED import — REMOVED 2026-10-26.** The owner's discomfort, and it held up:
+      *"Piping our request through a server we don't control just doesn't sit right. People
+      with free access can just download a fav and import, right? Does the importer (if it
+      even works, it's still untested) actually get them anything?"*
+
+      Checked rather than agreed with, and the answer was worse than the objection.
+
+      **The manual route needs no API key, and the importer did.** `fred.stlouisfed.org/
+      graph/fredgraph.csv?id=UNRATE` returned **946 rows, 200, with no key at all**
+      (verified 2026-10-26). So download-and-import asks nothing of the user, while the
+      importer required them to register for a key — and then sent it to a third party.
+      The importer was *harder* to use and less private than the path it was meant to
+      improve. That is the whole case; the principle did not have to carry it.
+
+      **The proxy constraint is FRED's, not something we could try harder at.** Neither
+      endpoint sends `Access-Control-Allow-Origin` — re-checked both today, the keyed API
+      and the CSV. So any in-browser fetch of FRED needs a proxy, permanently.
+
+      **The plugin's own defence was true and under-stated.** Its header argued the key is
+      *"a free public-data rate-limit identifier, not a secret granting access to anything
+      private"*. Correct, and it leaves out that `corsproxy.io` saw the series, the key and
+      the IP on every request, and that a free proxy with no contract behind it is a
+      **liveness** dependency: if it rate-limits, changes terms, dies or is compromised,
+      the importer breaks or quietly misreports. In the data path of a research tool.
+
+      **It was also untested** — no test file, and not exercised since it was built in
+      August. The entry below said "confirmed live"; that was true once and was never
+      re-checked.
+
+      **FRED was the only exception to a rule the codebase already followed.** The URL
+      importer in `core/import-service.js` says it outright: *"Direct-fetch only… If it
+      doesn't [allow CORS], the browser blocks it and we say so — no third-party proxy is
+      involved."* And `builtin-wikipedia` needs no proxy because Wikipedia's API sends its
+      own permissive headers. So removing FRED makes the codebase consistent rather than
+      poorer.
+
+      **The `web` source kind STAYS** (owner's call) — Wikipedia earns it, and the rule is
+      now written where a plugin author will read it, in `loader.js`'s `ImporterDecl`:
+      declare `source: 'web'` only when the endpoint is directly fetchable from a browser;
+      needing a CORS proxy is a sign the source wants a file importer instead.
+
+      **Verified after removal:** 65 plugins catalogue with no failures, the import picker
+      offers Wikipedia and no longer offers FRED, and a saved project whose `activePlugins`
+      still names `builtin-fred` **opens cleanly** — no throw, no error block, 30 rows
+      intact. A missing plugin is an ordinary state (#157), and the dev machine's
+      accumulated projects were the test for it. References re-pointed at Wikipedia in
+      `import-service.js`, `ui-service.js`, `sw.js`, `docs/OFFLINE.md`,
+      `builtin-timeseries` (which claimed to "pair with the FRED importer") and
+      `builtin-wikipedia` (which called itself "the second web source"). 2396 tests pass.
+
+      Original entry below.
+
 - [x] **FRED import (economic time series).** *Built* — `plugins/builtin-fred/`.
       Pulls a St. Louis Fed **FRED** series by ID (e.g. `UNRATE`, `GDP`, `CPIAUCSL`)
       into a 2-column dataset (`date` + the series), best-effort labelled with the

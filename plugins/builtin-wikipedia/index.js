@@ -5,7 +5,10 @@
  * Point it at any Wikipedia article (URL or title) and it pulls a table off the
  * page into a dataset — country statistics, sports records, historical series,
  * whatever has a `wikitable` on it. A second example of the **`web` importer
- * source** (after FRED), and the first *scrape*-style importer.
+ * source**, and the first *scrape*-style importer. It is now the only one: the FRED
+ * importer was removed on 2026-10-26 because it needed a third-party CORS proxy to reach
+ * an endpoint whose data is downloadable without one. Wikipedia's API sends its own
+ * permissive CORS headers, which is what makes a `web` importer worth having here.
  *
  * ## Why no proxy is needed
  * Wikipedia's human article URL (`…/wiki/Title`) sends no CORS header, so a

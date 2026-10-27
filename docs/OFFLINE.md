@@ -129,6 +129,6 @@ draw a plot — issues **zero cross-origin requests**. The console logs
   isolation headers; it does not yet precache `vendor/` for use when even the local
   server is down. Tracked as a follow-up (the `sw.js` TODO). It isn't required for
   the air-gap contract — a local static server already keeps everything on-device.
-- **Online-only data importers.** Plugins that fetch remote data (FRED, Wikipedia)
+- **Online-only data importers.** Plugins that fetch remote data (Wikipedia)
   naturally won't work without a network; that's expected and unrelated to the
   core runtimes.

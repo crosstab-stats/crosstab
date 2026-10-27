@@ -72,7 +72,7 @@ import { passphraseFor } from './at-rest.js';
  * @property {string} label - Menu label, e.g. `'CSV…'` or `'SPSS / Stata / SAS…'`.
  * @property {'file'|'web'} [source='file'] - Where the data comes from. `'file'`
  *   importers parse an uploaded file (the engine opens a picker). `'web'`
- *   importers fetch their own bytes (e.g. a FRED series) and get no file — the
+ *   importers fetch their own bytes (e.g. a Wikipedia table) and get no file — the
  *   engine calls `parse({ ticket })` once, with no `name`/`file`.
  * @property {string[]} [extensions] - File extensions handled, with the dot, e.g.
  *   `['.csv']` or `['.sav', '.dta', '.sas7bdat']`. Used for the picker filter.
@@ -803,7 +803,7 @@ export class ImportService {
    * Run a `web` importer: no file picker. Mint a ticket, let the plugin fetch
    * and deliver one dataset, then commit it (asking replace-vs-append if data
    * is already loaded). The plugin owns its own provenance tag via
-   * `dataset.source` (e.g. a FRED series id).
+   * `dataset.source` (e.g. a Wikipedia article title).
    */
   async #runWebImport(id, spec) {
     let dataset;
