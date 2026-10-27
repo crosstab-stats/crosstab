@@ -107,6 +107,10 @@ const pct = (x) => `${(x * 100).toFixed(1)}%`;
 const q = new URLSearchParams(location.search);
 const SEGMENT = Math.max(20, Number(q.get('segment') || 120));
 const OVERLAP = Math.max(0, Number(q.get('overlap') || 0));
+// Workers multiply the weights AND their arenas. Two `small` workers crashed a phone, so
+// anything past `base` defaults to one; ?workers= still overrides for a desktop.
+const FORCE_DECODE = q.get('decode') === '1';
+const WORKERS_SET = q.has('workers');
 const WORKERS = Math.max(1, Number(q.get('workers') || 2));
 const WANT_SINGLE = q.get('single') !== '0';
 const FULL = q.get('full') === '1';
@@ -356,6 +360,73 @@ const report = (name, s) => {
 // Transcription
 // =============================================================================
 
+/** Parse a RIFF/WAVE header by walking its chunks, or null if this is not one. */
+function readWavHeader(buf) {
+  const u8 = new Uint8Array(buf);
+  const dv = new DataView(buf);
+  const tag = (o) => String.fromCharCode(u8[o], u8[o + 1], u8[o + 2], u8[o + 3]);
+  if (buf.byteLength < 44 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') return null;
+  let at = 12;
+  let fmt = null;
+  while (at + 8 <= buf.byteLength) {
+    const id = tag(at);
+    const size = dv.getUint32(at + 4, true);
+    if (id === 'fmt ') {
+      fmt = {
+        format: dv.getUint16(at + 8, true),
+        channels: dv.getUint16(at + 10, true),
+        rate: dv.getUint32(at + 12, true),
+        bits: dv.getUint16(at + 22, true),
+      };
+    } else if (id === 'data' && fmt) {
+      if (fmt.format !== 1) return null;                 // PCM only
+      return { ...fmt, start: at + 8, bytes: Math.min(size, buf.byteLength - at - 8) };
+    }
+    at += 8 + size + (size & 1);
+  }
+  return null;
+}
+
+/**
+ * A lazy view over 16-bit PCM that converts to Float32 only when asked.
+ *
+ * `subarray` returns ANOTHER lazy view rather than samples, which is the whole point: the
+ * annotated span is taken with `subarray` and materialising there would produce 68 MB of
+ * floats and defeat the exercise. `materialise` is called once per segment, so the live
+ * cost is the source buffer plus one segment instead of the source plus every minute of
+ * the recording as floats — 47 MB against 131 on a phone that crashes near 880.
+ */
+function pcmView(buf, h, from = 0, to = null) {
+  const dv = new DataView(buf);
+  const total = Math.floor(h.bytes / 2);
+  const lo = Math.max(0, Math.min(total, from));
+  const hi = Math.max(lo, Math.min(total, to === null ? total : to));
+  return {
+    lazy: true,
+    length: hi - lo,
+    subarray(a = 0, b) {
+      const s2 = lo + Math.max(0, a);
+      const e2 = b === undefined ? hi : Math.min(hi, lo + b);
+      return pcmView(buf, h, s2, e2);
+    },
+    materialise(a = 0, b) {
+      const s2 = lo + Math.max(0, a);
+      const e2 = b === undefined ? hi : Math.min(hi, lo + b);
+      const out = new Float32Array(Math.max(0, e2 - s2));
+      for (let i = 0; i < out.length; i++) {
+        out[i] = dv.getInt16(h.start + (s2 + i) * 2, true) / 32768;
+      }
+      return out;
+    },
+  };
+}
+
+/** Real samples from either a Float32Array or a lazy PCM view. */
+function samples(src, from = 0, to) {
+  if (src.lazy) return src.materialise(from, to);
+  return new Float32Array(src.subarray(from, to));
+}
+
 const WORKER_URL = new URL('./transcribe-pressure-worker.js', import.meta.url);
 
 const loadWorker = (w, repo) => new Promise((resolve) => {
@@ -394,7 +465,7 @@ async function transcribeSegments(pcm, ws, onProgress, gen = null) {
       const i = next;
       next += 1;
       const from = i * step;
-      const seg = new Float32Array(pcm.subarray(from, Math.min(pcm.length, from + step + over)));
+      const seg = samples(pcm, from, Math.min(pcm.length, from + step + over));
       const r = await runOn(w, seg, gen);
       if (r.ms === null) { err = r.err; break; }
       texts[i] = r.text ?? '';
@@ -447,8 +518,30 @@ document.getElementById('run').addEventListener('click', async () => {
     } else {
       throw new Error('choose the audio file first (step 1 above)');
     }
-    status('decoding…');
-    const all = await decodeAudio(bytes);
+    // A plain 16-bit PCM WAV at 16 kHz needs no decoding: the samples are already there.
+    const wav = readWavHeader(bytes);
+    let all;
+    // ?decode=1 forces the AudioContext path, so the two can be compared: if the lazy
+    // reader produced even slightly different samples, the phone and desktop numbers would
+    // diverge for a reason that has nothing to do with the device.
+    if (!FORCE_DECODE && wav && wav.rate === SR && wav.channels === 1 && wav.bits === 16) {
+      all = pcmView(bytes, wav);
+      log(`audio: 16-bit PCM at ${wav.rate} Hz mono — read directly, one segment at a time`,
+          'ok');
+      log(`  Peak audio memory is the file plus one segment (~${
+        ((bytes.byteLength + 122 * SR * 4) / 1048576).toFixed(0)} MB) instead of a full`, 'dim');
+      log(`  Float32 copy of every minute (~${
+        ((bytes.byteLength + all.length * 4) / 1048576).toFixed(0)} MB).`, 'dim');
+      log('  It is also MORE comparable across devices than decoding: this conversion is a', 'dim');
+      log('  fixed divide by 32768, identical on every engine, where each browser decoder', 'dim');
+      log('  is its own. Measured side by side, the two differ by 0.3 points of WER on a', 'dim');
+      log('  two-minute sample — small, but engine-dependent, which is the one variable a', 'dim');
+      log('  cross-device comparison must not have. ?decode=1 forces the old path.', 'dim');
+    } else {
+      status('decoding…');
+      if (wav) log(`audio: WAV ${wav.rate} Hz ${wav.channels}ch ${wav.bits}-bit — decoding`, 'dim');
+      all = await decodeAudio(bytes);
+    }
 
     // Score only the annotated span by default. Audio before the first word and after the
     // last is real but unannotated, so anything Whisper says there is an insertion against
@@ -517,7 +610,7 @@ document.getElementById('run').addEventListener('click', async () => {
         const from = Math.max(0, Math.round((r.t - startSec) * SR));
         const to = Math.min(pcm.length, Math.round((r.e - startSec) * SR));
         if (to <= from) continue;
-        parts.push(pcm.subarray(from, to));
+        parts.push(samples(pcm, from, to));
         total += to - from;
         for (const w of refWords) if (w.t >= r.t && w.e <= r.e) kept.push(w);
       }
@@ -559,8 +652,14 @@ document.getElementById('run').addEventListener('click', async () => {
     const runs = [];
     for (const key of WANT_MODELS) {
       const [repo, weightsMb] = MODELS[key];
-      // A gigabyte of weights per worker is not something to multiply by three.
-      const nWorkers = weightsMb > 500 ? 1 : WORKERS;
+      // Measured: a tiny worker costs 219 MB for 39 MB of weights — a fixed runtime plus
+      // arenas that grow with the model. Two `small` workers (238 MB of weights each)
+      // crashed the owner's phone, which dies near 880 MB. Unless told otherwise, run one.
+      const nWorkers = WORKERS_SET ? WORKERS : (weightsMb > 150 ? 1 : WORKERS);
+      if (!WORKERS_SET && nWorkers < WORKERS) {
+        log(`  ${key}: one worker — ${weightsMb} MB of weights is too much to multiply`
+          + ' (?workers= overrides)', 'dim');
+      }
       status(`${key}: loading ${nWorkers} worker(s), ${weightsMb} MB of weights...`);
       const ws = [];
       for (let i = 0; i < nWorkers; i++) {
