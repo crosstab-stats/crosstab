@@ -713,6 +713,52 @@ It also kills the "ms per 1000 characters" normalisation recorded above: in long
 17 s). The earlier apparent character-scaling was an artefact of the truncated single-pass
 mode. Cross-device comparison just needs the same audio duration.
 
+## 40 minutes crashed the phone, and the arithmetic says it had to
+
+The owner ran `?audioMinutes=40` and iOS killed the tab ("A problem repeatedly occurred").
+That is out of memory, and nothing about it was marginal:
+
+| | |
+|---|---|
+| MP3 ArrayBuffer | 56 MB |
+| full decode to PCM | 149 MB |
+| `pcm.slice(0, 40 min)` — a COPY | 149 MB **(bug)** |
+| `segment()` — copies of all of it | 152 MB **(bug)** |
+| `postMessage` with no transfer — a structured clone | 149 MB **(bug)** |
+| 3 workers at 219 MB | 657 MB |
+| **total** | **1312 MB** |
+
+against a phone that already died near 880 MB. **Three of those five lines were mine**: a
+needless slice copy, per-segment copies, and `postMessage` without a transfer list, which
+clones the entire Float32Array into the worker.
+
+### The fix is a different shape, not smaller numbers
+
+Segments are now decoded **one at a time, on demand, out of the compressed bytes**, using
+the frame scanner written for the endurance spike (now shared in `spike/mp3-sync.js` rather
+than copied into both). Live audio cost becomes the MP3 plus one segment per worker —
+measured at **63 MB** — and **it does not grow with the length of the interview**. Forty
+minutes costs the same as four. `postMessage` now transfers rather than clones.
+
+Verified on desktop, 4 minutes, 60 s segments: 1 worker 1m06s (3.61x), 2 workers 0m48s
+(5.02x, 1.39x), **identical 4229 characters from both**, which is the check that each
+worker count really did transcribe the same audio. 3.61x also matches the 3.59x measured by
+the one-call baseline, so on-demand decoding costs nothing.
+
+### The one-call baseline is now opt-in, because it is the risky one
+
+A single call inherently needs the whole recording decoded and live — **that is what
+`core/transcribe.js` does today**. So it runs last, with the extra workers terminated
+first, and past 15 minutes of audio it is skipped with the requirement printed instead of
+a crash. Whether the SHIPPING path survives a 40-minute interview on a phone is therefore
+an open measurement with a known cost to attempt: `?baseline=1`, and a tab crash takes the
+split results with it.
+
+That question matters beyond the spike. If the shipping path cannot hold a 40-minute
+interview on a phone, then **segmenting is not an optimisation, it is the only way the
+feature works at all on mobile** — which is a stronger conclusion than the 1.71x speed-up
+that first justified it.
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The

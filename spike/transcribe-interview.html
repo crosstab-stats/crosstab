@@ -94,6 +94,7 @@
 
 <script type="module">
 import { decodeAudio } from '../core/transcribe.js';
+import { mp3Sync } from './mp3-sync.js';
 
 const SR = 16000;
 const logEl = document.getElementById('log');
@@ -109,10 +110,22 @@ const pad = (s, n) => String(s).padEnd(n);
 const mmss = (ms) => `${Math.floor(ms / 60000)}m${String(Math.round((ms % 60000) / 1000)).padStart(2, '0')}s`;
 
 const q = new URLSearchParams(location.search);
-const AUDIO_MIN = Math.max(0.5, Number(q.get('audioMinutes') || 10));
+// Forty minutes by default: users transcribe interviews, not clips of interviews.
+const AUDIO_MIN = Math.max(0.5, Number(q.get('audioMinutes') || 40));
+// A single call needs the WHOLE recording decoded in memory — that is what
+// core/transcribe.js does today — so past this much audio it is opt-in rather than a
+// surprise tab crash.
+const BASELINE_SAFE_MIN = 15;
+const WANT_BASELINE = q.get('baseline') === '1'
+  || (q.get('baseline') !== '0' && AUDIO_MIN <= BASELINE_SAFE_MIN);
 const SEGMENT = Math.max(30, Number(q.get('segment') || 120));
 const OVERLAP = Math.max(0, Number(q.get('overlap') || 2));
 const MAXW = Math.max(1, Number(q.get('max') || 3));
+// Which split widths to time. One config is enough to answer "can it do a full interview";
+// pass ?configs=1,2,3 for the comparison, which costs three times as long.
+const CONFIGS = String(q.get('configs') || '')
+  .split(',').map((x) => Number(x.trim())).filter((x) => Number.isInteger(x) && x > 0)
+  .sort((a, b) => a - b);
 const TIMESTAMPS = q.get('timestamps') !== '0';
 const AUDIO = q.get('audio') || 'https://archive.org/download/VNIT541Reid/VNIT-541_Reid.mp3';
 
@@ -147,61 +160,120 @@ const runOn = (w, audio) => new Promise((resolve) => {
   w.onerror = (e) => resolve({ ms: null, err: e.message || 'worker died' });
   // Generous: a 40-minute call at 3.5x real time is over eleven minutes of work.
   setTimeout(() => resolve({ ms: null, err: 'timed out after 45 min' }), 2700000);
-  w.postMessage({ type: 'run', audio, longForm: true, timestamps: TIMESTAMPS });
+  // TRANSFER, never clone. postMessage without a transfer list structured-clones the
+  // entire Float32Array into the worker — at baseline scale that is a second 149 MB, and
+  // it is one of the three bugs that crashed a phone at 40 minutes.
+  w.postMessage({ type: 'run', audio, longForm: true, timestamps: TIMESTAMPS }, [audio.buffer]);
 });
 
 // =============================================================================
 // Audio
 // =============================================================================
 
-async function getAudio() {
+/** The compressed bytes, which are ~3.7x smaller than the decoded audio and stay put. */
+async function getBytes() {
   if (picked) {
-    status(`decoding ${picked.name}…`);
-    const pcm = await decodeAudio(await picked.arrayBuffer());
-    return { pcm, label: picked.name };
+    status(`reading ${picked.name}…`);
+    return { bytes: await picked.arrayBuffer(), label: picked.name };
   }
   status('fetching the recording…');
   const res = await fetch(AUDIO);
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching audio`);
-  const buf = await res.arrayBuffer();
-  status(`decoding ${mb(buf.byteLength)}…`);
-  return { pcm: await decodeAudio(buf), label: AUDIO.split('/').pop() };
+  return { bytes: await res.arrayBuffer(), label: AUDIO.split('/').pop() };
 }
 
 /**
- * Cut `pcm` into overlapping segments.
+ * A segment source that decodes ONE segment at a time out of the compressed bytes.
  *
- * The overlap is why this is not free: a word straddling a cut appears in both segments, so
- * a real implementation must reconcile the duplicate text. This spike measures the TIME,
- * which is what decides whether that work is worth doing.
+ * This is the whole reason a 40-minute interview can run at all. Decoding the recording in
+ * full costs ~149 MB of Float32, and the previous version then made three more copies of
+ * it (a needless slice, per-segment copies, and a structured clone into the worker), for
+ * 655 MB of audio before a single worker existed. On a device that dies near 880 MB that
+ * is not a tuning problem, it is the wrong shape. Here the live cost is the compressed
+ * bytes plus one segment, and it does not grow with the length of the interview.
+ *
+ * MP3 frames are self-synchronising, so a slice taken from the middle decodes once it is
+ * aligned to a real frame header — hence mp3Sync. Byte offsets are derived from an
+ * empirically measured bytes-per-second rather than a header bitrate, so a variable-rate
+ * file drifts rather than breaking; segment boundaries are therefore approximate, which
+ * matters for stitching a transcript and not at all for timing.
  */
-function segment(pcm, segSeconds, overlapSeconds) {
-  const step = Math.round(segSeconds * SR);
-  const over = Math.round(overlapSeconds * SR);
-  const out = [];
-  for (let at = 0; at < pcm.length; at += step) {
-    const end = Math.min(pcm.length, at + step + over);
-    out.push(pcm.slice(at, end));
-    if (end >= pcm.length) break;
+async function makeSource(bytes) {
+  const u8 = new Uint8Array(bytes);
+  const probeBytes = Math.min(u8.length, 3 << 20);
+  const at0 = mp3Sync(bytes);
+  if (at0 < 0) {
+    // Not MP3 (or not MPEG-1 Layer III). Fall back to decoding the lot, and say what that
+    // costs so a crash is not a surprise.
+    status('decoding the whole recording (not an MP3 we can slice)…');
+    const pcm = await decodeAudio(bytes);
+    return {
+      kind: 'whole',
+      totalSeconds: pcm.length / SR,
+      segmentAt: async (i, segSeconds, overlapSeconds) => {
+        const step = Math.round(segSeconds * SR);
+        const over = Math.round(overlapSeconds * SR);
+        const from = i * step;
+        if (from >= pcm.length) return null;
+        // A standalone copy so it can be transferred without taking the whole buffer.
+        return new Float32Array(pcm.subarray(from, Math.min(pcm.length, from + step + over)));
+      },
+      whole: () => pcm,
+    };
   }
-  return out;
+  // Measure bytes-per-second from a real decode rather than trusting a header, so VBR
+  // averages out instead of compounding.
+  const probe = await decodeAudio(bytes.slice(at0, at0 + probeBytes));
+  const bytesPerSecond = (probeBytes - at0) / (probe.length / SR);
+  const totalSeconds = (u8.length - at0) / bytesPerSecond;
+  return {
+    kind: 'ondemand',
+    totalSeconds,
+    bytesPerSecond,
+    segmentAt: async (i, segSeconds, overlapSeconds) => {
+      const startSec = i * segSeconds;
+      if (startSec >= totalSeconds) return null;
+      const want = segSeconds + overlapSeconds;
+      const from = Math.min(u8.length - 1, at0 + Math.round(startSec * bytesPerSecond));
+      // Generous margin: enough bytes for the segment plus a frame to sync onto and slack
+      // for rate variation.
+      const span = Math.round((want + 4) * bytesPerSecond) + 65536;
+      const slice = bytes.slice(from, Math.min(u8.length, from + span));
+      const sync = from === at0 ? 0 : mp3Sync(slice);
+      if (sync < 0) return null;
+      const pcm = await decodeAudio(sync ? slice.slice(sync) : slice);
+      // Skip the ragged first moments after an arbitrary cut, then take what was asked for.
+      const skip = from === at0 ? 0 : Math.round(0.3 * SR);
+      const end = Math.min(pcm.length, skip + Math.round(want * SR));
+      if (end - skip < Math.round(SR * Math.min(5, want))) return null;
+      return new Float32Array(pcm.subarray(skip, end));
+    },
+    whole: null,
+  };
 }
 
-/** Shared queue across `ws`, which is how the real pool would hand out segments. */
-async function drain(ws, segments, onProgress) {
+/**
+ * Shared queue across `ws`, which is how the real pool would hand out segments.
+ *
+ * Each worker decodes its OWN next segment just before transcribing it, so at most `ws`
+ * segments of audio exist at any moment — a few MB — rather than all of them.
+ */
+async function drain(ws, source, count, onProgress) {
   let next = 0;
   let done = 0;
   let err = null;
   let chars = 0;
   await Promise.all(ws.map(async (w) => {
-    while (!err && !stopping && next < segments.length) {
+    while (!err && !stopping && next < count) {
       const i = next;
       next += 1;
-      const r = await runOn(w, segments[i]);
+      const seg = await source.segmentAt(i, SEGMENT, OVERLAP);
+      if (!seg) continue;                         // ran past the end, or a slice would not sync
+      const r = await runOn(w, seg);              // seg's buffer is transferred away here
       if (r.ms === null) { err = r.err; break; }
       chars += r.chars || 0;
       done += 1;
-      onProgress?.(done, segments.length);
+      onProgress?.(done, count);
     }
   }));
   return { err, chars, done };
@@ -231,18 +303,24 @@ document.getElementById('run').addEventListener('click', async () => {
   }
 
   try {
-    const { pcm, label } = await getAudio();
-    const wholeSeconds = Math.min(AUDIO_MIN * 60, pcm.length / SR);
-    const audio = pcm.slice(0, Math.round(wholeSeconds * SR));
+    const { bytes, label } = await getBytes();
+    const source = await makeSource(bytes);
+    const wholeSeconds = Math.min(AUDIO_MIN * 60, source.totalSeconds);
+    const segCount = Math.ceil(wholeSeconds / SEGMENT);
     log('');
     log(`audio: ${label} — using ${(wholeSeconds / 60).toFixed(1)} min of `
-      + `${(pcm.length / SR / 60).toFixed(1)} min available`, 'ok');
-
-    const segments = segment(audio, SEGMENT, OVERLAP);
-    const overheadPct = ((segments.length - 1) * OVERLAP) / wholeSeconds * 100;
-    log(`split mode: ${segments.length} segments of ${SEGMENT} s with ${OVERLAP} s overlap`, 'dim');
-    log(`  the overlap adds ${overheadPct.toFixed(1)}% extra audio to transcribe, which is`, 'dim');
-    log('  the price of being able to reconcile words cut across a boundary.', 'dim');
+      + `${(source.totalSeconds / 60).toFixed(1)} min available`, 'ok');
+    const overheadPct = ((segCount - 1) * OVERLAP) / wholeSeconds * 100;
+    log(`split mode: ${segCount} segments of ${SEGMENT} s with ${OVERLAP} s overlap`, 'dim');
+    log(`  the overlap adds ${overheadPct.toFixed(1)}% extra audio, which is the price of`, 'dim');
+    log('  being able to reconcile words cut across a boundary.', 'dim');
+    log(`  segments decoded ${source.kind === 'ondemand' ? 'ON DEMAND from the compressed bytes'
+      : 'from one full decode (not a sliceable MP3)'}`, source.kind === 'ondemand' ? 'ok' : 'bad');
+    const liveMb = (bytes.byteLength + (source.kind === 'ondemand' ? 0 : wholeSeconds * SR * 4)
+      + MAXW * (SEGMENT + OVERLAP) * SR * 4) / 1048576;
+    log(`  live audio memory about ${liveMb.toFixed(0)} MB, and it does NOT grow with the`, 'dim');
+    log(`  length of the interview. Decoding ${(wholeSeconds / 60).toFixed(0)} min in full would be `
+      + `${(wholeSeconds * SR * 4 / 1048576).toFixed(0)} MB.`, 'dim');
 
     log('');
     log(`--- loading up to ${MAXW} workers ---`);
@@ -260,19 +338,67 @@ document.getElementById('run').addEventListener('click', async () => {
     const rows = [];
     const rt = (ms) => wholeSeconds / (ms / 1000);
 
-    // ---- what ships today: one worker, one call ---------------------------------------
+    // ---- split first, because the baseline is the memory-risky one --------------------
+    const widths = (CONFIGS.length ? CONFIGS : [workers.length]).filter((n) => n <= workers.length);
+    log('');
+    log('--- split into segments ---');
+    log(`timing ${widths.join(', ')} worker${widths.length > 1 || widths[0] > 1 ? 's' : ''}`
+      + `${CONFIGS.length ? '' : ' (pass ?configs=1,2,3 for the full comparison)'}`, 'dim');
+    log('');
+    log(`  ${pad('workers', 9)}${pad('wall', 9)}${pad('x real', 8)}${pad('vs 1 worker', 13)}chars`);
+
+    let firstMs = null;
+    for (const w of widths) {
+      if (stopping) break;
+      const t = performance.now();
+      const { err, chars, done } = await drain(
+        workers.slice(0, w), source, segCount,
+        (d, total) => status(`split across ${w} worker${w > 1 ? 's' : ''}: segment ${d}/${total}`
+          + ` · ${((performance.now() - t) / 60000).toFixed(1)} min in`),
+      );
+      const ms = performance.now() - t;
+      if (err) {
+        log(`  ${pad(w, 9)}FAILED after ${done}/${segCount} segments — ${err}`, 'bad');
+        break;
+      }
+      if (firstMs === null) firstMs = ms;
+      log(`  ${pad(w, 9)}${pad(mmss(ms), 9)}${pad(rt(ms).toFixed(2), 8)}`
+        + `${pad((firstMs / ms).toFixed(2) + 'x', 13)}${chars}`, 'ok');
+      rows.push({ name: `split x${w}`, workers: w, ms });
+    }
+
+    // ---- then the baseline, which inherently needs the whole recording in memory -------
     log('');
     log('--- baseline: ONE worker, the whole recording in ONE call (what ships) ---');
-    status(`baseline: transcribing ${(wholeSeconds / 60).toFixed(1)} min in one call…`);
-    const t0 = performance.now();
-    const base = await runOn(workers[0], audio);
-    const baseMs = performance.now() - t0;
-    if (base.ms === null) {
+    const wholeMb = wholeSeconds * SR * 4 / 1048576;
+    let base = { ms: null, err: 'skipped' };
+    let baseMs = null;
+    if (!WANT_BASELINE) {
+      log(`SKIPPED. A single call needs all ${wholeMb.toFixed(0)} MB of decoded audio live at`, 'bad');
+      log('  once — that is what core/transcribe.js does today — and this phone crashed the', 'dim');
+      log(`  tab trying it at ${AUDIO_MIN} minutes. Pass ?baseline=1 to attempt it anyway;`, 'dim');
+      log('  whether the SHIPPING path survives a long interview is a real question, but it', 'dim');
+      log('  costs a tab crash to ask and takes the split results down with it.', 'dim');
+    } else if (!source.whole && source.kind === 'ondemand') {
+      status('decoding the whole recording for the baseline…');
+      log(`decoding all ${wholeMb.toFixed(0)} MB for a single call…`, 'dim');
+      // Extra workers die first: the baseline needs the memory more than the parallelism.
+      for (const w of workers.slice(1)) w.terminate();
+      workers.length = 1;
+      const full = await decodeAudio(bytes);
+      const audio = new Float32Array(full.subarray(0, Math.round(wholeSeconds * SR)));
+      status(`baseline: transcribing ${(wholeSeconds / 60).toFixed(1)} min in one call…`);
+      const t0 = performance.now();
+      base = await runOn(workers[0], audio);
+      baseMs = performance.now() - t0;
+    }
+    if (baseMs === null) base = { ms: null, err: base.err };
+    if (base.ms === null && base.err !== 'skipped') {
       log(`FAILED — ${base.err}`, 'bad');
       log('  A single long call failing is the most important result here: it is exactly', 'dim');
       log('  what a user does, and it means the app must segment whether or not it is', 'dim');
       log('  faster.', 'dim');
-    } else {
+    } else if (base.ms !== null) {
       log(`${mmss(baseMs)} for ${(wholeSeconds / 60).toFixed(1)} min — ${rt(baseMs).toFixed(2)}x real time`, 'ok');
       log(`  coverage ${base.covered ?? '?'} s of ${Math.round(wholeSeconds)} s`,
           base.covered && base.covered > wholeSeconds * 0.95 ? 'ok' : 'bad');
@@ -291,31 +417,6 @@ document.getElementById('run').addEventListener('click', async () => {
       rows.push({ name: 'one call', workers: 1, ms: baseMs });
     }
 
-    // ---- segmented, 1 then 2 then 3 workers -------------------------------------------
-    log('');
-    log('--- split into segments, across 1, 2, 3 workers ---');
-    log('W=1 is the CONTROL: it isolates what segmentation itself costs from what', 'dim');
-    log('parallelism buys. Compare it against the baseline above.', 'dim');
-    log('');
-    log(`  ${pad('workers', 9)}${pad('wall', 9)}${pad('x real', 8)}${pad('vs baseline', 13)}chars`);
-
-    for (let w = 1; w <= workers.length && !stopping; w++) {
-      const t = performance.now();
-      const { err, chars, done } = await drain(
-        workers.slice(0, w), segments,
-        (d, total) => status(`split across ${w} worker${w > 1 ? 's' : ''}: segment ${d}/${total}`),
-      );
-      const ms = performance.now() - t;
-      if (err) {
-        log(`  ${pad(w, 9)}FAILED after ${done}/${segments.length} segments — ${err}`, 'bad');
-        break;
-      }
-      const vs = base.ms !== null ? `${(baseMs / ms).toFixed(2)}x` : '—';
-      log(`  ${pad(w, 9)}${pad(mmss(ms), 9)}${pad(rt(ms).toFixed(2), 8)}${pad(vs, 13)}${chars}`,
-          base.ms !== null && baseMs / ms > 1.1 ? 'ok' : '');
-      rows.push({ name: `split x${w}`, workers: w, ms });
-    }
-
     // ---- what it means -----------------------------------------------------------------
     log('');
     log('--- reading this ---');
@@ -323,6 +424,11 @@ document.getElementById('run').addEventListener('click', async () => {
     const s1 = rows.find((r) => r.name === 'split x1');
     const best = rows.filter((r) => r.name.startsWith('split'))
       .reduce((a, b) => (!a || b.ms < a.ms ? b : a), null);
+    if (best) {
+      const hourBest = (best.ms / wholeSeconds) * 3600;
+      log(`${best.workers} worker${best.workers > 1 ? 's' : ''} split: ${mmss(best.ms)} for `
+        + `${(wholeSeconds / 60).toFixed(1)} min — an hour of audio in ${mmss(hourBest)}`, 'ok');
+    }
     if (one && s1) {
       const cost = (s1.ms / one.ms - 1) * 100;
       log(`segmentation alone costs ${cost >= 0 ? '+' : ''}${cost.toFixed(1)}% on one worker`,
