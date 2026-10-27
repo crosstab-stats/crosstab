@@ -77,7 +77,12 @@
 <p><label><strong>1.</strong> Download the audio, then choose it here:<br>
    <a id="dl" href="https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2002a/audio/ES2002a.Mix-Headset.wav">ES2002a.Mix-Headset.wav</a>
    (38.8 MB, CC BY 4.0, AMI Meeting Corpus)<br>
-   <input type="file" id="file" accept="audio/*"></label></p>
+   <input type="file" id="file"></label></p>
+<p class="dim">On iOS, <em>long-press</em> that link and choose &ldquo;Download Linked
+   File&rdquo; &mdash; a plain tap opens a player instead, because the server sends it as
+   <code>audio/x-wav</code>. The picker has no type filter: iOS resolves one through UTIs
+   and tags downloaded files as generic data, which greys out the very file you just saved.
+   Any audio this browser can decode will work, including your own recordings.</p>
 <p class="dim"><strong>2.</strong> The human transcript ships with this page, so there is
    nothing else to fetch.</p>
 <button id="run">Score it</button>
