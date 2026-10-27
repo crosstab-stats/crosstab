@@ -62,7 +62,8 @@
 
   ## Query parameters
 
-  ?passes=6     how many times to visit all three worker counts
+  ?minutes=10   wall-clock budget; passes run until it is spent (the thermal knob)
+  ?passes=6     a fixed pass count instead, ignoring the budget
   ?clips=3      distinct clips drawn from across the recording
   ?k=3          clips each worker transcribes per configuration
   ?seconds=60   clip length
@@ -119,7 +120,12 @@ const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
 const pad = (s, n) => String(s).padEnd(n);
 
 const q = new URLSearchParams(location.search);
-const PASSES = Math.max(1, Number(q.get('passes') || 6));
+// A fixed pass count cannot test thermal behaviour: six passes took the owner's phone 1.6
+// minutes, which heats nothing. Unless `passes` is given explicitly, run passes until a
+// wall-clock budget is spent.
+const FIXED_PASSES = q.has('passes');
+const PASSES = Math.max(1, Number(q.get('passes') || 200));
+const BUDGET_MIN = Math.max(0.2, Number(q.get('minutes') || 10));
 const CLIPS = Math.max(1, Number(q.get('clips') || 3));
 const K = Math.max(1, Number(q.get('k') || 3));
 const SECONDS = Math.max(5, Number(q.get('seconds') || 60));
@@ -164,7 +170,78 @@ function carve(pcm, skipSeconds) {
  * is why `carve` skips it. If a slice will not decode at all the caller falls back to
  * fetching the whole file.
  */
-async function clipFromRange(url, totalBytes, index, count) {
+/**
+ * A short, stable fingerprint of a clip's samples.
+ *
+ * This exists because comparing devices by time-per-clip turned out to be meaningless
+ * unless they transcribed the SAME clip. On one desktop, two different minutes of the same
+ * recording cost 9.66 and 5.96 ms per character — a clip pays a fixed encoder cost per 30 s
+ * window whether anyone is speaking or not, so "ms per character" is not clip-independent
+ * and neither is anything derived from it. Printing a fingerprint makes a cross-device
+ * comparison checkable instead of assumed: same fingerprints, same work.
+ */
+function fingerprint(pcm) {
+  let h = 2166136261;
+  for (let i = 0; i < pcm.length; i += 997) {
+    h ^= Math.round(pcm[i] * 10000) | 0;
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0').slice(0, 6);
+}
+
+/** Mean absolute amplitude: a cheap, robust stand-in for "is anybody talking". */
+function level(pcm) {
+  let sum = 0;
+  // Every 7th sample is plenty for a level estimate and keeps this off the critical path.
+  for (let i = 0; i < pcm.length; i += 7) sum += Math.abs(pcm[i]);
+  return sum / Math.ceil(pcm.length / 7);
+}
+
+const MPEG1_BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+const MPEG1_RATES = [44100, 48000, 32000];
+
+/**
+ * Length in bytes of the MPEG-1 Layer III frame whose header starts at `i`, or 0 if that is
+ * not a valid header.
+ */
+function frameLength(b, i) {
+  if (i + 4 > b.length) return 0;
+  if (b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) return 0;
+  if (((b[i + 1] >> 3) & 0x03) !== 3) return 0;          // MPEG-1 only
+  if (((b[i + 1] >> 1) & 0x03) !== 1) return 0;          // Layer III only
+  const bitrate = MPEG1_BITRATES[(b[i + 2] >> 4) & 0x0f];
+  const rate = MPEG1_RATES[(b[i + 2] >> 2) & 0x03];
+  if (!bitrate || !rate) return 0;
+  const pad = (b[i + 2] >> 1) & 0x01;
+  return Math.floor((144000 * bitrate) / rate) + pad;
+}
+
+/**
+ * Offset of the first real frame header in `bytes`.
+ *
+ * Safari refuses to decode an MP3 slice that starts mid-frame — "Decoding failed", which is
+ * what sent the owner's phone down the full-file path and cost it ~153 MB. Three
+ * consecutive valid frames are required, because a lone 0xFF byte inside audio data will
+ * otherwise pass for a header often enough to matter.
+ */
+function mp3Sync(bytes) {
+  const b = new Uint8Array(bytes);
+  const limit = Math.min(b.length - 4, 200000);     // a frame is ~600 B; this is generous
+  for (let i = 0; i < limit; i++) {
+    let at = i;
+    let ok = true;
+    for (let f = 0; f < 3; f++) {
+      const len = frameLength(b, at);
+      if (!len) { ok = false; break; }
+      at += len;
+    }
+    if (ok) return i;
+  }
+  return -1;
+}
+
+/** Fetch one candidate slice and return `{clip, level}`, or null if it will not decode. */
+async function candidate(url, totalBytes, index, count) {
   // ~24 kB per second of audio for this recording, so take generous margin for VBR.
   const sliceBytes = Math.round(SECONDS * 24000 * 1.8) + 65536;
   const span = Math.max(0, totalBytes - sliceBytes);
@@ -175,8 +252,17 @@ async function clipFromRange(url, totalBytes, index, count) {
   if (res.status !== 206 && bytes.byteLength > sliceBytes * 2) {
     throw new Error('server ignored Range and sent the whole file');
   }
-  const pcm = await decodeAudio(bytes);
-  return carve(pcm, index === 0 ? 0.2 : 1.5);
+  const at = start === 0 ? 0 : mp3Sync(bytes);
+  if (at < 0) return null;
+  let pcm;
+  try {
+    pcm = await decodeAudio(at ? bytes.slice(at) : bytes);
+  } catch {
+    return null;                                   // a slice that will not decode is skipped
+  }
+  const clip = carve(pcm, 0.2);
+  if (!clip) return null;
+  return { clip, level: level(clip), atSeconds: (start / Math.max(1, totalBytes)) * (totalBytes / 24000) };
 }
 
 async function buildClips() {
@@ -187,11 +273,17 @@ async function buildClips() {
     const per = Math.round(SECONDS * SR);
     const fit = Math.floor(pcm.length / per);
     const take = Math.min(CLIPS, Math.max(1, fit));
-    const out = [];
-    for (let j = 0; j < take; j++) {
-      const at = (take > 1 ? Math.round((j * (fit - 1)) / (take - 1)) : 0) * per;
-      out.push(pcm.slice(at, at + per));
+    // Score every whole minute and keep the loudest, for the same reason the range branch
+    // does: position alone hands you tape leader and run-out.
+    const scored = [];
+    for (let j = 0; j < fit; j++) {
+      const at = j * per;
+      scored.push({ at, lvl: level(pcm.subarray(at, at + per)) });
     }
+    scored.sort((a, b) => b.lvl - a.lvl);
+    const chosen = scored.slice(0, take);
+    const out = chosen.map((c) => pcm.slice(c.at, c.at + per));
+    log(`  scored ${fit} minutes; kept levels ${chosen.map((c) => c.lvl.toFixed(3)).join(', ')}`, 'dim');
     return { clips: out, label: `${picked.name}, ${(pcm.length / SR / 60).toFixed(1)} min` };
   }
 
@@ -222,23 +314,41 @@ async function buildClips() {
   }
 
   if (ranged && !FULL) {
-    const out = [];
-    for (let j = 0; j < CLIPS; j++) {
-      status(`fetching clip ${j + 1} of ${CLIPS}…`);
+    // Fetch more candidates than needed and keep the loudest. Choosing by position alone
+    // gave the owner's phone tape leader and run-out: 276 characters a minute, about 55
+    // words, where the desktop's clips ran at 214. Silence is not a fair sample of an
+    // interview, and since decode time tracks token count it is not a fair sample of the
+    // work either — it made the phone look 4.8x faster than the desktop when, per
+    // character, it is 1.25x.
+    const want = CLIPS;
+    const probes = Math.min(12, want * 2 + 2);
+    const found = [];
+    for (let j = 0; j < probes; j++) {
+      status(`sampling the recording… ${j + 1}/${probes}`);
       try {
-        const c = await clipFromRange(AUDIO, totalBytes, j, CLIPS);
-        if (c) out.push(c);
+        const c = await candidate(AUDIO, totalBytes, j, probes);
+        if (c) found.push(c);
       } catch (err) {
-        log(`  clip ${j + 1} by range failed (${err.message}) — will try a full decode`, 'dim');
-        out.length = 0;
+        log(`  range sampling failed (${err.message}) — falling back to a full decode`, 'dim');
+        found.length = 0;
         break;
       }
     }
-    if (out.length) {
+    if (found.length) {
+      found.sort((a, b) => b.level - a.level);
+      const keep = found.slice(0, want);
+      const quiet = found.slice(want);
+      log(`  sampled ${found.length} places; kept the ${keep.length} loudest`, 'dim');
+      log(`  kept levels ${keep.map((c) => c.level.toFixed(3)).join(', ')}`
+        + (quiet.length ? ` · skipped ${quiet.map((c) => c.level.toFixed(3)).join(', ')}` : ''), 'dim');
+      if (keep.length && keep[0].level < 0.01) {
+        log('  ALL candidates are very quiet — check the recording, because near-silence', 'bad');
+        log('  transcribes fast and would flatter every number below.', 'dim');
+      }
       return {
-        clips: out,
-        label: `${AUDIO.split('/').pop()}, ${CLIPS} clips spread over `
-          + `${(totalBytes / 24000 / 60).toFixed(0)} min (${mb(CLIPS * SECONDS * SR * 4)} held)`,
+        clips: keep.map((c) => c.clip),
+        label: `${AUDIO.split('/').pop()}, ${keep.length} loudest of ${found.length} places `
+          + `across ${(totalBytes / 24000 / 60).toFixed(0)} min (${mb(keep.length * SECONDS * SR * 4)} held)`,
       };
     }
   }
@@ -253,11 +363,17 @@ async function buildClips() {
   const per = Math.round(SECONDS * SR);
   const fit = Math.floor(pcm.length / per);
   const take = Math.min(CLIPS, Math.max(1, fit));
-  const out = [];
-  for (let j = 0; j < take; j++) {
-    const at = (take > 1 ? Math.round((j * (fit - 1)) / (take - 1)) : 0) * per;
-    out.push(pcm.slice(at, at + per));
+  // Score every whole minute and keep the loudest, for the same reason the range branch
+  // does: position alone hands you tape leader and run-out.
+  const scored = [];
+  for (let j = 0; j < fit; j++) {
+    const at = j * per;
+    scored.push({ at, lvl: level(pcm.subarray(at, at + per)) });
   }
+  scored.sort((a, b) => b.lvl - a.lvl);
+  const chosen = scored.slice(0, take);
+  const out = chosen.map((c) => pcm.slice(c.at, c.at + per));
+  log(`  scored ${fit} minutes; kept levels ${chosen.map((c) => c.lvl.toFixed(3)).join(', ')}`, 'dim');
   return { clips: out, label: `${AUDIO.split('/').pop()}, ${(pcm.length / SR / 60).toFixed(1)} min` };
 }
 
@@ -358,6 +474,10 @@ document.getElementById('run').addEventListener('click', async () => {
     const { clips, label } = await buildClips();
     log('');
     log(`audio: ${label}`, 'ok');
+    log(`clip fingerprints: ${clips.map(fingerprint).join(' ')}`, 'ok');
+    log('  Two runs that show the same fingerprints transcribed the same audio, and only', 'dim');
+    log('  then are their per-clip times comparable. Different fingerprints mean different', 'dim');
+    log('  speech density, which moves per-clip cost by 2x or more on one device.', 'dim');
 
     // Fairness invariant: every configuration must transcribe each clip the same number of
     // times, or a cheap clip could land on one worker count and an expensive one on
@@ -396,7 +516,8 @@ document.getElementById('run').addEventListener('click', async () => {
     for (let n = 1; n <= workers.length; n++) counts.push(n);
 
     log('');
-    log(`--- ${PASSES} passes over ${counts.join(', ')} workers, direction alternating ---`);
+    log(`--- ${FIXED_PASSES ? `${PASSES} passes` : `about ${BUDGET_MIN} min of passes`}`
+      + ` over ${counts.join(', ')} workers, direction alternating ---`);
     log('Within a pass, comparing counts measures CONCURRENCY (time-local).', 'dim');
     log('Across passes, comparing one count measures DRIFT (leak, or thermal).', 'dim');
     log('The direction flips each pass so warming inside a pass cancels out.', 'dim');
@@ -410,7 +531,12 @@ document.getElementById('run').addEventListener('click', async () => {
     let totalClips = 0;
     let died = null;
 
-    for (let p = 1; p <= PASSES && !stopping && !died; p++) {
+    // Keep going while there is budget. A pass is the unit, so the run overshoots by at
+    // most one pass rather than stopping mid-comparison and leaving a half-filled row that
+    // could not be read as either concurrency or drift.
+    const spent = () => (performance.now() - started) / 60000;
+    const moreWanted = (p) => (FIXED_PASSES ? p <= PASSES : spent() < BUDGET_MIN && p <= PASSES);
+    for (let p = 1; moreWanted(p) && !stopping && !died; p++) {
       const forward = p % 2 === 1;
       const order = forward ? counts : [...counts].reverse();
       const byN = new Map();
@@ -418,10 +544,10 @@ document.getElementById('run').addEventListener('click', async () => {
       for (const n of order) {
         if (stopping || died) break;
         const jobs = n * k;
-        const eta = p > 1 || results.length
-          ? ` · about ${Math.max(0, Math.round(
-              ((performance.now() - started) / Math.max(1, p - 1)) * (PASSES - p + 1) / 60000))} min left`
-          : '';
+        const eta = FIXED_PASSES
+          ? (p > 1 ? ` · about ${Math.max(0, Math.round(
+              ((performance.now() - started) / Math.max(1, p - 1)) * (PASSES - p + 1) / 60000))} min left` : '')
+          : ` · ${Math.max(0, (BUDGET_MIN - spent())).toFixed(1)} min left`;
         status(`pass ${p}/${PASSES} · ${n} worker${n > 1 ? 's' : ''} · ${jobs} clips${eta}`);
         const t = performance.now();
         const { err, chars, ran } = await drain(workers.slice(0, n), jobs, clips);
@@ -430,7 +556,8 @@ document.getElementById('run').addEventListener('click', async () => {
         totalChars += chars;
         totalClips += ran;
         byN.set(n, { wall, perClip: wall / k, throughput: (jobs / wall) * 1000 });
-        results.push({ pass: p, n, forward, wall, perClip: wall / k, throughput: (jobs / wall) * 1000 });
+        results.push({ pass: p, n, forward, wall, chars, jobs: ran,
+          perClip: wall / k, throughput: (jobs / wall) * 1000 });
       }
 
       if (died) break;
@@ -439,7 +566,7 @@ document.getElementById('run').addEventListener('click', async () => {
       const sus = counts.slice(1).map((n) => pad(
         byN.has(n) && base ? `${(byN.get(n).throughput / base.throughput).toFixed(2)}x` : '—', 7));
       log(`  ${pad(p, 6)}${pad(forward ? '→' : '←', 5)}${cells.join('')}${sus.join('')}`
-        + `${((performance.now() - started) / 60000).toFixed(1)} min`);
+        + `${spent().toFixed(1)} min`);
     }
 
     if (died) {
@@ -458,7 +585,8 @@ document.getElementById('run').addEventListener('click', async () => {
     // Concurrency: average the within-pass speed-ups, which are immune to drift.
     for (const n of counts.slice(1)) {
       const ratios = [];
-      for (let p = 1; p <= PASSES; p++) {
+      const lastPass = results.length ? results[results.length - 1].pass : 0;
+      for (let p = 1; p <= lastPass; p++) {
         const a = results.find((r) => r.pass === p && r.n === 1);
         const b = results.find((r) => r.pass === p && r.n === n);
         if (a && b) ratios.push(b.throughput / a.throughput);
@@ -513,6 +641,28 @@ document.getElementById('run').addEventListener('click', async () => {
     if (perClipChars <= floorChars) {
       log('  TOO LITTLE TEXT: the decoder barely ran, so this is an encoder-only result', 'bad');
       log('  and overstates concurrency by roughly 2x. Check the audio.', 'dim');
+    }
+    // Content-normalised cost. Raw per-clip time is NOT comparable between devices that
+    // drew different clips: it made the phone look 4.84x faster than the desktop on the
+    // same recording when, per character, it was 1.25x. This is the number to quote.
+    const solo = results.filter((r) => r.n === 1);
+    const soloMs = solo.reduce((a, r) => a + r.wall, 0);
+    const soloChars = solo.reduce((a, r) => a + r.chars, 0);
+    if (soloChars > 0) {
+      log(`cost: ${Math.round(soloMs / Math.max(1, solo.length * k))} ms per clip, `
+        + `${((soloMs / soloChars) * 1000).toFixed(0)} ms per 1000 characters, at 1 worker`, 'ok');
+      log('  Neither figure is comparable across devices on its own. A clip pays a fixed', 'dim');
+      log('  encoder cost per 30 s window whether or not anyone speaks, so ms-per-character', 'dim');
+      log('  is not clip-independent either: two minutes of this same recording measured', 'dim');
+      log('  9.66 and 5.96 ms/char on ONE desktop. Compare devices only when the clip', 'dim');
+      log('  fingerprints above match.', 'dim');
+    }
+    // Identical clips every pass should mean identical output every pass. If not, something
+    // is non-deterministic and the drift figures above carry that noise.
+    const charsPerPass = [...new Set(solo.map((r) => r.chars))];
+    if (charsPerPass.length > 1) {
+      log(`note: 1-worker output varied across passes (${charsPerPass.join(', ')} chars),`, 'dim');
+      log('  so some of the drift above is content, not the device.', 'dim');
     }
     log(`worker reuse: ${workers.map((w, i) => `#${i + 1}=${w.__clips}`).join(' ')} clips each`, 'dim');
 
