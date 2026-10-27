@@ -1738,15 +1738,52 @@ bottom; they are the project's memory and are not summarised away.
         Deferred rather than applied: the owner has an alternative allocation scheme to
         propose, and it would be rude as well as wasteful to rewrite the policy first.
 
-        **The caveat that matters more than the numbers.** Synthetic audio decodes to
-        nothing — probed directly, Whisper returns 4 characters at token caps of 16, 48 and
-        220, hitting end-of-sequence immediately — so the sweep measures **the encoder and
-        only the encoder**. The two halves parallelise oppositely: the encoder is wide
-        matmuls already threaded inside one worker, so extra workers contend; the decoder is
-        autoregressive, leaves cores idle, and should scale better. Real speech is
-        substantially decode (hence 17x on real audio against 67x here). **Every speed-up
-        above is therefore a floor**, and borrowed interview audio is now a blocker for the
-        final worker count rather than a nicety.
+        **Then it was re-run on real speech, and the synthetic numbers turned out to be
+        an over-estimate.** The owner objected that noise is not a proper way to measure
+        this, which was right: probed directly, Whisper returns 4 characters on noise at
+        token caps of 16, 48 AND 220 — end-of-sequence immediately — so the sweep had
+        measured the encoder alone. `scripts/fetch-sample-audio.mjs` now fetches two
+        fixtures with clean licences (AMI ES2002a, 21 min, 4 speakers, CC BY 4.0, **with
+        ground-truth word-level transcripts and speaker labels**; and a 40-minute US Army
+        oral-history interview, public domain by origin). On the AMI audio, same desktop,
+        **620 transcript characters per clip instead of 4**:
+
+        | workers | speed-up (real) | speed-up (noise) |
+        |---|---|---|
+        | 1 | 4457 ms/clip, 13x real time | 968 ms/clip, 62x |
+        | 2 | **1.39x** | 2.01x |
+        | 3 | 1.62x | 2.72x |
+        | 4 | **1.64x** (peak) | 3.06x |
+        | 6 | 1.60x | 3.06x |
+        | 8 | 1.56x | 2.95x |
+        | 10 | 1.56x | 3.11x |
+
+        Real speech costs **4.6x more per clip** and parallelises **half as well**. So the
+        synthetic sweep overstated concurrency by ~2x, and my prediction that it would
+        understate it was exactly backwards. The reason the prediction failed is worth
+        keeping: I argued the decoder "leaves cores idle, so extra workers fill them". The
+        idle cores are real but the conclusion does not follow — **decode is
+        memory-bandwidth bound, not core-starved.** Autoregressive generation streams the
+        weights and KV cache from RAM per token, so four workers each holding 219 MB contend
+        for bandwidth and cache instead of occupying spare cores. The encoder is dense
+        matmuls with good cache reuse, which is exactly why that half reached 3.1x.
+        Compute-bound parallelises; bandwidth-bound does not. Sixteen cores still peak at
+        1.64x, so the core count was never the bottleneck.
+
+        **Where that leaves the policy.** Two workers capture 85% of everything available
+        (1.39x of a 1.64x peak) for one extra 219 MB; three capture 99%; beyond three there
+        is nothing. The memory-budget arithmetic would spend ten models to buy 1.56x — less
+        than two workers achieve. It is not mistuned, it is measuring the wrong quantity.
+        Absolute speed is still fine: **an hour of audio in 4.5 min on one worker, 2.7 min
+        on four.** The honest recommendation is a default of 2, a ceiling of 3, memory as a
+        veto only, and adaptation on worker death — pending the owner's own allocation idea.
+
+        Still open on real audio: the **phone** has only ever run the synthetic sweep, so its
+        1.8x at two workers is probably nearer 1.3x (the spike grew a file picker for this,
+        since `sample-data/` is gitignored and never deployed). And **accuracy and speaker
+        detection remain entirely unmeasured** — the AMI fixture carries per-speaker
+        `words.xml` with start and end times, so word error rate and diarization error are
+        both measurable against it when that work starts.
 
         Three controls ran before any of this was believed: the harness was simulated in
         Node and returns 92% efficiency flat from 2 to 10 workers (a static round-robin

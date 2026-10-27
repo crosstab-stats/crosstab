@@ -449,18 +449,79 @@ died) and never a target. Cores predict the useful number; memory only vetoes it
    Probing one worker directly: **4 characters of output at caps of 16, 48 and 220** — the
    model hits end-of-sequence immediately on noise. The cap was never binding.
 
-### The limitation that control 3 exposes, which is the real caveat
+### The limitation that control 3 exposes — and which the next section settles
 
-Because noise decodes to nothing, **this benchmark measures the encoder and nothing else.**
-Whisper's two halves parallelise oppositely: the encoder is wide matmuls that already use
-several threads inside one worker (so more workers contend), while the decoder is
-autoregressive, leaves cores idle, and should scale *better* across workers. Real speech is
-substantially decoder work — the phone's 17x on real audio against 67x here is that
-difference, not the cap.
+Because noise decodes to nothing, **the figures above measure the encoder and nothing
+else.** Real speech is substantially decoder work. At the time this was written I predicted
+the decoder would scale *better* across workers, making the numbers above a floor. **That
+prediction was wrong — see below. They are a ceiling.**
 
-So **4 is a floor for the desktop's optimum, not a ceiling**, and the same for 2–3 on the
-phone. Raising the cap cannot test this; only real speech can. That makes borrowed interview
-audio a blocker for the final number rather than a nice-to-have.
+## Real speech, and the prediction it falsified
+
+Same desktop (16 cores / 32 GB, isolated), same harness, same clip length. Audio:
+`ami-ES2002a-mix-headset.wav` — 21.2 minutes of a four-person meeting, CC BY 4.0, fetched
+by `scripts/fetch-sample-audio.mjs`. Clips sampled evenly across the recording, each one
+processed exactly N times at concurrency N.
+
+**620 transcript characters per clip, against 4 on noise.** The decoder ran.
+
+| workers | jobs/s | speed-up | efficiency | noise, for comparison |
+|---|---|---|---|---|
+| 1 | 0.22 | — (4457 ms/clip, **13x** real time) | — | 968 ms/clip, 62x |
+| 2 | 0.31 | **1.39x** | 70% | 2.01x |
+| 3 | 0.36 | 1.62x | 54% | 2.72x |
+| 4 | 0.37 | **1.64x** (peak) | 41% | 3.06x |
+| 6 | 0.36 | 1.60x | 27% | 3.06x |
+| 8 | 0.35 | 1.56x | 19% | 2.95x |
+| 10 | 0.35 | 1.56x | 16% | 3.11x |
+
+Two things to take from this:
+
+**Real speech costs 4.6x more per clip** (4457 ms vs 968 ms). About three quarters of the
+real work is decode that noise never triggered, which is also why 13x here reconciles with
+the phone's 17x on real audio and not at all with 62x on noise.
+
+**Real speech parallelises half as well** — 1.64x peak against 3.11x. So the synthetic
+benchmark did not understate concurrency, it **overstated it by about 2x**, and every "these
+figures are a floor" note (now corrected here, in TODO.md and in the spike's own output) had
+it backwards.
+
+### Why it went the other way
+
+The claim was that the decoder "leaves cores idle, so extra workers fill them". The idle
+cores are real; the conclusion does not follow, because **decode is not core-starved, it is
+memory-bandwidth bound.** Autoregressive generation streams the weights and the KV cache out
+of RAM for every single token, so four workers each holding their own 219 MB contend for
+bandwidth and cache rather than occupying spare cores. The encoder is dense matmuls with
+good cache reuse, which is precisely why *that* half scaled to 3.1x. Compute-bound work
+parallelises; bandwidth-bound work does not.
+
+This is also why more cores did not help: the desktop has 16 and still peaks at 1.64x. The
+bottleneck was never the core count.
+
+### What it means for the policy
+
+- **Two workers capture 85% of everything available** (1.39x of a 1.64x peak), for one extra
+  219 MB. Three capture 99%.
+- **Beyond three, nothing.** 4 through 10 are 1.64, 1.60, 1.56, 1.56 — flat and drifting
+  down.
+- The memory-budget arithmetic would offer **10 workers to buy 1.56x**, which is five times
+  the models for less throughput than two workers get. It is not slightly miscalibrated; it
+  is measuring the wrong quantity.
+- Absolute performance is still good: **an hour of audio in 4.5 minutes on one worker, 2.7
+  minutes on four.** The case for concurrency is real but small, and it is about two
+  workers, not ten.
+
+### Still open on real audio
+
+The phone has only ever run the synthetic sweep. Since noise flatters concurrency by 2x,
+its 1.8x at two workers is probably nearer 1.3x in truth — worth confirming, which is what
+the spike's new file picker is for. Accuracy and speaker detection are also untouched: the
+AMI fixture ships word-level transcripts with speaker labels (`ami_public_manual_1.6.2.zip`,
+5183 files, per-speaker `words.xml` with start and end times), so word error rate and
+diarization error are measurable against it whenever that work starts.
+
+## Still unmeasured
 
 ### An instrument bug worth remembering
 
@@ -473,10 +534,11 @@ throttled to about once a minute, so an 8 s guard can take 60 s to fire.
 
 ## Still unmeasured
 
-- **The same sweep on real speech.** Answered for the encoder (above) and unanswered for
-  the decoder, which synthetic audio cannot exercise at all: Whisper emits 4 characters on
-  noise whatever the token cap. Since decode is the half that should scale best across
-  workers, every speed-up recorded here is a floor. One borrowed interview settles it.
+- **The same sweep on a phone, with real audio.** Done on the desktop (above); the phone
+  has only run synthetic noise, which flatters concurrency by about 2x. Its 1.8x at two
+  workers is likely nearer 1.3x. The file picker in the spike exists for this.
+- **Accuracy and speaker detection.** Nothing has measured either. The AMI fixture carries
+  the ground truth needed for both.
 - **Per-worker memory on iOS.** Not merely unmeasured but unmeasurable. The desktop's
   219 MB is the only figure we will get; whether a phone's arenas match is something only
   a crash will tell us — and one did, at worker 4.

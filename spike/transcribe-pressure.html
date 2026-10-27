@@ -31,6 +31,16 @@
   waits for a GC checkpoint a backgrounded tab may never reach, and it deadlocked this
   page after one worker. Throughput is measured either way.
 
+  USE REAL SPEECH. Synthetic noise decodes to nothing — 4 characters at token caps of 16,
+  48 and 220 — so it measures the encoder alone. Measured side by side on this machine, that
+  overstates concurrency by about 2x: 3.11x peak on noise against 1.64x on 21 minutes of
+  real meeting audio, which also costs 4.6x more per clip. Synthetic figures are an
+  optimistic ceiling, not a floor. Pass
+  ?audio=/sample-data/audio/<file> (see scripts/fetch-sample-audio.mjs for two fixtures
+  with clean licences, one of them carrying ground-truth transcripts and speaker labels) or
+  choose a file with the picker. The run reports characters per clip and calls itself out
+  in red when the decoder did not run.
+
   Run with ?n=4 to change how many workers it spins up, or sweep the whole curve in one
   load: ?sweep=2,3,4,6,8,10 (loads the largest, compares each). ?k=3 sets jobs per worker,
   ?tokens=48 caps the decoder — vary that last one, because it changes the answer.
@@ -62,10 +72,19 @@
 <p>What one transcription worker costs, whether N of them cost N times that, whether
    running N at once actually finishes faster, and what this device will admit about its
    own limits.</p>
+<p><label>Real speech (strongly preferred — see below):
+   <input type="file" id="file" accept="audio/*,video/*"></label></p>
+<p id="src" class="dim">No audio chosen: will fall back to synthetic noise, which measures
+   the ENCODER ONLY and understates how well concurrency works.</p>
 <button id="run">Measure</button>
 <div id="log">idle</div>
 
 <script type="module">
+// The app's own decoder, not a second implementation of it: handles mono/16 kHz directly
+// and resamples anything else through an OfflineAudioContext. If the spike decoded audio
+// differently from the thing that ships, it would be measuring a different program.
+import { decodeAudio } from '../core/transcribe.js';
+
 const logEl = document.getElementById('log');
 const lines = [];
 const log = (s, cls = '') => {
@@ -73,6 +92,19 @@ const log = (s, cls = '') => {
   logEl.innerHTML = lines.join('\n');
 };
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+
+// Audio chosen by the picker, kept out of the query string because a phone cannot reach
+// sample-data/ (gitignored, so never deployed) and borrowed interview audio arrives as a
+// file on someone's laptop rather than as a URL.
+let picked = null;
+document.getElementById('file').addEventListener('change', (e) => {
+  picked = e.target.files?.[0] ?? null;
+  const el = document.getElementById('src');
+  el.textContent = picked
+    ? `Will measure ${picked.name} (${mb(picked.size)}) — real speech, so the decoder runs.`
+    : 'No audio chosen: will fall back to synthetic noise (encoder only).';
+  el.className = picked ? 'ok' : 'dim';
+});
 
 /**
  * Total agent memory, or null where the browser will not say — and null rather than a hang
@@ -108,6 +140,10 @@ document.getElementById('run').addEventListener('click', async () => {
   // memory is skipped in a hidden tab. See measure(): the API waits for a GC checkpoint a
   // backgrounded tab may never reach, which deadlocked this page after one worker.
   const WANT_MEM = q.get('mem') !== '0' && !document.hidden;
+  // A URL for desktop runs against sample-data/ (fetch it with
+  // `node scripts/fetch-sample-audio.mjs`); the file picker covers the phone, which cannot
+  // reach gitignored files on a deployed build.
+  const AUDIO_URL = q.get('audio') || '';
   const N = SWEEP.length ? SWEEP[SWEEP.length - 1] : Number(q.get('n') || 4);
   if (!SWEEP.length && N >= 2) SWEEP.push(N);
 
@@ -207,10 +243,12 @@ document.getElementById('run').addEventListener('click', async () => {
     log('');
     log('(the throughput sweep needs at least 2 workers)', 'dim');
   } else {
-    // Synthetic audio, so the sweep needs no file and every device is handed identical
-    // work. The transcript is nonsense; the TIMING is the measurement, because Whisper's
-    // cost barely depends on content — a fixed encoder pass per 30 s window plus a capped
-    // decoder.
+    // Fallback only. Kept because it needs no file, but it is NOT a measurement of
+    // transcription: Whisper returns 4 characters on noise at any token cap, so the decoder
+    // never runs and the curve describes the encoder alone. Measured side by side, that
+    // OVERSTATES concurrency by about 2x — the encoder is dense matmuls that scale with
+    // cores, while decode streams weights from RAM per token and contends for bandwidth.
+    // Any run that lands here says so, loudly.
     const synth = (seconds) => {
       const sr = 16000;
       const a = new Float32Array(sr * seconds);
@@ -218,18 +256,66 @@ document.getElementById('run').addEventListener('click', async () => {
       let y = 0;
       for (let i = 0; i < a.length; i++) {
         s = (s * 1103515245 + 12345) & 0x7fffffff;
-        y = 0.97 * y + 0.03 * ((s / 0x7fffffff) * 2 - 1);   // lightly smoothed, speech-ish
+        y = 0.97 * y + 0.03 * ((s / 0x7fffffff) * 2 - 1);
         a[i] = Math.max(-1, Math.min(1, y * 6));
       }
       return a;
     };
-    const audio = synth(SECONDS);
 
-    const once = (w) => new Promise((resolve) => {
+    /**
+     * K clips of real speech, sampled EVENLY ACROSS the recording.
+     *
+     * Not from the top: interviews open with room noise and introductions, and a 21-minute
+     * meeting's first three minutes are not a fair sample of it. Spreading the clips means
+     * the per-clip cost averages over different speakers and speech densities.
+     *
+     * Each clip is reused exactly N times at concurrency N (job i runs clip i mod K), so
+     * total work scales precisely with N and nothing about content can tilt one row of the
+     * table against another.
+     */
+    const realClips = async (bytes, k, seconds) => {
+      const pcm = await decodeAudio(bytes);
+      const per = Math.round(seconds * 16000);
+      const fit = Math.floor(pcm.length / per);
+      if (fit < 1) throw new Error(`audio is only ${(pcm.length / 16000).toFixed(1)} s, need ${seconds} s`);
+      const take = Math.min(k, fit);
+      const span = Math.max(1, fit - 1);
+      const clips = [];
+      for (let j = 0; j < take; j++) {
+        const start = Math.round((j * span / Math.max(1, take - 1)) || 0) * per;
+        clips.push(pcm.slice(start, start + per));
+      }
+      return { clips, totalSeconds: pcm.length / 16000 };
+    };
+
+    let clips = null;
+    let srcLabel = '';
+    if (picked) {
+      log(`decoding ${picked.name} (${mb(picked.size)}) …`);
+      const r = await realClips(await picked.arrayBuffer(), K, SECONDS);
+      clips = r.clips;
+      srcLabel = `${picked.name}, ${(r.totalSeconds / 60).toFixed(1)} min of real speech`;
+    } else if (AUDIO_URL) {
+      log(`fetching ${AUDIO_URL} …`);
+      const res = await fetch(AUDIO_URL);
+      if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${AUDIO_URL}`);
+      const r = await realClips(await res.arrayBuffer(), K, SECONDS);
+      clips = r.clips;
+      srcLabel = `${AUDIO_URL.split('/').pop()}, ${(r.totalSeconds / 60).toFixed(1)} min of real speech`;
+    } else {
+      clips = Array.from({ length: K }, () => synth(SECONDS));
+      srcLabel = 'SYNTHETIC NOISE — encoder only, not a transcription measurement';
+    }
+    log(`audio: ${srcLabel}`, picked || AUDIO_URL ? 'ok' : 'bad');
+    if (clips.length < K) log(`  only ${clips.length} clips fit; K reduced from ${K}`, 'dim');
+
+    let chars = 0;      // the guard: 4 per clip means the decoder never ran
+    let clipsRun = 0;
+    const once = (w, clip) => new Promise((resolve) => {
       w.onmessage = (ev) => resolve(ev.data?.type === 'done' ? ev.data : { ms: null, err: ev.data?.message });
       w.onerror = (ev) => resolve({ ms: null, err: ev.message || 'worker died' });
       setTimeout(() => resolve({ ms: null, err: 'timed out after 300 s' }), 300000);
-      w.postMessage({ type: 'run', audio, maxTokens: TOKENS });
+      w.postMessage({ type: 'run', audio: clip, maxTokens: TOKENS });
     });
 
     /**
@@ -245,16 +331,18 @@ document.getElementById('run').addEventListener('click', async () => {
       let err = null;
       await Promise.all(ws.map(async (w) => {
         while (!err && claimed < jobs) {
+          const i = claimed;
           claimed += 1;                  // claim before awaiting, or two workers take one job
-          const r = await once(w);
+          const r = await once(w, clips[i % clips.length]);
           if (r.ms === null) err = r.err;
+          else { chars += r.chars || 0; clipsRun += 1; }
         }
       }));
       return err;
     };
 
     log('');
-    log(`--- throughput: ${SECONDS} s clips, ${K} per worker, decoder capped at ${TOKENS} tokens ---`);
+    log(`--- throughput: ${clips.length} x ${SECONDS} s clips per worker, decoder cap ${TOKENS} ---`);
 
     // One serial baseline, in cost per job. Re-measuring it for every N would triple the
     // runtime and tell us nothing new.
@@ -304,15 +392,27 @@ document.getElementById('run').addEventListener('click', async () => {
           log(`the curve flattens past ${rows[kneeAt - 1].n}: the next worker adds only`, 'dim');
           log(`${marg[kneeAt].toFixed(2)}x, which is memory spent for almost no time saved.`, 'dim');
         }
+        // ---- did the decoder actually run? ------------------------------------------
+        // This is the check that should have existed from the start. A sweep over audio
+        // that decodes to nothing measures the encoder alone, prints a confident table,
+        // and understates concurrency — which is exactly what happened.
+        const perClip = clipsRun ? chars / clipsRun : 0;
         log('');
-        log('CAVEAT, and it may be the important part of this run:', 'dim');
-        log(`the decoder is capped at ${TOKENS} tokens. The phone's serial pass ran at 67x real`, 'dim');
-        log('time where real audio ran at 17x, so the cap removes most of the decoder work.', 'dim');
-        log('Whisper parallelises OPPOSITELY in its two halves: the encoder is wide matmuls', 'dim');
-        log('that already use several threads inside one worker, so extra workers contend;', 'dim');
-        log('the decoder is autoregressive and leaves cores idle, so extra workers fill them.', 'dim');
-        log('If the speed-up RISES with ?tokens=, real interviews scale better than this and', 'dim');
-        log('these figures are a floor. Run it twice before believing either number.', 'dim');
+        log(`transcript: ${chars} characters over ${clipsRun} clips (${perClip.toFixed(0)} per clip)`,
+            perClip > 200 ? 'ok' : 'bad');
+        if (perClip <= 200) {
+          log('  THAT IS TOO LITTLE TEXT FOR A MINUTE OF SPEECH, so the decoder barely ran', 'bad');
+          log('  and this curve describes the ENCODER only. Measured against real speech,', 'dim');
+          log('  encoder-only OVERSTATES concurrency by about 2x (3.11x against 1.64x), so', 'dim');
+          log('  these figures are an OPTIMISTIC CEILING, not an answer. The encoder is', 'dim');
+          log('  dense matmuls that scale with cores; decode streams weights from RAM per', 'dim');
+          log('  token and contends for bandwidth instead. Choose real audio above.', 'dim');
+        } else {
+          log('  Real decode work, so this curve is the one the allocation policy may cite.', 'dim');
+          log(`  ${(SECONDS * 1000 / perJob).toFixed(0)}x real time per worker; an hour of audio`, 'dim');
+          log(`  takes about ${(3600 / (SECONDS * 1000 / perJob) / 60).toFixed(1)} min on one worker and about`, 'dim');
+          log(`  ${(3600 / (SECONDS * 1000 / perJob) / 60 / best.speedup).toFixed(1)} min at ${best.n}.`, 'dim');
+        }
       }
     }
   }
