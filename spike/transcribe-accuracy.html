@@ -115,6 +115,15 @@ const SPEAKER = (q.get('speaker') || '').toUpperCase();
 // recording isolates recognition from overlap, with no second download and no new variables.
 const SOLO = q.get('solo') === '1';
 const SOLO_MIN = Math.max(0.5, Number(q.get('soloMin') || 2));
+// ?model=base|small|large — the weights, which is the lever with a known price.
+const MODELS = {
+  tiny: ['onnx-community/whisper-tiny', 39],
+  base: ['onnx-community/whisper-base', 73],
+  small: ['onnx-community/whisper-small', 238],
+  large: ['onnx-community/whisper-large-v3-turbo', 1035],
+};
+const MODEL_KEY = (q.get('model') || 'tiny').toLowerCase();
+const MODEL = MODELS[MODEL_KEY] ?? MODELS.tiny;
 const AUDIO = q.get('audio') || '/sample-data/audio/ami-ES2002a-mix-headset.wav';
 
 /**
@@ -250,8 +259,9 @@ const WORKER_URL = new URL('./transcribe-pressure-worker.js', import.meta.url);
 const loadWorker = (w) => new Promise((resolve) => {
   w.onmessage = (e) => resolve(e.data?.type === 'ready' ? true : (e.data?.message || 'load failed'));
   w.onerror = (e) => resolve(e.message || 'worker failed to load');
-  setTimeout(() => resolve('timed out loading'), 180000);
-  w.postMessage({ type: 'load' });
+  // A gigabyte of weights over a cold cache needs more than three minutes.
+  setTimeout(() => resolve('timed out loading'), 1800000);
+  w.postMessage({ type: 'load', model: MODEL[0] });
 });
 
 const runOn = (w, audio, gen = null) => new Promise((resolve) => {
@@ -405,7 +415,13 @@ document.getElementById('run').addEventListener('click', async () => {
       log('  The joins between stretches are artificial and may cost a word apiece.', 'dim');
     }
 
-    status(`loading ${WORKERS} workers…`);
+    log('');
+    log(`model: ${MODEL[0]} (${MODEL[1]} MB of q8 weights)`, 'ok');
+    if (MODEL[1] > 500) {
+      log('  First run downloads a gigabyte and the worker will hold several times that.', 'dim');
+      log('  Desktop only: this phone died loading a fourth 219 MB worker.', 'dim');
+    }
+    status(`loading ${WORKERS} worker(s), ${MODEL[1]} MB of weights…`);
     for (let i = 0; i < WORKERS; i++) {
       const w = new Worker(WORKER_URL, { type: 'module' });
       const ok = await loadWorker(w);

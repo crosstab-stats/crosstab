@@ -92,12 +92,17 @@ self.onmessage = async (e) => {
     const url = e.data.libUrl || 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1';
     lib = await import(/* @vite-ignore */ url);
     // Held on `self` so it cannot be collected while we are measuring.
+    // Selectable, because the model is the most obvious accuracy lever and the one with a
+    // known price: 39 MB (tiny), 73 MB (base), 238 MB (small), 1034 MB (large-v3-turbo) of
+    // q8 weights. Memory in the worker measured ~5.6x the weights for tiny, so the large
+    // model is a desktop proposition at best.
+    self.model = e.data.model || 'onnx-community/whisper-tiny';
     self.pipe = await lib.pipeline(
       'automatic-speech-recognition',
-      'onnx-community/whisper-tiny',
-      { device: 'wasm', dtype: 'q8' },
+      self.model,
+      { device: 'wasm', dtype: e.data.dtype || 'q8' },
     );
-    self.postMessage({ type: 'ready' });
+    self.postMessage({ type: 'ready', model: self.model });
   } catch (err) {
     self.postMessage({ type: 'error', message: String(err?.message ?? err) });
   }
