@@ -122,8 +122,10 @@ const MODELS = {
   small: ['onnx-community/whisper-small', 238],
   large: ['onnx-community/whisper-large-v3-turbo', 1035],
 };
-const MODEL_KEY = (q.get('model') || 'tiny').toLowerCase();
-const MODEL = MODELS[MODEL_KEY] ?? MODELS.tiny;
+// ?models=tiny,base,small,large sweeps the ladder in one run, loading each model's weights
+// once and freeing them before the next. ?model= still works for a single one.
+const WANT_MODELS = String(q.get('models') || q.get('model') || 'tiny')
+  .split(',').map((x) => x.trim().toLowerCase()).filter((x) => x in MODELS);
 const AUDIO = q.get('audio') || '/sample-data/audio/ami-ES2002a-mix-headset.wav';
 
 /**
@@ -244,6 +246,20 @@ function bagRecall(ref, hyp) {
   return ref.length ? hit / ref.length : NaN;
 }
 
+/**
+ * Does the model actually TRANSCRIBE disfluencies, or silently drop them?
+ *
+ * This decides whether "keep fillers" can be offered as a product option at all. A toggle
+ * that filters a transcript is trivial; a toggle that claims to restore words the model
+ * never emitted is a lie. The human reference here is 5.6% filler tokens, and filler rate
+ * varies 1.9x BETWEEN SPEAKERS (4.5% to 8.5%) — which for a linguist or a cultural
+ * anthropologist is not noise, it is the finding.
+ */
+function fillerStats(words) {
+  const n = words.filter((w) => FILLERS.has(w)).length;
+  return { count: n, rate: words.length ? n / words.length : 0 };
+}
+
 const report = (name, s) => {
   log(`  ${pad(name, 26)}${pad(pct(s.wer), 9)}${pad(s.sub, 7)}${pad(s.del, 7)}${pad(s.ins, 7)}`
     + `${pad(s.refWords, 8)}${s.hypWords}`,
@@ -256,12 +272,12 @@ const report = (name, s) => {
 
 const WORKER_URL = new URL('./transcribe-pressure-worker.js', import.meta.url);
 
-const loadWorker = (w) => new Promise((resolve) => {
+const loadWorker = (w, repo) => new Promise((resolve) => {
   w.onmessage = (e) => resolve(e.data?.type === 'ready' ? true : (e.data?.message || 'load failed'));
   w.onerror = (e) => resolve(e.message || 'worker failed to load');
   // A gigabyte of weights over a cold cache needs more than three minutes.
   setTimeout(() => resolve('timed out loading'), 1800000);
-  w.postMessage({ type: 'load', model: MODEL[0] });
+  w.postMessage({ type: 'load', model: repo });
 });
 
 const runOn = (w, audio, gen = null) => new Promise((resolve) => {
@@ -415,111 +431,121 @@ document.getElementById('run').addEventListener('click', async () => {
       log('  The joins between stretches are artificial and may cost a word apiece.', 'dim');
     }
 
-    log('');
-    log(`model: ${MODEL[0]} (${MODEL[1]} MB of q8 weights)`, 'ok');
-    if (MODEL[1] > 500) {
-      log('  First run downloads a gigabyte and the worker will hold several times that.', 'dim');
-      log('  Desktop only: this phone died loading a fourth 219 MB worker.', 'dim');
-    }
-    status(`loading ${WORKERS} worker(s), ${MODEL[1]} MB of weights…`);
-    for (let i = 0; i < WORKERS; i++) {
-      const w = new Worker(WORKER_URL, { type: 'module' });
-      const ok = await loadWorker(w);
-      if (ok !== true) { log(`worker ${i + 1} failed: ${ok}`, 'bad'); w.terminate(); break; }
-      workers.push(w);
-    }
-    if (!workers.length) throw new Error('no workers loaded');
-    log('');
-    log(`--- transcribing: ${workers.length} workers, ${SEGMENT} s segments, `
-      + `${OVERLAP} s overlap ---`);
-
-    // ---- transcribe once per anti-repetition setting -----------------------------------
+    // ---- one model at a time, over the WHOLE file ---------------------------------------
+    //
+    // The ladder was first measured on a 2-minute window and the owner was right to reject
+    // it: 305 of 2600 reference words, from the one stretch where four people introduce
+    // themselves. A test that does not run the path the user runs is not a valid test, and
+    // the user transcribes a whole interview.
     const refText = refWords.map((w) => w.w).join(' ');
     const refN = normalise(refText);
     const refNoFill = normalise(refText, { dropFillers: true });
+    // The loop detector needs the HUMAN transcript as its control, not a fixed number.
+    // Vocabulary saturates with length: this reference is 0.463 unique over two minutes and
+    // 0.237 over seventeen. A fixed 0.35 threshold therefore calls every long correct
+    // transcript a loop, which it did to `base` (0.246) until this was checked.
+    const refUniq = refN.length ? new Set(refN).size / refN.length : 1;
     log('');
-    log(`--- scoring ${WANT_GEN.length} setting${WANT_GEN.length > 1 ? 's' : ''} against `
-      + `${refN.length} reference words ---`);
-    log(`  ${pad('setting', 16)}${pad('WER', 8)}${pad('noFill', 8)}${pad('sub', 6)}${pad('del', 6)}`
-      + `${pad('ins', 6)}${pad('hyp', 7)}${pad('uniq', 7)}${pad('recall', 8)}x real`);
+    log(`--- ${WANT_MODELS.length} model(s) x ${WANT_GEN.length} setting(s) over `
+      + `${(pcm.length / SR / 60).toFixed(1)} min, ${refN.length} reference words ---`);
+    log(`  ${pad('model/setting', 22)}${pad('WER', 8)}${pad('noFill', 8)}${pad('sub', 6)}`
+      + `${pad('del', 6)}${pad('ins', 6)}${pad('hyp', 7)}${pad('uniq', 7)}${pad('recall', 8)}x real`);
 
     const runs = [];
-    for (const name of WANT_GEN) {
-      status(`transcribing with ${name}…`);
-      const t0 = performance.now();
-      const out = await transcribeSegments(pcm, workers,
-        (d, n) => status(`${name}: segment ${d}/${n}…`), GEN_VARIANTS[name]);
-      const ms = performance.now() - t0;
-      if (out.err) { log(`  ${pad(name, 16)}FAILED — ${out.err}`, 'bad'); continue; }
-      const hyp = normalise(out.text);
-      const s = score(refN, hyp);
-      const sNo = score(refNoFill, normalise(out.text, { dropFillers: true }));
-      // The unique-word ratio is the loop detector: a transcript that says "all right" a
-      // hundred times scores a plausible-looking WER while being worthless.
-      const uniq = hyp.length ? new Set(hyp).size / hyp.length : 0;
-      const recall = bagRecall(refN, hyp);
-      runs.push({ name, s, sNo, uniq, recall, ms, text: out.text });
-      log(`  ${pad(name, 16)}${pad(pct(s.wer), 8)}${pad(pct(sNo.wer), 8)}${pad(s.sub, 6)}`
-        + `${pad(s.del, 6)}${pad(s.ins, 6)}${pad(s.hypWords, 7)}${pad(uniq.toFixed(3), 7)}`
-        + `${pad(pct(recall), 8)}${(pcm.length / SR / (ms / 1000)).toFixed(1)}`,
-          uniq < 0.35 ? 'bad' : (s.wer < 0.45 ? 'ok' : ''));
-    }
-    if (!runs.length) throw new Error('every setting failed');
-
-    // ---- one call, to price segmentation ------------------------------------------------
-    let single = null;
-    if (WANT_SINGLE) {
-      status('one call, for comparison…');
-      const r = await runOn(workers[0], new Float32Array(pcm), GEN_VARIANTS[WANT_GEN[0]]);
-      if (r.ms !== null) {
-        single = score(refN, normalise(r.text ?? ''));
-        log(`  ${pad('(one call)', 16)}${pad(pct(single.wer), 8)}${pad('', 8)}${pad(single.sub, 6)}`
-          + `${pad(single.del, 6)}${pad(single.ins, 6)}${pad(single.hypWords, 7)}`, 'dim');
-      } else {
-        log(`  one call FAILED — ${r.err}`, 'bad');
+    for (const key of WANT_MODELS) {
+      const [repo, weightsMb] = MODELS[key];
+      // A gigabyte of weights per worker is not something to multiply by three.
+      const nWorkers = weightsMb > 500 ? 1 : WORKERS;
+      status(`${key}: loading ${nWorkers} worker(s), ${weightsMb} MB of weights...`);
+      const ws = [];
+      for (let i = 0; i < nWorkers; i++) {
+        const w = new Worker(WORKER_URL, { type: 'module' });
+        const ok = await loadWorker(w, repo);
+        if (ok !== true) { log(`  ${key}: worker ${i + 1} failed - ${ok}`, 'bad'); w.terminate(); break; }
+        ws.push(w);
       }
+      if (!ws.length) { log(`  ${pad(key, 22)}could not load`, 'bad'); continue; }
+
+      for (const genName of WANT_GEN) {
+        const label = WANT_GEN.length > 1 ? `${key}/${genName}` : key;
+        const t0 = performance.now();
+        const out = await transcribeSegments(pcm, ws,
+          (d, n) => status(`${label}: segment ${d}/${n} - `
+            + `${((performance.now() - t0) / 60000).toFixed(1)} min in`),
+          GEN_VARIANTS[genName]);
+        const ms = performance.now() - t0;
+        if (out.err) { log(`  ${pad(label, 22)}FAILED - ${out.err}`, 'bad'); continue; }
+        const hyp = normalise(out.text);
+        const s = score(refN, hyp);
+        const sNo = score(refNoFill, normalise(out.text, { dropFillers: true }));
+        const uniq = hyp.length ? new Set(hyp).size / hyp.length : 0;
+        const recall = bagRecall(refN, hyp);
+        const fill = fillerStats(hyp);
+        runs.push({ name: label, model: key, gen: genName, weightsMb, workers: ws.length,
+          s, sNo, uniq, recall, ms, fill, text: out.text });
+        log(`  ${pad(label, 22)}${pad(pct(s.wer), 8)}${pad(pct(sNo.wer), 8)}${pad(s.sub, 6)}`
+          + `${pad(s.del, 6)}${pad(s.ins, 6)}${pad(s.hypWords, 7)}${pad(uniq.toFixed(3), 7)}`
+          + `${pad(pct(recall), 8)}${(pcm.length / SR / (ms / 1000)).toFixed(1)}`,
+            uniq < refUniq * 0.5 ? 'bad' : (s.wer < 0.45 ? 'ok' : ''));
+      }
+      for (const w of ws) w.terminate();      // free the weights before the next model
     }
+    if (!runs.length) throw new Error('every model failed');
 
     const best = runs.reduce((a, b) => (b.s.wer < a.s.wer ? b : a));
-    const base = runs.find((r) => r.name === 'default') ?? runs[0];
     window.__texts = { reference: refText, best: best.text, bestName: best.name };
 
     // ---- what it means -------------------------------------------------------------------
     log('');
     log('--- reading this ---');
-    log(`uniq is the loop detector. Natural speech sits near 0.5; the first run against this`, 'dim');
-    log('audio came back at 0.287 — "okay okay all right all right all right…" — which is a', 'dim');
-    log('malfunction, not a recognition result. Any row below ~0.35 is scoring a loop.', 'dim');
+    log(`uniq is the loop detector, and the HUMAN transcript is its control: this reference`, 'dim');
+    log(`scores ${refUniq.toFixed(3)} over ${(pcm.length / SR / 60).toFixed(1)} min. Vocabulary saturates with length (0.463 over`, 'dim');
+    log('two minutes, 0.237 over seventeen), so a fixed threshold calls long correct', 'dim');
+    log('transcripts loops. Under about half the reference ratio is a real loop.', 'dim');
     log('');
-    if (base.uniq < 0.35) {
-      log(`The shipping setting LOOPS on this audio (uniq ${base.uniq.toFixed(3)}, `
-        + `WER ${pct(base.s.wer)}).`, 'bad');
+    for (const r of runs) {
+      const rel = r.uniq / refUniq;
+      if (rel < 0.5) {
+        log(`${r.name} LOOPS: uniq ${r.uniq.toFixed(3)}, ${rel.toFixed(2)}x the human ratio`, 'bad');
+      } else {
+        log(`${r.name} does not loop: uniq ${r.uniq.toFixed(3)}, ${rel.toFixed(2)}x human`, 'dim');
+      }
     }
-    if (best.name !== base.name) {
-      log(`${best.name} is the best of those tried: ${pct(best.s.wer)} WER against `
-        + `${pct(base.s.wer)}, uniq ${best.uniq.toFixed(3)} against ${base.uniq.toFixed(3)}.`, 'ok');
-      log(`  That is ${((base.s.wer - best.s.wer) * 100).toFixed(1)} points, from one`, 'dim');
-      log('  generation option the shipping worker does not set.', 'dim');
-    } else if (runs.length > 1) {
-      log('None of the anti-repetition settings beat the default, so looping here is not', 'bad');
-      log('something a generation option fixes — it needs the temperature-fallback retry', 'dim');
-      log('that transformers.js does not expose, or a bigger model.', 'dim');
+    // ---- can "keep fillers" be offered at all? ------------------------------------------
+    const refFill = fillerStats(refN);
+    log('');
+    log(`--- disfluencies: the human transcript is ${pct(refFill.rate)} filler `
+      + `(${refFill.count} of ${refN.length} words) ---`);
+    for (const r of runs) {
+      const share = refFill.count ? r.fill.count / refFill.count : 0;
+      log(`  ${pad(r.name, 22)}${pad(r.fill.count + ' fillers', 16)}${pad(pct(r.fill.rate), 9)}`
+        + `${pct(share)} of the reference's`, share > 0.5 ? 'ok' : 'bad');
     }
-    if (best.s.wer > 0.5) {
-      log('');
-      log(`Even the best setting is ${pct(best.s.wer)} WER, which is not a usable transcript.`, 'bad');
-      log('  whisper-tiny is the smallest model there is and AMI is four people talking over', 'dim');
-      log('  each other; `base` and `small` are the next measurement, not a UI.', 'dim');
+    log('  If a model emits almost none, "keep fillers" CANNOT be a product toggle: the', 'dim');
+    log('  words were never transcribed and no post-processing restores them. Filler rate', 'dim');
+    log('  differs 1.9x between speakers in this reference, so for linguistics and cultural', 'dim');
+    log('  anthropology that loss is the finding, not formatting.', 'dim');
+
+    log('');
+    log(`best: ${best.name} at ${pct(best.s.wer)} WER (${pct(best.sNo.wer)} without fillers), `
+      + `${best.weightsMb} MB of weights`, 'ok');
+    const hour = (r) => {
+      const rt = (pcm.length / SR) / (r.ms / 1000);
+      return `${(3600 / rt / 60).toFixed(0)} min per hour of audio on ${r.workers} worker(s)`;
+    };
+    log(`  ${hour(best)}`, 'dim');
+    // The cheapest model within a few points of the best is usually the right default.
+    const nearBest = runs.filter((r) => r.s.wer <= best.s.wer + 0.05)
+      .reduce((a, b) => (b.weightsMb < a.weightsMb ? b : a), best);
+    if (nearBest.name !== best.name) {
+      log(`cheapest within 5 points: ${nearBest.name} at ${pct(nearBest.s.wer)}, `
+        + `${nearBest.weightsMb} MB - ${hour(nearBest)}`, 'ok');
     }
-    if (single) {
-      const diff = base.s.wer - single.wer;
-      log('');
-      log(`segmenting costs ${diff >= 0 ? '+' : ''}${(diff * 100).toFixed(1)} points of WER`
-        + ` (${pct(single.wer)} in one call vs ${pct(base.s.wer)} segmented)`,
-          Math.abs(diff) < 0.02 ? 'ok' : 'bad');
-      log('  The one-call path crashes a phone on a long interview, so this is the price of', 'dim');
-      log('  the only shape that works, not a choice between equals.', 'dim');
-    }
+    log('');
+    log('AMI is four people in a meeting interrupting each other, chosen because it is the', 'dim');
+    log('only free corpus with word-level ground truth AND speaker labels. An interview is', 'dim');
+    log('one or two people taking turns, which is a much easier problem. These numbers are', 'dim');
+    log('a floor for the product, not a prediction of it.', 'dim');
     status('done', 'ok');
   } catch (err) {
     log('');

@@ -976,6 +976,93 @@ These are two-minute windows, 305 reference words. The gaps (105 -> 37 -> 33 -> 
 larger than sampling noise could explain, but the individual percentages carry real
 uncertainty and should not be quoted to a decimal place.
 
+## The ladder over the WHOLE file, and what it costs to be wrong about samples
+
+The owner rejected the two-minute ladder: "a test that doesn't run the path the user will
+run is not a valid test", and users transcribe whole interviews. Rerun over the complete
+annotated span — 17.7 minutes, 2633 reference words, 8.6x the previous sample — segmented
+across workers, which is the shape that ships:
+
+| model | weights | WER | no fillers | accuracy | sub | del | ins | uniq | recall | x real |
+|---|---|---|---|---|---|---|---|---|---|---|
+| tiny | 39 MB | **174.7%** | 184.6% | — | 1761 | 142 | 2698 | 0.063 | 55.1% | 5.2 |
+| base | 73 MB | 37.7% | 33.8% | 62 / 66% | 320 | 537 | 136 | 0.246 | 76.3% | 6.4 |
+| small | 238 MB | 31.2% | 26.9% | 69 / 73% | 219 | 515 | 87 | 0.252 | 77.9% | 2.7 |
+| large-v3-turbo | 1035 MB | **27.0%** | **22.9%** | **73 / 77%** | 176 | 470 | 66 | 0.254 | 80.0% | 0.5 |
+
+**base and small were well estimated by the short window** (37.0 -> 37.7, 32.8 -> 31.2).
+**tiny was not**: 105.5% -> 174.7%. The two-minute sample flattered the one model that
+fails, which is the worst possible direction for a sampling error to point.
+
+Practical cost per hour of audio: base 9 min, small 22 min, large 118 min (one worker;
+large cannot be multiplied across workers at a gigabyte of weights, and a phone cannot hold
+it at all).
+
+### The loop detector was wrong, and the human transcript fixed it
+
+A fixed unique-word-ratio threshold of 0.35 flagged `base` at 0.246 as looping. It is not.
+**Vocabulary saturates with length**: this reference scores 0.463 unique over two minutes
+and **0.237 over seventeen**. The control is the human transcript, not a constant:
+
+| | uniq | vs human |
+|---|---|---|
+| reference | 0.237 | — |
+| tiny | 0.063 | **0.27x — looping** |
+| base | 0.246 | 1.04x — normal |
+| small | 0.252 | 1.06x — normal |
+| large | 0.254 | 1.07x — normal |
+
+Same class of error as reporting "40 speaker turns in 120 seconds" from a word-level
+transcript: a derived statistic that was never checked against the thing itself. The owner
+listened and counted five. The detector now divides by the reference ratio.
+
+## Disfluencies: "keep fillers" cannot be a toggle
+
+The owner's point, which is sharper than it looks: a Sociology interview probably does not
+care about "um", a Linguistics interview may care enormously, and there are Cultural
+Anthropology papers whose entire result is a comparison of filler use between speakers.
+Can retention be a user option?
+
+**Measured on the human reference:** 168 filler tokens, **6.4% of all words**, and the rate
+varies **1.9x between speakers** (4.5% for one participant, 8.5% for another). That spread
+is exactly the kind of thing somebody publishes.
+
+**Measured on the best transcript available** (large-v3-turbo, full file):
+
+| | words | fillers | rate |
+|---|---|---|---|
+| human reference | 2633 | 168 | 6.4% |
+| large-v3-turbo | 2229 | **17** | **0.8%** |
+
+**Whisper's best model emits 10.1% of the disfluencies that were spoken.** So:
+
+- **"Hide fillers" is trivially possible** — post-processing on a stored transcript,
+  reversible, costs nothing.
+- **"Keep fillers" is not possible at all.** The words were never transcribed and no
+  post-processing restores them. A toggle offering it would be a lie.
+- **Worse than absent**: a researcher comparing filler rates between speakers would get a
+  confident number from a 10% sample captured non-uniformly. That is not a degraded finding,
+  it is a false one.
+
+### The one lever, and why it is not available either
+
+Whisper's documented way to bias toward verbatim output is `prompt_ids` — prompt the decoder
+with disfluent text so it continues in that style. transformers.js 4.3.1 **declares the
+field in its generation-config type and does not implement the helper**: `get_prompt_ids`
+appears exactly once, in a doc comment, and `prompt_ids` is read nowhere in the code. The
+destructure that would consume it is commented out in favour of `...kwargs`, so hand-built
+token IDs *might* reach generation — unverified, and a spike of its own.
+
+### What this means for the product
+
+Store whatever the model emits, verbatim, and filter at VIEW time rather than at
+transcription time — filtering on the way in is irreversible, and this project already holds
+that line elsewhere ([[no-inplace-replace]], output outlives its maker). Offer "hide
+disfluencies" as a display option. Do **not** offer a verbatim or filler-retention mode, and
+**say so where a researcher will see it**: auto-transcription here is not verbatim, it
+captures about a tenth of disfluencies, and anyone studying them should import their own
+transcript — a path the product already treats as first-class.
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The

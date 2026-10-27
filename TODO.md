@@ -1941,6 +1941,41 @@ bottom; they are the project's memory and are not summarised away.
         and 0.5x real time — an hour of audio takes two hours, and the phone cannot hold the
         weights). Caveat: 2-minute windows, so the gaps are solid but the decimals are not.
 
+        **THE LADDER, RERUN OVER THE WHOLE FILE** after the owner rejected the
+        2-minute sample ("a test that doesn't run the path the user will run is not a valid
+        test"). 17.7 min, 2633 reference words, segmented across workers:
+
+        | model | weights | WER | no fillers | accuracy | x real | per hour |
+        |---|---|---|---|---|---|---|
+        | tiny | 39 MB | **174.7%** | 184.6% | — | 5.2 | — |
+        | base | 73 MB | 37.7% | 33.8% | 62/66% | 6.4 | 9 min |
+        | small | 238 MB | 31.2% | 26.9% | 69/73% | 2.7 | 22 min |
+        | large-v3-turbo | 1035 MB | **27.0%** | **22.9%** | **73/77%** | 0.5 | 118 min |
+
+        base and small were well estimated by the short window (37.0->37.7, 32.8->31.2);
+        **tiny was not** (105.5->174.7). The small sample flattered the one model that
+        fails. Also fixed: the loop detector used a fixed unique-ratio threshold and called
+        `base` a loop. Vocabulary saturates with length — the HUMAN reference is 0.463 over
+        two minutes and 0.237 over seventeen — so the reference is the control. Against it:
+        tiny 0.27x (looping), base/small/large 1.04-1.07x (normal).
+
+        **DISFLUENCIES CANNOT BE A TOGGLE.** The owner asked whether "ignore filler" could
+        be user-selectable, noting that Sociology may not care but Linguistics will, and
+        that whole Cultural Anthropology papers compare filler use between speakers. The
+        human reference is **168 fillers, 6.4% of words, varying 1.9x between speakers**
+        (4.5% to 8.5%) — that spread is somebody's finding. large-v3-turbo emits **17
+        fillers, 0.8%: 10.1% of what was spoken.** So "hide fillers" is trivial
+        post-processing, but "keep fillers" is impossible — the words were never
+        transcribed, and a toggle claiming otherwise would hand a researcher a confident
+        number built on a tenth of the data, captured non-uniformly. Whisper's `prompt_ids`
+        lever is declared but NOT implemented in transformers.js 4.3.1 (`get_prompt_ids`
+        appears once, in a doc comment).
+
+        Decided: store verbatim, filter at VIEW time never at transcription time, offer
+        "hide disfluencies" only, and document plainly that auto-transcription is not
+        verbatim so disfluency researchers import their own transcripts — already a
+        first-class path.
+
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
         app), chunking and progress for long recordings, cancellation, model choice UI, and
