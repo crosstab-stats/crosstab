@@ -621,11 +621,111 @@ loudest 3. On this recording that narrowed the spread rather than eliminating it
 characters per clip — which is why the fingerprint, not the level, is what makes a
 comparison valid.
 
+## Whole interviews — and the bug that invalidates the absolute numbers above
+
+The owner asked whether the spikes were still transcribing clips, since users transcribe
+entire interviews. They were, and worse.
+
+### Every "60 s clip" was 30 seconds
+
+`spike/transcribe-pressure-worker.js` called the pipeline with **no `chunk_length_s`**, so
+Whisper ran a single pass over its 30-second receptive field and silently truncated
+anything longer. Proved by handing it 60 s and 30 s of the same audio: **identical output,
+261 characters each**. Meanwhile `core/transcribe-worker.js` — the one that ships — has
+always passed `chunk_length_s: 30, stride_length_s: 5, return_timestamps: true`. The spike
+was measuring a configuration the app never uses.
+
+With the shipping options the same minute costs **17.0 s instead of 3.0 s**, and reports
+coverage of 59.96 s instead of nothing. **Every real-time factor from the clip spikes is
+therefore wrong, overstated roughly twofold or more.**
+
+What survives: the concurrency RATIOS, because they compared configurations under
+identical (wrong) conditions, and measuring them properly in long-form mode lands close —
+1.39x to 1.51x at two workers, 1.62x to 1.71x at three.
+
+### `return_timestamps: true` costs 2.9x
+
+Same minute, same chunking, one option changed (desktop, 16 cores):
+
+| config | 60 s costs | real time | an hour |
+|---|---|---|---|
+| chunked, no timestamps | 5910 ms | 10.2x | 5.9 min |
+| chunked, **with timestamps — ships today** | 17276 ms | **3.5x** | **17 min** |
+| chunked, no stride, no timestamps | 5157 ms | 11.6x | 5.2 min |
+
+Timestamps nearly triple the cost of every transcription the app performs, and the stride
+adds another 15%. They are needed for WebVTT cues and for aligning diarized speaker turns
+to text — but a user who wants a plain transcript is paying 2.9x for neither. **This is the
+largest single performance lever in the shipping configuration** and it is a product
+decision, so it is recorded rather than changed. It also reconciles the old phone figure
+(17x, measured without timestamps) with today's desktop 3.5x.
+
+### One interview, and whether splitting it helps
+
+This is the architectural half. A user transcribes ONE interview in ONE call, and Whisper
+then processes ~80 chunks sequentially inside a single worker — so **every concurrency
+number measured before this applies only to a BATCH of interviews.** For one interview at
+a time, extra workers do nothing at all.
+
+`spike/transcribe-interview.html`, desktop, 3 minutes of the Army interview, 60 s segments
+with 2 s overlap:
+
+| config | wall | real time | vs today | characters |
+|---|---|---|---|---|
+| one call (ships) | 0m50s | 3.59x | — | 3587 |
+| split x1 (control) | 0m46s | 3.94x | **1.10x** | 3562 |
+| split x2 | 0m33s | 5.42x | 1.51x | 3562 |
+| split x3 | 0m29s | 6.13x | **1.71x** | 3562 |
+
+**Segmentation is free — slightly better than free.** On one worker it came out 8.9%
+FASTER than the single long call, despite transcribing 2.2% more audio because of the
+overlap. So the usual objection (per-call overhead, losing cross-chunk context) does not
+show up at this segment size.
+
+**Splitting across three workers takes an hour of audio from 16m44s to 9m48s.** That is the
+only route by which extra workers help the common case, and 1.71x matches the phone's
+batch figure of 1.72x at three workers.
+
+### A second, independent reason to segment
+
+`core/transcribe-worker.js` reports progress for the model download and for speaker
+embedding, but **not during the transcription call itself** — `pipe(audio, …)` is a single
+await, and `cancelled` is only checked before and after it. A 40-minute interview is
+therefore **11+ minutes of one un-cancellable, un-progressing await**, and the Stop button
+cannot take effect until it finishes. Segmenting gives progress and cancellation at
+segment granularity for free.
+
+Not the only route, though: transformers.js 4.3.1 exposes `callback_function` and
+`streamer` (there is no `chunk_callback`), so token-level progress and `stopping_criteria`
+cancellation inside a single call may be possible. Unverified for the ASR pipeline — a
+lead, not a fact.
+
+### Hallucination loops are real, and separate from speed
+
+The opening minute of the Army tape returns 2101 characters, 332 words, a **unique-word
+ratio of 0.163**, and one four-word phrase repeated **34 times**. A minute from the middle
+returns 588 characters at a 0.604 ratio with no repetition. Both take the same ~17 s, so
+this barely affects timing — but it makes the transcript worthless, and it is the first
+hard evidence on the accuracy question. The spikes now compute and flag these statistics.
+
+It also kills the "ms per 1000 characters" normalisation recorded above: in long-form mode
+**time is driven by audio duration, not by text produced** (2101 and 588 characters, same
+17 s). The earlier apparent character-scaling was an artefact of the truncated single-pass
+mode. Cross-device comparison just needs the same audio duration.
+
 ## Still unmeasured
 
-- **Thermal behaviour.** Still the big one. The phone's endurance run lasted 1.6 minutes
-  and its apparent drift was negative, i.e. warm-up. A `?minutes=10` budget now exists for
-  this and has not been run.
+- **All of the above on a phone.** Every whole-interview number here is desktop. The
+  phone has never run long-form with the shipping options, so its true cost per hour of
+  audio is unknown — and the old 17x figure was measured without timestamps, which alone
+  accounts for 2.9x.
+- **Thermal behaviour.** Still open, and now easier to provoke: real long-form work is
+  2.9x more expensive than the clip runs that finished in 1.6 minutes.
+- **Whether a streamer gives progress and cancellation inside one long call**, which would
+  remove the strongest non-speed argument for segmenting.
+- **Stitch quality.** Splitting measured free and 1.71x faster, but the spike does not
+  reconcile text across segment boundaries: a word cut mid-utterance and duplicated overlap
+  text are real problems that a shipping implementation has to solve.
 - **Accuracy and speaker detection.** Nothing has measured either. The AMI fixture carries
   the ground truth needed for both.
 - **Per-worker memory on iOS.** Not merely unmeasured but unmeasurable. The desktop's

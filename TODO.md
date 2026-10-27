@@ -1812,6 +1812,48 @@ bottom; they are the project's memory and are not summarised away.
         tab**, deadlocking the first desktop run after one worker, because it waits for a GC
         checkpoint a backgrounded renderer never reaches.
 
+        **Then the owner asked whether it was still transcribing clips, and it was —
+        along with a bug that invalidates the absolute numbers.** The spike worker passed no
+        `chunk_length_s`, so Whisper ran a single pass over its 30-second receptive field
+        and silently truncated: 60 s and 30 s of the same audio returned **identical output,
+        261 characters**. `core/transcribe-worker.js` always passed
+        `chunk_length_s: 30, stride_length_s: 5, return_timestamps: true`, so the spike had
+        been measuring a configuration the app never uses. Same minute with the shipping
+        options: **17.0 s instead of 3.0 s**. Every real-time factor from the clip spikes is
+        overstated about twofold. The concurrency RATIOS survive, since they compared
+        configurations under identical conditions, and re-measuring in long-form lands close
+        (1.39x->1.51x at two workers, 1.62x->1.71x at three).
+
+        **`return_timestamps: true` costs 2.9x** — 17276 ms against 5910 ms for the same
+        minute, with the stride adding another 15%. An hour of audio is 17 min with
+        timestamps and 5.9 min without. They are required for WebVTT cues and for aligning
+        diarized turns to text, so this is a product decision, not a bug: **the largest
+        single performance lever in the shipping config.** It also reconciles the old phone
+        17x (measured without timestamps) against today's desktop 3.5x.
+
+        **Splitting one interview across workers (`spike/transcribe-interview.html`).** A
+        user transcribes ONE file in ONE call, so every concurrency figure before this
+        applied only to BATCHES; for one interview, extra workers did nothing. Desktop, 3
+        min of the Army tape, 60 s segments with 2 s overlap: one call 0m50s (3.59x), split
+        x1 **0m46s (1.10x — segmentation is FASTER than the single call despite +2.2%
+        overlap audio)**, x2 0m33s (1.51x), x3 **0m29s (1.71x)**. An hour of audio:
+        **16m44s today, 9m48s split across three.**
+
+        A second reason to segment, independent of speed: the shipping worker reports
+        progress for the model download and for speaker embedding but **not during
+        transcription** — `pipe()` is one await and `cancelled` is checked only before and
+        after, so a 40-minute interview is 11+ minutes of un-cancellable, un-progressing
+        wait. Segmenting fixes that for free. (transformers.js 4.3.1 has `callback_function`
+        and `streamer` but no `chunk_callback`, so a streamer plus `stopping_criteria` might
+        do it inside one call — unverified for ASR.)
+
+        **Hallucination loops are real.** The Army tape's opening minute: 2101 characters,
+        unique-word ratio **0.163**, one four-word phrase **34 times**. A minute from the
+        middle: 588 characters, ratio 0.604, no repetition. Both cost the same ~17 s, so it
+        is an accuracy problem rather than a speed one — and the first hard evidence on
+        accuracy. It also kills the "ms per 1000 characters" idea: in long-form mode **time
+        tracks audio duration, not text produced**.
+
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
         app), chunking and progress for long recordings, cancellation, model choice UI, and

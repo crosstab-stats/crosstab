@@ -1,0 +1,359 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whole interview — how long does one actually take, and does splitting help?</title>
+<!--
+  A SPIKE. Verdict goes in spike/RESULTS.md.
+
+  The owner asked the question that invalidates most of what came before: "Is it still only
+  transcribing clips? Our users will be transcribing entire interviews." Yes, it was — and
+  the clip workload differs from the real one in two ways, one a bug and one architectural.
+
+  ## The bug: every "60 s clip" was 30 s
+
+  spike/transcribe-pressure-worker.js called the pipeline with no `chunk_length_s`, so
+  Whisper ran a single pass over its 30-second receptive field and silently truncated.
+  Proved by giving it 60 s and 30 s of the same audio: byte-identical output, 261 characters
+  each. core/transcribe-worker.js — the one that ships — always passed
+  `chunk_length_s: 30, stride_length_s: 5, return_timestamps: true`, so the SPIKE was
+  measuring a configuration the app never uses. Every real-time factor reported from it was
+  overstated about twofold.
+
+  With the shipping options the same minute costs 17.0 s instead of 3.0 s, and coverage
+  comes back as 59.96 s rather than nothing.
+
+  ## The surprise inside that: timestamps cost 2.9x
+
+  Same minute, same chunking, one option changed (desktop, 16 cores):
+
+    chunked, no timestamps                  5910 ms   10.2x real time
+    chunked, WITH timestamps (what ships)  17276 ms    3.5x real time
+    chunked, no stride, no timestamps       5157 ms   11.6x real time
+
+  `return_timestamps: true` nearly triples the cost of transcription, and the app turns it
+  on for every job. It is needed for WebVTT cues and for aligning diarized speaker turns to
+  text — but a user who wants a plain transcript is paying 2.9x for nothing. That is a
+  product decision, not a measurement, so it is recorded rather than changed.
+
+  ## The architectural half, which is why this file exists
+
+  A user transcribes ONE 40-minute interview, in ONE call. Whisper then processes ~80
+  chunks SEQUENTIALLY inside a single worker. So every concurrency number measured so far
+  — 1.44x at two workers, 1.72x at three — applies only to a BATCH of interviews. For the
+  common case of one interview at a time, extra workers do precisely nothing.
+
+  To make concurrency help a single interview, the host has to split the audio itself and
+  hand segments to different workers. This measures whether that is worth doing:
+
+    baseline    one worker, the whole recording in one call — what ships today
+    split W=1   the same audio segmented, one worker — the CONTROL, isolating the cost of
+                segmentation itself from the benefit of parallelism
+    split W=2,3 segments distributed across workers from a shared queue
+
+  What it does NOT measure is stitch QUALITY. Cutting an interview at an arbitrary second
+  can cut a word in half, and overlapping segments produce duplicated text that has to be
+  reconciled. That is a real problem and this spike is the thing that says whether the time
+  saved justifies solving it.
+
+  ?audioMinutes=10   how much of the recording to transcribe (40 for the whole thing)
+  ?segment=120       seconds of audio per segment in split mode
+  ?overlap=2         seconds of overlap between segments
+  ?max=3             highest worker count to test
+  ?timestamps=0      drop return_timestamps, for the 2.9x comparison
+  ?audio=URL         a different recording (a local path works on the dev server)
+-->
+<script src="../sw.js"></script>
+
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 1rem; max-width: 46rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .25rem; }
+  button { font: inherit; padding: .7rem 1.2rem; margin-right: .5rem; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px;
+         background: #f6f8fa; border: 1px solid #d0d7de; padding: .6rem; margin-top: .8rem;
+         overflow-x: auto; }
+  #status { font-weight: 600; margin-top: .6rem; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; } .dim { color: #656d76; }
+  @media (prefers-color-scheme: dark) {
+    #log { background: #161b22; border-color: #30363d; }
+    .ok { color: #3fb950; } .bad { color: #f85149; } .dim { color: #8b949e; }
+  }
+  label { display: block; margin: .4rem 0; }
+</style>
+
+<h1>Whole interview</h1>
+<p>How long one real interview takes end to end — and whether splitting it across workers
+   helps, which is the only way extra workers can help someone transcribing one file.</p>
+<p class="dim"><strong>Keep the screen on and this tab in front.</strong> This runs for
+   minutes at a time; a sleeping screen freezes the tab.</p>
+<p><label>Audio (optional — otherwise a 40-minute public-domain interview is fetched):
+   <input type="file" id="file" accept="audio/*,video/*"></label></p>
+<button id="run">Start</button><button id="stop" disabled>Stop</button>
+<div id="status">idle</div>
+<div id="log"></div>
+
+<script type="module">
+import { decodeAudio } from '../core/transcribe.js';
+
+const SR = 16000;
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const lines = [];
+const log = (s = '', cls = '') => {
+  lines.push(cls ? `<span class="${cls}">${s}</span>` : s);
+  logEl.innerHTML = lines.join('\n');
+};
+const status = (s, cls = '') => { statusEl.textContent = s; statusEl.className = cls; };
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+const pad = (s, n) => String(s).padEnd(n);
+const mmss = (ms) => `${Math.floor(ms / 60000)}m${String(Math.round((ms % 60000) / 1000)).padStart(2, '0')}s`;
+
+const q = new URLSearchParams(location.search);
+const AUDIO_MIN = Math.max(0.5, Number(q.get('audioMinutes') || 10));
+const SEGMENT = Math.max(30, Number(q.get('segment') || 120));
+const OVERLAP = Math.max(0, Number(q.get('overlap') || 2));
+const MAXW = Math.max(1, Number(q.get('max') || 3));
+const TIMESTAMPS = q.get('timestamps') !== '0';
+const AUDIO = q.get('audio') || 'https://archive.org/download/VNIT541Reid/VNIT-541_Reid.mp3';
+
+let picked = null;
+document.getElementById('file').addEventListener('change', (e) => {
+  picked = e.target.files?.[0] ?? null;
+  status(picked ? `will use ${picked.name} (${mb(picked.size)})` : 'idle');
+});
+
+let stopping = false;
+document.getElementById('stop').addEventListener('click', () => {
+  stopping = true;
+  status('stopping after the current segment…', 'bad');
+});
+
+// =============================================================================
+// Workers
+// =============================================================================
+
+const WORKER_URL = new URL('./transcribe-pressure-worker.js', import.meta.url);
+
+const loadWorker = (w) => new Promise((resolve) => {
+  w.onmessage = (e) => resolve(e.data?.type === 'ready' ? true : (e.data?.message || 'load failed'));
+  w.onerror = (e) => resolve(e.message || 'worker failed to load');
+  setTimeout(() => resolve('timed out loading after 180 s'), 180000);
+  w.postMessage({ type: 'load' });
+});
+
+/** One transcription call. `audio` may be the whole recording or one segment. */
+const runOn = (w, audio) => new Promise((resolve) => {
+  w.onmessage = (e) => resolve(e.data?.type === 'done' ? e.data : { ms: null, err: e.data?.message });
+  w.onerror = (e) => resolve({ ms: null, err: e.message || 'worker died' });
+  // Generous: a 40-minute call at 3.5x real time is over eleven minutes of work.
+  setTimeout(() => resolve({ ms: null, err: 'timed out after 45 min' }), 2700000);
+  w.postMessage({ type: 'run', audio, longForm: true, timestamps: TIMESTAMPS });
+});
+
+// =============================================================================
+// Audio
+// =============================================================================
+
+async function getAudio() {
+  if (picked) {
+    status(`decoding ${picked.name}…`);
+    const pcm = await decodeAudio(await picked.arrayBuffer());
+    return { pcm, label: picked.name };
+  }
+  status('fetching the recording…');
+  const res = await fetch(AUDIO);
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching audio`);
+  const buf = await res.arrayBuffer();
+  status(`decoding ${mb(buf.byteLength)}…`);
+  return { pcm: await decodeAudio(buf), label: AUDIO.split('/').pop() };
+}
+
+/**
+ * Cut `pcm` into overlapping segments.
+ *
+ * The overlap is why this is not free: a word straddling a cut appears in both segments, so
+ * a real implementation must reconcile the duplicate text. This spike measures the TIME,
+ * which is what decides whether that work is worth doing.
+ */
+function segment(pcm, segSeconds, overlapSeconds) {
+  const step = Math.round(segSeconds * SR);
+  const over = Math.round(overlapSeconds * SR);
+  const out = [];
+  for (let at = 0; at < pcm.length; at += step) {
+    const end = Math.min(pcm.length, at + step + over);
+    out.push(pcm.slice(at, end));
+    if (end >= pcm.length) break;
+  }
+  return out;
+}
+
+/** Shared queue across `ws`, which is how the real pool would hand out segments. */
+async function drain(ws, segments, onProgress) {
+  let next = 0;
+  let done = 0;
+  let err = null;
+  let chars = 0;
+  await Promise.all(ws.map(async (w) => {
+    while (!err && !stopping && next < segments.length) {
+      const i = next;
+      next += 1;
+      const r = await runOn(w, segments[i]);
+      if (r.ms === null) { err = r.err; break; }
+      chars += r.chars || 0;
+      done += 1;
+      onProgress?.(done, segments.length);
+    }
+  }));
+  return { err, chars, done };
+}
+
+// =============================================================================
+// The run
+// =============================================================================
+
+document.getElementById('run').addEventListener('click', async () => {
+  const runBtn = document.getElementById('run');
+  const stopBtn = document.getElementById('stop');
+  runBtn.disabled = true; stopBtn.disabled = false;
+  lines.length = 0; stopping = false;
+
+  let lock = null;
+  try { lock = (await navigator.wakeLock?.request('screen')) ?? null; } catch { /* hidden tab */ }
+
+  log('--- environment ---');
+  log(`crossOriginIsolated: ${crossOriginIsolated}`, crossOriginIsolated ? 'ok' : 'bad');
+  log(`hardwareConcurrency: ${navigator.hardwareConcurrency ?? 'absent'}`);
+  log(`screen wake lock: ${lock ? 'held' : 'no'}`, lock ? 'ok' : 'bad');
+  log(`return_timestamps: ${TIMESTAMPS}`, TIMESTAMPS ? '' : 'bad');
+  if (!TIMESTAMPS) {
+    log('  Timestamps OFF. Measured at 2.9x cheaper, but WebVTT cues and diarized', 'dim');
+    log('  speaker alignment both need them, so this is a comparison and not a setting.', 'dim');
+  }
+
+  try {
+    const { pcm, label } = await getAudio();
+    const wholeSeconds = Math.min(AUDIO_MIN * 60, pcm.length / SR);
+    const audio = pcm.slice(0, Math.round(wholeSeconds * SR));
+    log('');
+    log(`audio: ${label} — using ${(wholeSeconds / 60).toFixed(1)} min of `
+      + `${(pcm.length / SR / 60).toFixed(1)} min available`, 'ok');
+
+    const segments = segment(audio, SEGMENT, OVERLAP);
+    const overheadPct = ((segments.length - 1) * OVERLAP) / wholeSeconds * 100;
+    log(`split mode: ${segments.length} segments of ${SEGMENT} s with ${OVERLAP} s overlap`, 'dim');
+    log(`  the overlap adds ${overheadPct.toFixed(1)}% extra audio to transcribe, which is`, 'dim');
+    log('  the price of being able to reconcile words cut across a boundary.', 'dim');
+
+    log('');
+    log(`--- loading up to ${MAXW} workers ---`);
+    const workers = [];
+    for (let i = 1; i <= MAXW; i++) {
+      status(`loading worker ${i}/${MAXW}…`);
+      const w = new Worker(WORKER_URL, { type: 'module' });
+      const ok = await loadWorker(w);
+      if (ok !== true) { log(`worker ${i}: FAILED — ${ok}`, 'bad'); w.terminate(); break; }
+      workers.push(w);
+      log(`worker ${i}: ready`, 'ok');
+    }
+    if (!workers.length) throw new Error('no workers loaded');
+
+    const rows = [];
+    const rt = (ms) => wholeSeconds / (ms / 1000);
+
+    // ---- what ships today: one worker, one call ---------------------------------------
+    log('');
+    log('--- baseline: ONE worker, the whole recording in ONE call (what ships) ---');
+    status(`baseline: transcribing ${(wholeSeconds / 60).toFixed(1)} min in one call…`);
+    const t0 = performance.now();
+    const base = await runOn(workers[0], audio);
+    const baseMs = performance.now() - t0;
+    if (base.ms === null) {
+      log(`FAILED — ${base.err}`, 'bad');
+      log('  A single long call failing is the most important result here: it is exactly', 'dim');
+      log('  what a user does, and it means the app must segment whether or not it is', 'dim');
+      log('  faster.', 'dim');
+    } else {
+      log(`${mmss(baseMs)} for ${(wholeSeconds / 60).toFixed(1)} min — ${rt(baseMs).toFixed(2)}x real time`, 'ok');
+      log(`  coverage ${base.covered ?? '?'} s of ${Math.round(wholeSeconds)} s`,
+          base.covered && base.covered > wholeSeconds * 0.95 ? 'ok' : 'bad');
+      if (base.covered && base.covered < wholeSeconds * 0.95) {
+        log('  TRUNCATED: the transcript stops short of the audio, which is the bug this', 'bad');
+        log('  spike exists to catch.', 'dim');
+      }
+      log(`  ${base.chars} characters, ${base.words} words, unique ratio ${base.uniqueRatio}`
+        + `, top phrase repeated ${base.topPhraseRepeats}x`,
+          (base.uniqueRatio ?? 1) > 0.3 ? 'dim' : 'bad');
+      if ((base.uniqueRatio ?? 1) <= 0.3) {
+        log('  LOW UNIQUE RATIO = a hallucination loop. Whisper does this on noisy or', 'bad');
+        log('  silent audio. It barely affects the TIME (duration drives that) but it', 'dim');
+        log('  makes the transcript worthless, which is an accuracy problem to chase.', 'dim');
+      }
+      rows.push({ name: 'one call', workers: 1, ms: baseMs });
+    }
+
+    // ---- segmented, 1 then 2 then 3 workers -------------------------------------------
+    log('');
+    log('--- split into segments, across 1, 2, 3 workers ---');
+    log('W=1 is the CONTROL: it isolates what segmentation itself costs from what', 'dim');
+    log('parallelism buys. Compare it against the baseline above.', 'dim');
+    log('');
+    log(`  ${pad('workers', 9)}${pad('wall', 9)}${pad('x real', 8)}${pad('vs baseline', 13)}chars`);
+
+    for (let w = 1; w <= workers.length && !stopping; w++) {
+      const t = performance.now();
+      const { err, chars, done } = await drain(
+        workers.slice(0, w), segments,
+        (d, total) => status(`split across ${w} worker${w > 1 ? 's' : ''}: segment ${d}/${total}`),
+      );
+      const ms = performance.now() - t;
+      if (err) {
+        log(`  ${pad(w, 9)}FAILED after ${done}/${segments.length} segments — ${err}`, 'bad');
+        break;
+      }
+      const vs = base.ms !== null ? `${(baseMs / ms).toFixed(2)}x` : '—';
+      log(`  ${pad(w, 9)}${pad(mmss(ms), 9)}${pad(rt(ms).toFixed(2), 8)}${pad(vs, 13)}${chars}`,
+          base.ms !== null && baseMs / ms > 1.1 ? 'ok' : '');
+      rows.push({ name: `split x${w}`, workers: w, ms });
+    }
+
+    // ---- what it means -----------------------------------------------------------------
+    log('');
+    log('--- reading this ---');
+    const one = rows.find((r) => r.name === 'one call');
+    const s1 = rows.find((r) => r.name === 'split x1');
+    const best = rows.filter((r) => r.name.startsWith('split'))
+      .reduce((a, b) => (!a || b.ms < a.ms ? b : a), null);
+    if (one && s1) {
+      const cost = (s1.ms / one.ms - 1) * 100;
+      log(`segmentation alone costs ${cost >= 0 ? '+' : ''}${cost.toFixed(1)}% on one worker`,
+          Math.abs(cost) < 15 ? 'ok' : 'bad');
+      log(`  (${overheadPct.toFixed(1)}% of that is the overlap audio; the rest is per-call`, 'dim');
+      log('  overhead and losing Whisper\'s own cross-chunk context.)', 'dim');
+    }
+    if (one && best && best.workers > 1) {
+      log(`best split: ${best.workers} workers, ${mmss(best.ms)} against ${mmss(one.ms)} in one`
+        + ` call — ${(one.ms / best.ms).toFixed(2)}x`, one.ms / best.ms > 1.2 ? 'ok' : 'bad');
+      const hourOne = (one.ms / wholeSeconds) * 3600;
+      const hourBest = (best.ms / wholeSeconds) * 3600;
+      log(`an hour of audio: ${mmss(hourOne)} as it works today, ${mmss(hourBest)} split`, 'ok');
+      if (one.ms / best.ms < 1.2) {
+        log('  Under 1.2x is not worth the stitching problem: cutting an interview mid-word', 'dim');
+        log('  and reconciling duplicated overlap text is real work with real failure modes.', 'dim');
+      } else {
+        log('  This is the only route by which extra workers help someone transcribing ONE', 'dim');
+        log('  interview, which is the common case. Batch concurrency never touches it.', 'dim');
+      }
+    }
+
+    for (const w of workers) w.terminate();
+    status(stopping ? 'stopped' : 'done', stopping ? 'bad' : 'ok');
+  } catch (err) {
+    log('');
+    log(`FAILED — ${err.message}`, 'bad');
+    status('failed', 'bad');
+  } finally {
+    try { await lock?.release(); } catch { /* gone */ }
+    runBtn.disabled = false; stopBtn.disabled = true;
+  }
+});
+</script>
