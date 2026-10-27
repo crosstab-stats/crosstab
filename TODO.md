@@ -9898,6 +9898,17 @@ The record of what shipped and why. Kept in full, in the original sections.
       **Verified live after the fix:** the same redirecting title now shows the confirm,
       and importing it yields 239 rows with the columns above. 2396 tests pass.
 
+      **All three branches are now exercised**, the third prompted by the owner recalling a
+      confirm step I could not place: *"I could have sworn I used the wiki import by typing
+      a title and it asked which page and I confirmed."* Accurate memory, different step —
+      it is the **table picker**, which fires on table COUNT rather than on a redirect.
+      Tested on a 2-table article: it lists `Table 1 (223×4) — Country/Territory, IMF
+      (2026), World Bank (2025), United Nations (2024)` and `Table 2 (15×3) — Regional
+      groupings…`, with dimensions and column names, a filter box and Cancel/Import.
+      Picking the first imported **222 rows** with those four columns, World/United
+      States/China/Germany in order. So: canonical title ✓, redirecting title ✓, multi-table
+      page ✓.
+
 - [x] **A COLON in an imported column name addressed the wrong column — FIXED
       2026-10-26.** Found while preparing the NUL question below for a decision; the same
       boundary had a far more reachable hole, and this one was not loud.
