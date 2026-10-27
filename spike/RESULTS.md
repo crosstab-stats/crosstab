@@ -405,11 +405,18 @@ guess and the device's behaviour agreeing, arrived at independently.
 ## Still unmeasured
 
 - **Whether concurrency actually HELPS on a phone.** Both runs only LOAD models; neither
-  runs inference on several at once. On 4 cores with ORT already threading inside each
+  ran inference on several at once. On 4 cores with ORT already threading inside each
   worker, two workers may finish a pair of interviews in half the time — or in the same
   time, with contention eating the gain. That is the measurement any allocation policy
   rests on, and it needs no memory API: it is a stopwatch on N jobs at concurrency 1
   versus N.
+
+  **The spike now does this** — `?n=2` runs four 60 s clips through one worker, then the
+  same four across both, and prints the speed-up. The audio is synthetic from a fixed seed,
+  so it needs no file and every device gets identical work; the transcript is nonsense and
+  the timing is the point, because Whisper's cost is a fixed encoder pass per 30 s window
+  plus a decoder capped at 48 tokens. A speed-up near 1.0 would mean a phone's right limit
+  is **1 regardless of its memory**, which no memory-based policy would ever discover.
 - **Per-worker memory on iOS.** Not merely unmeasured but unmeasurable. The desktop's
   219 MB is the only figure we will get, and whether a phone's arenas are comparable is
   something only a crash will ever tell us.

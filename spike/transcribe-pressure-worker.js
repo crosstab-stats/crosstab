@@ -9,7 +9,37 @@
 
 let lib = null;
 
+/**
+ * Run the loaded pipeline over a clip and report how long it took.
+ *
+ * `max_new_tokens` bounds the decoder. Whisper's encoder cost is fixed per 30 s window but
+ * the decoder runs until it stops, and synthetic audio makes it hallucinate at length — so
+ * without a cap the timing would measure how chatty the model felt rather than how much
+ * the device could get through. Capped, the work per job is near enough constant.
+ */
+async function run(audio, maxTokens) {
+  const t = performance.now();
+  let out;
+  try {
+    out = await self.pipe(audio, { max_new_tokens: maxTokens });
+  } catch {
+    // The cap is a nicety, not the measurement. Never lose the run over a rejected kwarg.
+    out = await self.pipe(audio);
+  }
+  return { ms: Math.round(performance.now() - t), chars: String(out?.text ?? '').length };
+}
+
 self.onmessage = async (e) => {
+  if (e.data?.type === 'run') {
+    try {
+      if (!self.pipe) throw new Error('asked to run before loading');
+      const { ms, chars } = await run(e.data.audio, e.data.maxTokens ?? 48);
+      self.postMessage({ type: 'done', ms, chars });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: String(err?.message ?? err) });
+    }
+    return;
+  }
   if (e.data?.type !== 'load') return;
   try {
     const url = e.data.libUrl || 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1';

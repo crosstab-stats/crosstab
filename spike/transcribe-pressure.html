@@ -13,11 +13,16 @@
 
     1. What memory does ONE transcription worker cost, with the model loaded?
     2. Does that scale linearly with more workers, or do they share something?
-    3. What does a device actually tell us about its limits — `deviceMemory`,
+    3. Does running N at once actually FINISH faster, or do they just contend?
+    4. What does a device actually tell us about its limits — `deviceMemory`,
        `measureUserAgentSpecificMemory`, `jsHeapSizeLimit` — and which of those exist on
        a phone rather than a desktop?
 
-  Question 3 matters most for the design: `measureUserAgentSpecificMemory` requires
+  Question 3 is the one the allocation policy rests on and the one the first two runs
+  could not answer, because loading a model says what workers COST and nothing about what
+  they BUY. It needs no memory API, only a stopwatch, so it answers on iOS too.
+
+  Question 4 matters most for the design: `measureUserAgentSpecificMemory` requires
   cross-origin isolation and `deviceMemory` is Chromium-only, so on iOS the honest answer
   may be "you cannot read memory at all", and the pool has to adapt by watching jobs
   succeed or die instead of by reading a gauge.
@@ -48,8 +53,9 @@
 </style>
 
 <h1>Transcription pressure</h1>
-<p>What one transcription worker costs, whether N of them cost N times that, and what this
-   device will actually tell us about its own limits.</p>
+<p>What one transcription worker costs, whether N of them cost N times that, whether
+   running N at once actually finishes faster, and what this device will admit about its
+   own limits.</p>
 <button id="run">Measure</button>
 <div id="log">idle</div>
 
@@ -139,6 +145,95 @@ document.getElementById('run').addEventListener('click', async () => {
     if (navigator.deviceMemory) {
       log(`device claims ${navigator.deviceMemory} GB — that is ${Math.floor((navigator.deviceMemory * 1073741824 * 0.25) / per)} workers at a 25% budget`, 'dim');
     }
+  }
+
+  // ===================================================================================
+  // Does concurrency actually HELP? — the question the allocation policy rests on
+  // ===================================================================================
+  //
+  // Everything above only LOADS models, which says what N workers COST but nothing about
+  // what they BUY. ORT already runs threads inside each worker, so on a 4-core phone two
+  // workers may halve the wall clock, or may contend and halve nothing. Policy without
+  // this number is guesswork.
+  //
+  // No memory API involved: it is a stopwatch, so it works on iOS, which is exactly the
+  // platform that will never report memory.
+  if (workers.length >= 2) {
+    const SECONDS = 60;
+    const JOBS = workers.length * 2;
+
+    // Synthetic audio, so the measurement needs no file and every device runs the exact
+    // same input. The content is nonsense and the transcript is garbage — that is fine,
+    // because WHISPER'S COST BARELY DEPENDS ON CONTENT: a fixed encoder pass per 30 s
+    // window plus a capped decoder. What matters is that the serial and parallel passes
+    // are handed identical work.
+    const synth = (seconds) => {
+      const sr = 16000;
+      const a = new Float32Array(sr * seconds);
+      let s = 1234567;                     // fixed seed: same waveform on every device
+      let y = 0;
+      for (let i = 0; i < a.length; i++) {
+        s = (s * 1103515245 + 12345) & 0x7fffffff;
+        y = 0.97 * y + 0.03 * ((s / 0x7fffffff) * 2 - 1);   // lightly smoothed, speech-ish
+        a[i] = Math.max(-1, Math.min(1, y * 6));
+      }
+      return a;
+    };
+    const audio = synth(SECONDS);
+    const once = (w) => new Promise((resolve) => {
+      w.onmessage = (ev) => resolve(ev.data?.type === 'done' ? ev.data : { ms: null, err: ev.data?.message });
+      w.onerror = (ev) => resolve({ ms: null, err: ev.message || 'worker died' });
+      setTimeout(() => resolve({ ms: null, err: 'timed out after 180 s' }), 180000);
+      w.postMessage({ type: 'run', audio, maxTokens: 48 });
+    });
+
+    log(`\n--- throughput: ${JOBS} clips of ${SECONDS} s, serial vs ${workers.length}-way ---`);
+    log('Synthetic audio. The transcript is nonsense; the TIMING is the measurement.', 'dim');
+
+    const t1 = performance.now();
+    let failed = null;
+    for (let i = 0; i < JOBS && !failed; i++) {
+      const r = await once(workers[0]);
+      if (r.ms === null) failed = r.err;
+    }
+    const serial = Math.round(performance.now() - t1);
+    if (failed) {
+      log(`serial pass FAILED — ${failed}`, 'bad');
+    } else {
+      log(`serial (1 worker):  ${serial} ms  ·  ${(JOBS * SECONDS * 1000 / serial).toFixed(1)}x real time`, 'ok');
+
+      // Round-robin the same jobs across every worker, all in flight at once.
+      const t2 = performance.now();
+      const results = await Promise.all(workers.map(async (w) => {
+        for (let i = 0; i < JOBS / workers.length; i++) {
+          const r = await once(w);
+          if (r.ms === null) return r.err;
+        }
+        return null;
+      }));
+      const par = Math.round(performance.now() - t2);
+      const died = results.find(Boolean);
+      if (died) {
+        log(`parallel pass FAILED — ${died}`, 'bad');
+        log('A worker dying HERE is the finding: the device cannot sustain this many.', 'dim');
+      } else {
+        const speedup = serial / par;
+        log(`parallel (${workers.length} workers): ${par} ms  ·  ${(JOBS * SECONDS * 1000 / par).toFixed(1)}x real time`, 'ok');
+        log(`\nspeed-up: ${speedup.toFixed(2)}x from ${workers.length} workers`,
+            speedup > 1.15 ? 'ok' : 'bad');
+        log(speedup > 1.15
+          ? '  Concurrency pays here, so the pool is worth having on this device.'
+          : '  Concurrency does NOT pay here — the cores were already busy inside one',
+          'dim');
+        if (speedup <= 1.15) {
+          log('  worker, so a second one only adds memory. On a device like this the right', 'dim');
+          log('  limit is 1 no matter how much memory it has, which is an argument for', 'dim');
+          log('  measuring throughput once rather than dividing cores by two.', 'dim');
+        }
+      }
+    }
+  } else {
+    log('\n(throughput comparison needs at least 2 workers — try ?n=2)', 'dim');
   }
 
   log('\n--- tearing down ---');
