@@ -27,7 +27,13 @@
   may be "you cannot read memory at all", and the pool has to adapt by watching jobs
   succeed or die instead of by reading a gauge.
 
-  Run with ?n=4 to change how many workers it spins up.
+  ?mem=0 skips the memory figures, which is automatic in a hidden tab: the memory API
+  waits for a GC checkpoint a backgrounded tab may never reach, and it deadlocked this
+  page after one worker. Throughput is measured either way.
+
+  Run with ?n=4 to change how many workers it spins up, or sweep the whole curve in one
+  load: ?sweep=2,3,4,6,8,10 (loads the largest, compares each). ?k=3 sets jobs per worker,
+  ?tokens=48 caps the decoder — vary that last one, because it changes the answer.
 -->
 <!--
   Register the service worker the way index.html does. GitHub Pages sends no COOP/COEP, so
@@ -68,19 +74,42 @@ const log = (s, cls = '') => {
 };
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
 
-/** Total agent memory, or null where the browser will not say. */
-async function measure() {
+/**
+ * Total agent memory, or null where the browser will not say — and null rather than a hang
+ * where the browser says nothing for a long time.
+ *
+ * `measureUserAgentSpecificMemory()` resolves at a GC checkpoint, which a BACKGROUNDED tab
+ * may never reach. Without this guard the desktop run deadlocked after one worker: the
+ * measurement is a nicety and it was holding the whole sweep hostage. Note that setTimeout
+ * is itself throttled to about once a minute in a hidden tab, so this guard is a backstop
+ * for a tab that goes hidden midway — `wantMemory` below is what keeps a hidden run quick.
+ */
+async function measure(wanted, timeoutMs = 8000) {
+  if (!wanted) return null;
   if (typeof performance.measureUserAgentSpecificMemory !== 'function') return null;
   try {
-    const m = await performance.measureUserAgentSpecificMemory();
-    return m.bytes;
+    return await Promise.race([
+      performance.measureUserAgentSpecificMemory().then((m) => m.bytes),
+      new Promise((r) => setTimeout(() => r(null), timeoutMs)),
+    ]);
   } catch { return null; }
 }
 
 document.getElementById('run').addEventListener('click', async () => {
   lines.length = 0;
   const q = new URLSearchParams(location.search);
-  const N = Number(q.get('n') || 4);
+  // The sweep decides how many to load: no point loading 10 to compare 2 and 3, and no
+  // point reloading the page (and re-downloading the models) once per worker count.
+  const SWEEP = String(q.get('sweep') || '')
+    .split(',').map((x) => Number(x.trim())).filter((x) => Number.isInteger(x) && x > 0)
+    .sort((a, b) => a - b);
+  const TOKENS = Math.max(1, Number(q.get('tokens') || 48));
+  // The throughput sweep must not depend on whether anyone is looking at the window, so
+  // memory is skipped in a hidden tab. See measure(): the API waits for a GC checkpoint a
+  // backgrounded tab may never reach, which deadlocked this page after one worker.
+  const WANT_MEM = q.get('mem') !== '0' && !document.hidden;
+  const N = SWEEP.length ? SWEEP[SWEEP.length - 1] : Number(q.get('n') || 4);
+  if (!SWEEP.length && N >= 2) SWEEP.push(N);
 
   log('--- what this device will tell us ---');
   log(`crossOriginIsolated:            ${crossOriginIsolated}`);
@@ -91,6 +120,14 @@ document.getElementById('run').addEventListener('click', async () => {
       typeof performance.measureUserAgentSpecificMemory === 'function' ? '' : 'bad');
   log(`performance.memory.jsHeapSizeLimit: ${performance.memory ? mb(performance.memory.jsHeapSizeLimit) : 'ABSENT'}`,
       performance.memory ? '' : 'bad');
+  log(`document.hidden:                ${document.hidden}`, document.hidden ? 'bad' : '');
+  if (!WANT_MEM) {
+    log('  memory measurement SKIPPED — a hidden tab (or ?mem=0). The API resolves only at', 'dim');
+    log('  a GC checkpoint, which a backgrounded tab may never reach; it hung this page', 'dim');
+    log('  after one worker. The throughput sweep below is unaffected: workers compute', 'dim');
+    log('  normally while hidden. A hidden renderer MAY get lower process priority, which', 'dim');
+    log('  would depress every row together and leave the ratios between them intact.', 'dim');
+  }
   log('\n  An ABSENT above is the point: the pool cannot depend on reading a gauge that', 'dim');
   log('  half the devices do not have. It has to adapt by watching jobs instead.', 'dim');
 
@@ -112,7 +149,7 @@ document.getElementById('run').addEventListener('click', async () => {
   // with no error, which is a question about blob module workers, not about memory.
   const url = new URL('./transcribe-pressure-worker.js', import.meta.url);
   const workers = [];
-  const base = await measure();
+  const base = await measure(WANT_MEM);
   log(`\n--- spinning up ${N} workers, each loading whisper-tiny q8 ---`);
   log(`baseline: ${base === null ? 'unmeasurable' : mb(base)}`);
 
@@ -131,7 +168,7 @@ document.getElementById('run').addEventListener('click', async () => {
     const took = Math.round(performance.now() - t);
     if (ok !== true) { log(`worker ${i}: FAILED after ${took} ms — ${ok}`, 'bad'); break; }
 
-    const now = await measure();
+    const now = await measure(WANT_MEM);
     const delta = now !== null && prev !== null ? now - prev : null;
     log(`worker ${i}: ready in ${took} ms` + (delta !== null
       ? ` · total ${mb(now)} · this worker +${mb(delta)}`
@@ -148,29 +185,36 @@ document.getElementById('run').addEventListener('click', async () => {
   }
 
   // ===================================================================================
-  // Does concurrency actually HELP? — the question the allocation policy rests on
+  // Does concurrency HELP, and how far? — the curve the allocation policy needs
   // ===================================================================================
   //
-  // Everything above only LOADS models, which says what N workers COST but nothing about
-  // what they BUY. ORT already runs threads inside each worker, so on a 4-core phone two
-  // workers may halve the wall clock, or may contend and halve nothing. Policy without
-  // this number is guesswork.
+  // Loading models says what N workers COST and nothing about what they BUY. The owner's
+  // phone (4 cores) answered 1.8x at 2 workers, 2.01x at 3, and ran out of memory loading
+  // the 4th: concurrency pays, the return diminishes, and memory ends the argument before
+  // the cores do. This sweeps the curve so the flattening point is measured rather than
+  // assumed.
   //
-  // No memory API involved: it is a stopwatch, so it works on iOS, which is exactly the
-  // platform that will never report memory.
-  if (workers.length >= 2) {
-    const SECONDS = 60;
-    const JOBS = workers.length * 2;
+  // ?sweep=2,3,4,6,8,10  the worker counts to compare (loads the largest)
+  // ?k=3                 jobs per worker at each count
+  // ?tokens=48           decoder cap per job — see the caveat printed at the end
+  //
+  // No memory API is involved: it is a stopwatch, so it answers on iOS too, which is the
+  // one platform that will never report memory at all.
+  const K = Math.max(1, Number(q.get('k') || 3));
+  const SECONDS = 60;
 
-    // Synthetic audio, so the measurement needs no file and every device runs the exact
-    // same input. The content is nonsense and the transcript is garbage — that is fine,
-    // because WHISPER'S COST BARELY DEPENDS ON CONTENT: a fixed encoder pass per 30 s
-    // window plus a capped decoder. What matters is that the serial and parallel passes
-    // are handed identical work.
+  if (workers.length < 2) {
+    log('');
+    log('(the throughput sweep needs at least 2 workers)', 'dim');
+  } else {
+    // Synthetic audio, so the sweep needs no file and every device is handed identical
+    // work. The transcript is nonsense; the TIMING is the measurement, because Whisper's
+    // cost barely depends on content — a fixed encoder pass per 30 s window plus a capped
+    // decoder.
     const synth = (seconds) => {
       const sr = 16000;
       const a = new Float32Array(sr * seconds);
-      let s = 1234567;                     // fixed seed: same waveform on every device
+      let s = 1234567;                   // fixed seed: the same waveform on every device
       let y = 0;
       for (let i = 0; i < a.length; i++) {
         s = (s * 1103515245 + 12345) & 0x7fffffff;
@@ -180,66 +224,103 @@ document.getElementById('run').addEventListener('click', async () => {
       return a;
     };
     const audio = synth(SECONDS);
+
     const once = (w) => new Promise((resolve) => {
       w.onmessage = (ev) => resolve(ev.data?.type === 'done' ? ev.data : { ms: null, err: ev.data?.message });
       w.onerror = (ev) => resolve({ ms: null, err: ev.message || 'worker died' });
-      setTimeout(() => resolve({ ms: null, err: 'timed out after 180 s' }), 180000);
-      w.postMessage({ type: 'run', audio, maxTokens: 48 });
+      setTimeout(() => resolve({ ms: null, err: 'timed out after 300 s' }), 300000);
+      w.postMessage({ type: 'run', audio, maxTokens: TOKENS });
     });
 
-    log(`\n--- throughput: ${JOBS} clips of ${SECONDS} s, serial vs ${workers.length}-way ---`);
-    log('Synthetic audio. The transcript is nonsense; the TIMING is the measurement.', 'dim');
-
-    const t1 = performance.now();
-    let failed = null;
-    for (let i = 0; i < JOBS && !failed; i++) {
-      const r = await once(workers[0]);
-      if (r.ms === null) failed = r.err;
-    }
-    const serial = Math.round(performance.now() - t1);
-    if (failed) {
-      log(`serial pass FAILED — ${failed}`, 'bad');
-    } else {
-      log(`serial (1 worker):  ${serial} ms  ·  ${(JOBS * SECONDS * 1000 / serial).toFixed(1)}x real time`, 'ok');
-
-      // Round-robin the same jobs across every worker, all in flight at once.
-      const t2 = performance.now();
-      const results = await Promise.all(workers.map(async (w) => {
-        for (let i = 0; i < JOBS / workers.length; i++) {
+    /**
+     * Run `jobs` clips across `ws` from a SHARED QUEUE, which is what the real pool is.
+     *
+     * Static round-robin would bias this: 24 jobs over 10 workers leaves some doing 3 and
+     * some doing 2, and the wall clock is set by the 3 — a penalty against large N
+     * indistinguishable from the sub-linearity we are trying to measure. A queue plus
+     * jobs = N * K means every worker does exactly K and the comparison is clean.
+     */
+    const drain = async (ws, jobs) => {
+      let claimed = 0;
+      let err = null;
+      await Promise.all(ws.map(async (w) => {
+        while (!err && claimed < jobs) {
+          claimed += 1;                  // claim before awaiting, or two workers take one job
           const r = await once(w);
-          if (r.ms === null) return r.err;
+          if (r.ms === null) err = r.err;
         }
-        return null;
       }));
-      const par = Math.round(performance.now() - t2);
-      const died = results.find(Boolean);
-      if (died) {
-        log(`parallel pass FAILED — ${died}`, 'bad');
-        log('A worker dying HERE is the finding: the device cannot sustain this many.', 'dim');
-      } else {
-        const speedup = serial / par;
-        log(`parallel (${workers.length} workers): ${par} ms  ·  ${(JOBS * SECONDS * 1000 / par).toFixed(1)}x real time`, 'ok');
-        log(`\nspeed-up: ${speedup.toFixed(2)}x from ${workers.length} workers`,
-            speedup > 1.15 ? 'ok' : 'bad');
-        log(speedup > 1.15
-          ? '  Concurrency pays here, so the pool is worth having on this device.'
-          : '  Concurrency does NOT pay here — the cores were already busy inside one',
-          'dim');
-        if (speedup <= 1.15) {
-          log('  worker, so a second one only adds memory. On a device like this the right', 'dim');
-          log('  limit is 1 no matter how much memory it has, which is an argument for', 'dim');
-          log('  measuring throughput once rather than dividing cores by two.', 'dim');
+      return err;
+    };
+
+    log('');
+    log(`--- throughput: ${SECONDS} s clips, ${K} per worker, decoder capped at ${TOKENS} tokens ---`);
+
+    // One serial baseline, in cost per job. Re-measuring it for every N would triple the
+    // runtime and tell us nothing new.
+    const t0 = performance.now();
+    const serialErr = await drain([workers[0]], K);
+    const perJob = (performance.now() - t0) / K;
+    if (serialErr) {
+      log(`serial baseline FAILED — ${serialErr}`, 'bad');
+    } else {
+      log(`1 worker: ${Math.round(perJob)} ms per clip · ${(SECONDS * 1000 / perJob).toFixed(0)}x real time`, 'ok');
+      log('');
+      log('  N   jobs    wall      jobs/s   speed-up   efficiency');
+
+      const rows = [];
+      for (const n of SWEEP) {
+        if (n > workers.length) {
+          log(`  ${String(n).padEnd(3)} skipped — only ${workers.length} workers loaded`, 'dim');
+          continue;
         }
+        const jobs = n * K;
+        const t = performance.now();
+        const err = await drain(workers.slice(0, n), jobs);
+        const wall = performance.now() - t;
+        if (err) {
+          log(`  ${String(n).padEnd(3)} FAILED — ${err}`, 'bad');
+          log('    A worker dying HERE is itself the finding: this many does not hold.', 'dim');
+          break;
+        }
+        const speedup = (jobs * perJob) / wall;
+        rows.push({ n, speedup, eff: speedup / n });
+        log(`  ${String(n).padEnd(3)} ${String(jobs).padEnd(6)} ${(Math.round(wall) + ' ms').padEnd(9)}`
+          + `${(jobs / (wall / 1000)).toFixed(2).padEnd(8)} ${(speedup.toFixed(2) + 'x').padEnd(10)} `
+          + `${(speedup / n * 100).toFixed(0)}%`,
+          speedup / n > 0.6 ? 'ok' : '');
+      }
+
+      // ---- what the curve means, said out loud so the policy can cite it ---------------
+      if (rows.length) {
+        const best = rows.reduce((a, b) => (b.speedup > a.speedup ? b : a));
+        const worth = rows.filter((r) => r.eff >= 0.6).map((r) => r.n);
+        log('');
+        log(`peak throughput at ${best.n} workers: ${best.speedup.toFixed(2)}x`, 'ok');
+        log(`still >=60% efficient at: ${worth.length ? worth.join(', ') : 'nothing above 1'}`, 'dim');
+        const marg = rows.map((r, i) => (i ? (r.speedup - rows[i - 1].speedup) / (r.n - rows[i - 1].n) : null));
+        const kneeAt = rows.findIndex((r, i) => i && marg[i] < 0.25);
+        if (kneeAt > 0) {
+          log(`the curve flattens past ${rows[kneeAt - 1].n}: the next worker adds only`, 'dim');
+          log(`${marg[kneeAt].toFixed(2)}x, which is memory spent for almost no time saved.`, 'dim');
+        }
+        log('');
+        log('CAVEAT, and it may be the important part of this run:', 'dim');
+        log(`the decoder is capped at ${TOKENS} tokens. The phone's serial pass ran at 67x real`, 'dim');
+        log('time where real audio ran at 17x, so the cap removes most of the decoder work.', 'dim');
+        log('Whisper parallelises OPPOSITELY in its two halves: the encoder is wide matmuls', 'dim');
+        log('that already use several threads inside one worker, so extra workers contend;', 'dim');
+        log('the decoder is autoregressive and leaves cores idle, so extra workers fill them.', 'dim');
+        log('If the speed-up RISES with ?tokens=, real interviews scale better than this and', 'dim');
+        log('these figures are a floor. Run it twice before believing either number.', 'dim');
       }
     }
-  } else {
-    log('\n(throughput comparison needs at least 2 workers — try ?n=2)', 'dim');
   }
 
   log('\n--- tearing down ---');
   for (const w of workers) w.terminate();
   await new Promise((r) => setTimeout(r, 1500));
-  const after = await measure();
+  const after = await measure(WANT_MEM);
   log(after === null ? 'post-teardown: unmeasurable' : `post-teardown: ${mb(after)}`
     + (base !== null ? ` (baseline was ${mb(base)})` : ''));
   log('A number well above the baseline means terminate() does not promptly return it,', 'dim');

@@ -402,24 +402,88 @@ What it does establish: **two workers load fine on a 4-core phone**, in about 1.
 and 4 cores is exactly what the blind heuristic turns into a limit of 2 — the policy's
 guess and the device's behaviour agreeing, arrived at independently.
 
+## Does concurrency pay? Both devices, and the answer is cores — not memory
+
+Phone (4 cores, iOS, isolated) and desktop (16 cores, 32 GB, Chrome, isolated), 60 s
+synthetic clips, equal work per worker from a shared queue:
+
+| workers | phone speed-up | desktop speed-up | desktop jobs/s | desktop efficiency |
+|---|---|---|---|---|
+| 1 | — (896 ms/clip, 67x) | — (968 ms/clip, 62x) | 1.03 | — |
+| 2 | **1.8x** | **2.01x** | 2.07 | 100% |
+| 3 | **2.01x** | 2.72x | 2.81 | 91% |
+| 4 | **out of memory** | **3.06x** | 3.16 | 76% |
+| 6 | — | 3.06x | 3.16 | 51% |
+| 8 | — | 2.95x | 3.05 | 37% |
+| 10 | — | 3.11x | 3.22 | 31% |
+
+**Sixteen cores saturate at four workers.** From 4 to 10 the throughput is 3.16, 3.16,
+3.05, 3.22 jobs/s — flat inside noise. Six extra workers cost 1.3 GB of models and return
+nothing. The phone saturates at 2–3 and dies at 4.
+
+### This contradicts the pool's own arithmetic
+
+`deviceCapacity()` divides a quarter of reported memory by 219 MB per worker. On this
+desktop that is 8192/219 = **37 workers**, which only the hard `min(…, 10)` keeps sane — and
+**10 is still 2.5x the measured optimum of 4**. Meanwhile the *blind* path, `cores/2` capped
+at 3, gives 3 on the desktop and 2 on the phone: both within one of the measured best.
+
+**The heuristic written for devices that report nothing is more accurate than the one
+written for devices that do.** Memory turns out to be a CEILING (the phone's 4th worker
+died) and never a target. Cores predict the useful number; memory only vetoes it.
+
+### Three controls, because the plateau was not believable at first
+
+1. **Is the harness biased against large N?** A static round-robin would be: 24 jobs over
+   10 workers leaves some doing 3 and some 2, and the wall clock follows the 3 — a ~25%
+   penalty that mimics sub-linearity. Simulated in Node with fixed-cost jobs, the shared
+   queue returns 92% efficiency flat from 2 to 10 workers. Flat is what matters: no drift
+   with N, so the curve is the device's, not the harness's.
+2. **Is the hidden tab CPU-starved?** The desktop's serial rate (968 ms/clip) is *slower*
+   than the phone's (896 ms) on four times the cores, which would be odd. An identical
+   arithmetic loop ran in **1025–1402 ms in the hidden tab vs 1540 ms in Node** on the same
+   machine, same checksum. Not starved — it beat Node. The plateau is real, and so is the
+   finding that single-stream WASM barely cares which device it is on.
+3. **Was the decoder cap distorting it?** No, and not for the reason assumed. Re-running at
+   a 220-token cap gave the same curve (2.02x / 3.10x / 3.12x) and the same serial rate.
+   Probing one worker directly: **4 characters of output at caps of 16, 48 and 220** — the
+   model hits end-of-sequence immediately on noise. The cap was never binding.
+
+### The limitation that control 3 exposes, which is the real caveat
+
+Because noise decodes to nothing, **this benchmark measures the encoder and nothing else.**
+Whisper's two halves parallelise oppositely: the encoder is wide matmuls that already use
+several threads inside one worker (so more workers contend), while the decoder is
+autoregressive, leaves cores idle, and should scale *better* across workers. Real speech is
+substantially decoder work — the phone's 17x on real audio against 67x here is that
+difference, not the cap.
+
+So **4 is a floor for the desktop's optimum, not a ceiling**, and the same for 2–3 on the
+phone. Raising the cap cannot test this; only real speech can. That makes borrowed interview
+audio a blocker for the final number rather than a nice-to-have.
+
+### An instrument bug worth remembering
+
+`performance.measureUserAgentSpecificMemory()` **hangs indefinitely in a hidden tab** — it
+resolves at a GC checkpoint a backgrounded renderer may never reach. It deadlocked the
+desktop run after one worker (90 s for worker 1; the same run with memory skipped did six
+workers in six seconds). `measure()` now races a timeout and is skipped entirely when
+`document.hidden`. A `setTimeout` guard alone is not enough: timers in a hidden tab are
+throttled to about once a minute, so an 8 s guard can take 60 s to fire.
+
 ## Still unmeasured
 
-- **Whether concurrency actually HELPS on a phone.** Both runs only LOAD models; neither
-  ran inference on several at once. On 4 cores with ORT already threading inside each
-  worker, two workers may finish a pair of interviews in half the time — or in the same
-  time, with contention eating the gain. That is the measurement any allocation policy
-  rests on, and it needs no memory API: it is a stopwatch on N jobs at concurrency 1
-  versus N.
-
-  **The spike now does this** — `?n=2` runs four 60 s clips through one worker, then the
-  same four across both, and prints the speed-up. The audio is synthetic from a fixed seed,
-  so it needs no file and every device gets identical work; the transcript is nonsense and
-  the timing is the point, because Whisper's cost is a fixed encoder pass per 30 s window
-  plus a decoder capped at 48 tokens. A speed-up near 1.0 would mean a phone's right limit
-  is **1 regardless of its memory**, which no memory-based policy would ever discover.
+- **The same sweep on real speech.** Answered for the encoder (above) and unanswered for
+  the decoder, which synthetic audio cannot exercise at all: Whisper emits 4 characters on
+  noise whatever the token cap. Since decode is the half that should scale best across
+  workers, every speed-up recorded here is a floor. One borrowed interview settles it.
 - **Per-worker memory on iOS.** Not merely unmeasured but unmeasurable. The desktop's
-  219 MB is the only figure we will get, and whether a phone's arenas are comparable is
-  something only a crash will ever tell us.
+  219 MB is the only figure we will get; whether a phone's arenas match is something only
+  a crash will tell us — and one did, at worker 4.
+- **`base` and `small`.** `WORKER_MB` scales them from their download size, which the
+  linearity result makes plausible and nothing has checked.
+- **Sustained load.** Every figure here is a burst of minutes. An hour of audio on a
+  throttling phone is still an extrapolation.
 - **The bigger models.** `base` and `small` are priced in the pool by scaling from their
   download, which assumes the arena cost is mostly fixed. Worth checking before anyone
   runs four `small` workers.

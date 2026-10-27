@@ -1718,6 +1718,45 @@ bottom; they are the project's memory and are not summarised away.
         and a throttling phone will not hold 17×, so "3.5 minutes per hour" is an
         extrapolation from a burst.
 
+        **Concurrency measured on both devices (2026-10-27), and it says the pool is
+        wrong.** The owner rejected an unmeasured refusal to run two jobs at once, so a
+        throughput sweep was built: 60 s synthetic clips, equal work per worker, from a
+        shared queue. Phone (4 cores): **1.8x at 2 workers, 2.01x at 3, out of memory
+        loading the 4th**. Desktop (16 cores, 32 GB): **2.01x, 2.72x, 3.06x at 2/3/4 and
+        then nothing** — 3.16, 3.16, 3.05, 3.22 jobs/s at 4, 6, 8, 10. Flat. Six extra
+        workers buy 1.3 GB of models and no time.
+
+        `deviceCapacity()` divides a quarter of reported memory by 219 MB and would offer
+        37 here, saved only by a hard cap of 10 — still **2.5x the measured optimum of 4**.
+        The *blind* branch (`cores/2`, capped 3) gives 3 on this desktop and 2 on the phone,
+        both within one of the best measured. **The heuristic for devices that report
+        nothing beats the one for devices that report everything**, so memory is a ceiling
+        (the phone's 4th worker died proving it) and cores are the predictor. A policy of
+        `max(1, min(floor(cores/2), 4))`, with a known memory figure allowed only to veto,
+        fits both devices; the cap of 4 is where the desktop measurably stopped improving.
+
+        Deferred rather than applied: the owner has an alternative allocation scheme to
+        propose, and it would be rude as well as wasteful to rewrite the policy first.
+
+        **The caveat that matters more than the numbers.** Synthetic audio decodes to
+        nothing — probed directly, Whisper returns 4 characters at token caps of 16, 48 and
+        220, hitting end-of-sequence immediately — so the sweep measures **the encoder and
+        only the encoder**. The two halves parallelise oppositely: the encoder is wide
+        matmuls already threaded inside one worker, so extra workers contend; the decoder is
+        autoregressive, leaves cores idle, and should scale better. Real speech is
+        substantially decode (hence 17x on real audio against 67x here). **Every speed-up
+        above is therefore a floor**, and borrowed interview audio is now a blocker for the
+        final worker count rather than a nicety.
+
+        Three controls ran before any of this was believed: the harness was simulated in
+        Node and returns 92% efficiency flat from 2 to 10 workers (a static round-robin
+        would have manufactured ~25% fake sub-linearity at N=10); the hidden tab was checked
+        against Node on the same machine with an identical arithmetic loop (1025–1402 ms vs
+        1540 ms — not CPU-starved, it won); and the token cap was raised to 220 to confirm
+        it never bound. Also found: `measureUserAgentSpecificMemory()` **hangs in a hidden
+        tab**, deadlocking the first desktop run after one worker, because it waits for a GC
+        checkpoint a backgrounded renderer never reaches.
+
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
         app), chunking and progress for long recordings, cancellation, model choice UI, and
