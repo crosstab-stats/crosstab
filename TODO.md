@@ -1854,6 +1854,28 @@ bottom; they are the project's memory and are not summarised away.
         accuracy. It also kills the "ms per 1000 characters" idea: in long-form mode **time
         tracks audio duration, not text produced**.
 
+        **FEASIBILITY IS NOW CLOSED: a phone transcribes a 40-minute interview in
+        3m27s.** Four cores, three workers, segments decoded on demand, timestamps ON (the
+        shipping configuration): **11.59x real time, an hour of audio in 5m10s, 78 MB held
+        flat**, no crash. That is 1.87x the 16-core desktop at the same width (6.21x) —
+        and the original whisper spike found the same ~1.9x ratio on a completely different
+        workload months earlier.
+
+        This also settles two things by making them moot. **Thermal**, for a single
+        interview: an hour finishes in five minutes, too short to heat anything (batches of
+        ten remain ~52 min of load and untested). And **the 2.9x timestamp tax**: dropping
+        `return_timestamps` would take an hour from 5m10s to 1m47s, which is not worth
+        losing WebVTT cues and diarized speaker alignment. Keep timestamps on.
+
+        Still open: whether splitting is worth it ON THE PHONE (only the 3-worker width was
+        timed; the batch figure suggests ~1.72x, so one worker lands near 6.7x and a
+        40-minute interview near 6 min — usable either way, so this decides how much the
+        stitching problem is worth, not whether the feature ships); whether the shipping
+        one-call path survives a long interview (now ~421 MB with the bugs fixed, against
+        735 MB the phone just held, so probably safe to ask); and **accuracy**, which is now
+        the biggest open question — 42359 characters over 40 minutes is ~212 wpm, above
+        conversational and consistent with the hallucination loops already measured.
+
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
         app), chunking and progress for long recordings, cancellation, model choice UI, and

@@ -759,6 +759,70 @@ interview on a phone, then **segmenting is not an optimisation, it is the only w
 feature works at all on mobile** — which is a stronger conclusion than the 1.71x speed-up
 that first justified it.
 
+## A phone transcribes a 40-minute interview in 3m27s
+
+The run the whole epic was really waiting for. Phone, 4 cores, isolated, wake lock held,
+three workers, the full 40-minute Army interview, segments decoded on demand, **timestamps
+on** (the shipping configuration):
+
+```
+  workers  wall     x real  chars
+  3        3m27s    11.59   42359
+
+live audio memory about 78 MB, and it does NOT grow with the length of the interview
+```
+
+**11.59x real time. An hour of audio in 5m10s. No crash.**
+
+### The phone is 1.87x faster than the 16-core desktop
+
+| | real time |
+|---|---|
+| phone, 3 workers, 40 min | **11.59x** |
+| desktop, 3 workers, 3 min | 6.21x |
+| desktop, one call | 3.60x |
+
+The original whisper spike found the phone at ~1.9x the desktop's WASM figure. Two
+completely different workloads, months apart, the same ratio. "Four fast cores beat sixteen
+slower ones" is now measured three independent ways.
+
+### What this settles
+
+**Feasibility, completely.** A 40-minute interview takes 3m27s and an hour takes 5m10s, on
+a phone, with speaker-timestamp support on. That is not "viable with caveats", it is fast.
+
+**Thermal, for the single-interview case.** The worry was that a throttling phone could not
+hold a burst rate for an hour of audio. It does not have to: an hour finishes in five
+minutes, which is too short to heat anything. Thermal only comes back for BATCHES — ten
+one-hour interviews would be about 52 minutes of continuous load, and that is still
+untested.
+
+**The timestamp question, by making it moot.** `return_timestamps` costs 2.9x, so dropping
+it would take an hour from 5m10s to 1m47s. Saving three minutes per hour of audio is not
+worth losing WebVTT cues and diarized speaker alignment. **Keep timestamps on and stop
+treating the 2.9x as a problem.**
+
+**That memory is a shape question, not a budget question.** 78 MB held, flat, against the
+146 MB a full decode would need and the 655 MB the buggy version held.
+
+### What it does not settle
+
+**Whether splitting is worth it on the phone**, because only the 3-worker width was timed.
+The batch endurance run suggests ~1.72x, which would put one worker near 6.7x real time and
+a 40-minute interview near 6 minutes — usable either way, so this decides how much the
+stitching problem is worth, not whether the feature ships. `?configs=1,3` answers it.
+
+**Whether the shipping one-call path survives**, which the spike now skips past 15 minutes.
+With the bugs fixed it would need 56 MB (MP3) + 146 MB (PCM, transferred not cloned) +
+219 MB (one worker) = **421 MB**, and the phone just held 735 MB without complaint — so it
+is probably safe to ask now, where before it was certainly not. The real path also runs
+diarization over the whole recording, which this does not.
+
+**Accuracy.** 42359 characters for 40 minutes is ~212 wpm, which is above conversational
+and consistent with the hallucination loops already measured. Still the biggest open
+question, and the AMI fixture with ground-truth transcripts and speaker labels is the way
+to answer it.
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The
