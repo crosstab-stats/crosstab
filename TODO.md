@@ -1778,9 +1778,27 @@ bottom; they are the project's memory and are not summarised away.
         on four.** The honest recommendation is a default of 2, a ceiling of 3, memory as a
         veto only, and adaptation on worker death — pending the owner's own allocation idea.
 
-        Still open on real audio: the **phone** has only ever run the synthetic sweep, so its
-        1.8x at two workers is probably nearer 1.3x (the spike grew a file picker for this,
-        since `sample-data/` is gitignored and never deployed). And **accuracy and speaker
+        **Then the phone ran real speech** (`spike/transcribe-endurance.html`, 6 passes
+        over 1/2/3 workers, direction alternating, workers reused): **1.44x at two workers,
+        1.72x at three** — within-pass ratios, so content and drift cancel. The phone
+        therefore scales BETTER than the 16-core desktop (1.62x at three, 1.64x peak),
+        which fits the bandwidth explanation and the older "four fast cores beat sixteen
+        slower ones" result. Three workers clearly beat two here, but the phone dies
+        loading a fourth, and 3 x 219 MB = 657 MB leaves little room for DuckDB and WebR in
+        the same tab — a deliberate decision, not an arithmetic one.
+
+        Thermal is **still unmeasured**: the run took 1.6 minutes, not the predicted 10-12,
+        because clips were chosen by position and the phone got tape leader and run-out (276
+        characters a minute, ~55 wpm, against the desktop's 1068 and ~214). The "66x real
+        time" headline is an artefact of transcribing near-silence. Fixed: clips chosen by
+        level, a wall-clock budget instead of a pass count, iOS mid-file MP3 decoding (a
+        frame-header scan — Safari refused the slices, so the phone had fallen back to
+        decoding all 40 minutes, ~153 MB, on a device that died at ~880 MB), and a per-clip
+        fingerprint. The fingerprint matters: **"ms per 1000 characters is comparable across
+        devices" was wrong** — one desktop measured 9.66 and 5.96 ms/char on two different
+        minutes of the same tape, because a clip pays a fixed encoder cost per 30 s window
+        regardless of speech. So the 1.25x phone-vs-desktop figure does not stand either,
+        and comparisons are only valid when clip fingerprints match. And **accuracy and speaker
         detection remain entirely unmeasured** — the AMI fixture carries per-speaker
         `words.xml` with start and end times, so word error rate and diarization error are
         both measurable against it when that work starts.

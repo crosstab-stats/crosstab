@@ -521,8 +521,6 @@ AMI fixture ships word-level transcripts with speaker labels (`ami_public_manual
 5183 files, per-speaker `words.xml` with start and end times), so word error rate and
 diarization error are measurable against it whenever that work starts.
 
-## Still unmeasured
-
 ### An instrument bug worth remembering
 
 `performance.measureUserAgentSpecificMemory()` **hangs indefinitely in a hidden tab** — it
@@ -532,11 +530,102 @@ workers in six seconds). `measure()` now races a timeout and is skipped entirely
 `document.hidden`. A `setTimeout` guard alone is not enough: timers in a hidden tab are
 throttled to about once a minute, so an 8 s guard can take 60 s to fire.
 
+## The phone, on real speech, over repeated passes
+
+`spike/transcribe-endurance.html`, phone (4 cores, isolated, wake lock held), the
+40-minute US Army oral history fetched from archive.org. Six passes over 1, 2 and 3
+workers with the direction alternating, the same three workers reused throughout.
+
+| pass | dir | N=1 | N=2 | N=3 | su2 | su3 |
+|---|---|---|---|---|---|---|
+| 1 | -> | 1391 | 1961 | 2301 | 1.42x | 1.81x |
+| 2 | <- | 1182 | 1834 | 2343 | 1.29x | 1.51x |
+| 3 | -> | 1171 | 1649 | 2270 | 1.42x | 1.55x |
+| 4 | <- | 1385 | 1752 | 2196 | 1.58x | 1.89x |
+| 5 | -> | 1205 | 1921 | 2194 | 1.25x | 1.65x |
+| 6 | <- | 1553 | 1881 | 2434 | 1.65x | 1.91x |
+
+(ms per clip; `su` is throughput against 1 worker in the same pass.)
+
+### What this settles
+
+**Concurrency on a phone, with real speech: 1.44x at two workers, 1.72x at three.**
+These are within-pass ratios over identical clips, so content and drift cancel out —
+they are the trustworthy numbers in the table.
+
+**The phone scales BETTER than the 16-core desktop.** Desktop real-audio peaked at 1.64x
+(four workers) and gave 1.62x at three; the phone gives 1.72x at three. On four cores.
+That fits the memory-bandwidth explanation: a phone's unified memory serves four cores
+more evenly than a desktop serves sixteen, and transcription's expensive half is
+bandwidth-bound. It also fits the older finding that four fast cores beat sixteen slower
+ones.
+
+**Three workers are clearly better than two on the phone** (1.72x against 1.44x), where on
+the desktop the third worker added almost nothing. But the phone died loading a FOURTH
+worker, so three is also the ceiling, and 3 x 219 MB = 657 MB leaves little room for
+DuckDB and WebR in the same tab. Worth deciding deliberately rather than by arithmetic.
+
+### What this does NOT settle, and why
+
+**Thermal behaviour: still unmeasured.** The run took **1.6 minutes**, not the 10-12
+predicted, so nothing got hot. The apparent "drift" is negative — N=1 went from 1391 to
+1205 ms/clip, i.e. 13% FASTER — which is warm-up (JIT, allocator, CPU boost ramping), not
+throttling. Six passes is simply not a thermal test, so the spike now takes a wall-clock
+budget (`?minutes=10`) instead of a pass count.
+
+**"66x real time overall" is an artefact, not a result.** It came from transcribing
+near-silence. The clips were chosen by POSITION — 0%, 50% and 100% of the recording — with
+no check that anyone was talking, so the phone got tape leader and run-out:
+
+| | phone | desktop, same recording |
+|---|---|---|
+| ms per clip | 1314 | 6366 |
+| characters per clip | 276 | 1068 |
+| implied speech rate | **55 wpm** | **214 wpm** |
+
+Conversational English runs 120-180 wpm. The phone was transcribing mostly nothing.
+
+### Two of my claims that this falsified
+
+**"Content-normalised cost (ms per 1000 characters) is comparable across devices."** It is
+not. On ONE desktop, two different minutes of this same recording measured **9.66 and 5.96
+ms per character**. A clip pays a fixed encoder cost per 30 s window whether or not anyone
+speaks, so cost is roughly `fixed + rate x characters`, and the per-character figure moves
+with speech density. Fitting the two desktop points gives ~3.6 s fixed per 60 s clip plus
+~2.6 ms per character — an interpolation through two points rather than a validated model,
+but enough to kill the claim.
+
+**"The phone is 1.25x faster per character than the desktop."** That followed from the
+assumption above, so it does not stand either. Applying the fitted shape instead suggests
+~3.3x, but that extrapolates the desktop's fixed-to-variable ratio onto the phone from a
+single phone data point, which is not evidence. **The only sound cross-device comparison is
+both devices transcribing identical clips** — so the spike now prints a fingerprint per
+clip, and a comparison is only valid when the fingerprints match. Verified deterministic:
+two desktop runs chose the same clips (`63228a 723d03 c6ecf7`), the same levels, and
+measured 4909 and 4910 ms per clip.
+
+### Instrument bugs this run exposed
+
+**iOS could not decode a mid-file MP3 slice** — "clip 2 by range failed (Decoding failed)"
+— so the phone fell back to decoding the whole 40 minutes, about 153 MB of Float32 on a
+device that had already died at roughly 880 MB. It survived; a tighter device would not
+have. Safari will not decode a slice beginning mid-frame, so the spike now scans forward to
+a real MPEG-1 Layer III frame header, requiring three consecutive valid frames so a stray
+0xFF inside audio data cannot fool it. Checked against the actual recording at 12 byte
+offsets: every probe found a boundary within one frame (~600 bytes) and the frame chain
+then covered 100% of the slice.
+
+**Clips are now chosen by level**, not position: the spike samples 8 places and keeps the
+loudest 3. On this recording that narrowed the spread rather than eliminating it (kept
+0.030/0.021/0.020, skipped down to 0.013) and moved the desktop from 1068 to 508
+characters per clip — which is why the fingerprint, not the level, is what makes a
+comparison valid.
+
 ## Still unmeasured
 
-- **The same sweep on a phone, with real audio.** Done on the desktop (above); the phone
-  has only run synthetic noise, which flatters concurrency by about 2x. Its 1.8x at two
-  workers is likely nearer 1.3x. The file picker in the spike exists for this.
+- **Thermal behaviour.** Still the big one. The phone's endurance run lasted 1.6 minutes
+  and its apparent drift was negative, i.e. warm-up. A `?minutes=10` budget now exists for
+  this and has not been run.
 - **Accuracy and speaker detection.** Nothing has measured either. The AMI fixture carries
   the ground truth needed for both.
 - **Per-worker memory on iOS.** Not merely unmeasured but unmeasurable. The desktop's
@@ -544,8 +633,9 @@ throttled to about once a minute, so an 8 s guard can take 60 s to fire.
   a crash will tell us — and one did, at worker 4.
 - **`base` and `small`.** `WORKER_MB` scales them from their download size, which the
   linearity result makes plausible and nothing has checked.
-- **Sustained load.** Every figure here is a burst of minutes. An hour of audio on a
-  throttling phone is still an extrapolation.
+- **An identical-clip comparison across devices.** The fingerprint makes it checkable;
+  nobody has yet run the phone and the desktop on matching fingerprints, so every
+  phone-vs-desktop ratio quoted so far rests on an assumption the fit above undermines.
 - **The bigger models.** `base` and `small` are priced in the pool by scaling from their
   download, which assumes the arena cost is mostly fixed. Worth checking before anyone
   runs four `small` workers.
