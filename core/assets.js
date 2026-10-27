@@ -49,6 +49,10 @@ const CDN = Object.freeze({
   // (#143). Signaling rides public MQTT brokers (nothing we host); it then drops to a
   // direct WebRTC data channel. Lazy-loaded only when live collab is used. Pinned.
   trysteroUrl: 'https://cdn.jsdelivr.net/npm/trystero@0.21.5/mqtt/+esm',
+  // transformers.js — on-device speech-to-text and speaker embeddings (#139 Phase 2).
+  // Lazy-loaded inside a worker, only when someone transcribes. Pinned for the same
+  // reason WebR is: a silent release must not change what a transcript says.
+  transformersUrl: 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1',
   // null ⇒ DuckDBManager uses duckdb.getJsDelivrBundles() (the jsDelivr URLs).
   duckdbBundles: null,
 });
@@ -66,6 +70,7 @@ const LOCAL = Object.freeze({
   duckdbUrl: './vendor/duckdb/dist/duckdb-browser.mjs',
   arrowUrl: './vendor/arrow/arrow.mjs',
   hyparquetWriterUrl: './vendor/hyparquet-writer/hyparquet-writer.mjs',
+  transformersUrl: './vendor/transformers/transformers.mjs',
   // Air-gap note: live P2P collaboration needs a reachable MQTT broker + peers, so
   // it's inherently non-offline; this mirror only keeps the import resolvable.
   trysteroUrl: './vendor/trystero/mqtt.mjs',
