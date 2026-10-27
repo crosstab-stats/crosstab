@@ -123,6 +123,136 @@ document.getElementById('run').addEventListener('click', async () => {
       if (label === 'short') log(`  text: ${JSON.stringify(String(out.text).slice(0, 120))}`, 'dim');
     }
 
+    // ---------------------------------------------------------------------------
+    // Diarization: who spoke, and when. A separate model from Whisper.
+    // ---------------------------------------------------------------------------
+    if (q.get('diarize') !== 'no') {
+      log('\n--- speaker diarization ---');
+      try {
+        const before = bytes;
+        t = performance.now();
+        const segModel = 'onnx-community/pyannote-segmentation-3.0';
+        const [proc, seg] = await Promise.all([
+          lib.AutoProcessor.from_pretrained(segModel),
+          lib.AutoModelForAudioFrameClassification.from_pretrained(segModel, { dtype: 'q8' }),
+        ]);
+        log(`segmentation model ready: ${ms(performance.now() - t)} · ${mb(bytes - before)}`, 'ok');
+
+        // A real two-speaker conversation with known ground truth: JFK, MLK, JFK.
+        // Three turns, two speakers — a correct answer is A, B, A.
+        const mlkBuf = await (await fetch('https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/mlk.wav')).arrayBuffer();
+        const mlk = (await ctx.decodeAudioData(mlkBuf.slice(0))).getChannelData(0);
+        const convo = new Float32Array(one.length * 2 + mlk.length);
+        convo.set(one, 0);
+        convo.set(mlk, one.length);
+        convo.set(one, one.length + mlk.length);
+        log(`conversation: ${(convo.length / 16000).toFixed(1)} s — JFK ${(one.length / 16000).toFixed(1)}s, MLK ${(mlk.length / 16000).toFixed(1)}s, JFK again`);
+
+        t = performance.now();
+        const inputs = await proc(convo);
+        const { logits } = await seg(inputs);
+        const turns = proc.post_process_speaker_diarization(logits, convo.length)[0];
+        const took = performance.now() - t;
+        log(`diarized in ${ms(took)} — ${(convo.length / 16000 / (took / 1000)).toFixed(1)}x real time`, 'ok');
+
+        // Merge adjacent same-speaker turns; raw output is frame-level and chatty.
+        const merged = [];
+        for (const seg1 of turns) {
+          const last = merged[merged.length - 1];
+          if (last && last.id === seg1.id && seg1.start - last.end < 0.5) last.end = seg1.end;
+          else merged.push({ id: seg1.id, start: seg1.start, end: seg1.end });
+        }
+        log(`turns: ${merged.length} (raw frames: ${turns.length})`);
+        for (const m of merged.slice(0, 8)) {
+          log(`  Speaker ${m.id}: ${m.start.toFixed(1)}s – ${m.end.toFixed(1)}s`, 'dim');
+        }
+        const ids = [...new Set(merged.map((m) => m.id))];
+        const pattern = merged.map((m) => String.fromCharCode(65 + ids.indexOf(m.id))).join(',');
+        log(`speakers found: ${ids.length} · pattern: ${pattern}`, ids.length === 2 ? 'ok' : 'bad');
+        log(`  ground truth is 2 speakers, pattern A,B,A`, 'dim');
+        // ---------------------------------------------------------------------
+        // The segmentation model answers "is someone speaking", not "who". Identity
+        // needs embeddings: slice, embed, cluster by cosine distance, merge.
+        // ---------------------------------------------------------------------
+        log('\n  --- with speaker embeddings ---');
+        const beforeEmb = bytes;
+        t = performance.now();
+        const embId = 'onnx-community/wespeaker-voxceleb-resnet34-LM';
+        const [embProc, embModel] = await Promise.all([
+          lib.AutoProcessor.from_pretrained(embId),
+          lib.AutoModel.from_pretrained(embId, { dtype: 'q8' }),
+        ]);
+        log(`  embedding model ready: ${ms(performance.now() - t)} · ${mb(bytes - beforeEmb)}`, 'ok');
+
+        const WIN = 2.0; // seconds — long enough for a stable voice print, short enough to find a turn
+        const SR = 16000;
+        const vecs = [];
+        t = performance.now();
+        for (let i = 0; i + WIN * SR <= convo.length; i += WIN * SR) {
+          const slice = convo.subarray(i, i + WIN * SR);
+          const out = await embModel(await embProc(slice));
+          if (!vecs.length) log(`  model output keys: ${Object.keys(out).join(', ')}`, 'dim');
+          const tensor = out.embeddings ?? out.logits ?? Object.values(out)[0];
+          vecs.push({ at: i / SR, v: Array.from(tensor.data) });
+        }
+        log(`  embedded ${vecs.length} x ${WIN}s windows in ${ms(performance.now() - t)} (dim ${vecs[0].v.length})`);
+
+        const cos = (a, b) => {
+          let d = 0, na = 0, nb = 0;
+          for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+          return d / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+        };
+
+        // Agglomerative: each window joins the nearest existing speaker if close enough,
+        // otherwise starts a new one. The number of speakers is what we do not know — which
+        // is why the THRESHOLD is the whole game, so it is swept rather than guessed. The
+        // embeddings are computed once; only the clustering repeats.
+        const cluster = (thresh) => {
+          const speakers = [];
+          const assigned = [];
+          for (const w of vecs) {
+            let best = -1, bestSim = -2;
+            speakers.forEach((sp, i) => {
+              const sim = cos(w.v, sp.centroid);
+              if (sim > bestSim) { bestSim = sim; best = i; }
+            });
+            if (best >= 0 && bestSim >= thresh) {
+              const sp = speakers[best];
+              sp.centroid = sp.centroid.map((c, i) => (c * sp.n + w.v[i]) / (sp.n + 1));
+              sp.n += 1;
+              assigned.push(best);
+            } else {
+              speakers.push({ centroid: [...w.v], n: 1 });
+              assigned.push(speakers.length - 1);
+            }
+          }
+          const turns = [];
+          vecs.forEach((w, i) => {
+            const last = turns[turns.length - 1];
+            if (last && last.sp === assigned[i]) last.end = w.at + WIN;
+            else turns.push({ sp: assigned[i], start: w.at, end: w.at + WIN });
+          });
+          return { n: speakers.length, turns };
+        };
+
+        for (const th of [0.25, 0.35, 0.45, 0.55, 0.65]) {
+          const { n, turns } = cluster(th);
+          const shape = turns.map((t2) => String.fromCharCode(65 + t2.sp)).join(',');
+          log(`  thresh ${th}: ${n} speakers, ${turns.length} turns — ${shape}`,
+              n === 2 && turns.length === 3 ? 'ok' : '');
+          if (n === 2 && turns.length === 3) {
+            for (const t2 of turns) {
+              log(`      Speaker ${String.fromCharCode(65 + t2.sp)}: ${t2.start.toFixed(1)}s – ${t2.end.toFixed(1)}s`, 'dim');
+            }
+          }
+        }
+        log(`    ground truth: A 0–11s, B 11–24s, A 24–35s`, 'dim');
+      } catch (err) {
+        log(`diarization FAILED: ${err?.message ?? err}`, 'bad');
+        log(String(err?.stack ?? '').split('\n').slice(0, 4).join('\n'), 'dim');
+      }
+    }
+
     log('\n--- verdict inputs ---');
     log(`device ${device} · model bytes ${mb(bytes)} · load ${ms(loadMs)}`);
     log('An hour of interview audio at the factor above:');

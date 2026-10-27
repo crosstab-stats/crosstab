@@ -260,6 +260,45 @@ faster to be ready** (3.9 s against 50–84 s), and still 9.4× real time. WebGP
 throughput for 2.3× the bytes and a minute of startup — offer it as "faster, bigger"; do
 not make a first-time user transcribing one interview wait for it.
 
+## Speaker diarization — yes, but not from the obvious model
+
+Whisper transcribes; it does not say who spoke. The owner asked for `Voice1: … Voice2: …`,
+so both candidate models were measured against a conversation with known ground truth:
+**JFK (11 s) → MLK (13 s) → JFK (11 s)**, i.e. two speakers, pattern A, B, A.
+
+**`pyannote-segmentation-3.0` (1.5 MB quantised) is the wrong tool on its own.** It loads
+in 682 ms and runs at **67× real time**, and it correctly reported *two* speakers — then
+alternated them every half second, `A,B,A,B,…` **29 times** through three actual turns. It
+is a frame-level speaker-ACTIVITY model whose labels are positional within a local window,
+not identities that survive across one. Good for "is anyone talking"; useless for "who".
+
+**`wespeaker-voxceleb-resnet34-LM` (6.4 MB quantised) plus clustering is the answer.**
+Slice into 2 s windows, embed each (256-dim), cluster agglomeratively by cosine similarity,
+merge adjacent windows in the same cluster. 17 windows embedded in 2.1 s (~17× real time).
+
+| cosine threshold | speakers found | turns | pattern |
+|---|---|---|---|
+| 0.25 | **2** | **3** | **A,B,A** |
+| 0.35 | **2** | **3** | **A,B,A** |
+| 0.45 | 3 | 7 | A,B,A,C,A,B,A |
+| 0.55 | 8 | 13 | … |
+| 0.65 | 11 | 15 | … |
+
+At 0.25–0.35 the result is right: boundaries at **12.0 s and 24.0 s** against ground truth
+11 s and 24 s — inside one window. Cost is **~8 MB** on top of Whisper's 44 MB and roughly
+half the throughput, which still leaves it comfortably faster than real time.
+
+### What this does not prove
+
+- **Two famous, very distinct male voices in clean studio audio, no overlap, no
+  crosstalk.** Real interview audio has all three, plus accents and room noise.
+- **The threshold is tuned on one example.** The jump from 2 speakers to 11 across
+  0.25 → 0.65 shows how sensitive it is; a different recording may want a different value,
+  which argues for exposing it, or for asking the user how many speakers to expect (in an
+  interview, usually known).
+- **2 s windows put turn boundaries at ±2 s**, and a short interjection — "mm-hm", a
+  one-word interruption — is absorbed into the surrounding turn rather than found.
+
 ## The phone result overturns the mobile assumption
 
 **The phone is nearly twice the desktop's WASM throughput — 17.0× against 9.4× — and equal
