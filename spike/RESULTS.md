@@ -376,10 +376,43 @@ requeued job to learn from. That is what makes "a new phone gets two, an old pho
 an iPad four, a desktop ten" happen without anyone maintaining a table of devices, and the
 user can override the number anyway.
 
+## The phone, and a limit that is permanent
+
+Run on the owner's phone (4 cores), first un-isolated and then isolated once the spikes
+learned to register the service worker themselves:
+
+| | isolated? | worker 1 | worker 2 | memory |
+|---|---|---|---|---|
+| first run | no (SW not controlling) | 1133 ms | 1180 ms | unmeasurable |
+| second run | **yes** | 1355 ms | 1243 ms | **still unmeasurable** |
+
+**iOS offers no memory gauge at all, isolated or not.** `navigator.deviceMemory`,
+`performance.measureUserAgentSpecificMemory` and `performance.memory` were all ABSENT in
+both runs. This is not a symptom of the missing isolation — those APIs are not Safari's,
+and isolation does not conjure them. So on an entire platform there is **no number to
+read**, permanently, and any allocation policy that depends on reading one is blind there.
+That is the single strongest argument for adapting on worker deaths instead.
+
+The isolated run came out ~10% slower across two samples each, which is **noise, not a
+finding** — and these are model LOAD times anyway: fetch, parse, arena allocation. Threads
+help inference, not loading. The inference figure for this phone is in the Whisper spike
+above (17× real time, isolated).
+
+What it does establish: **two workers load fine on a 4-core phone**, in about 1.3 s each,
+and 4 cores is exactly what the blind heuristic turns into a limit of 2 — the policy's
+guess and the device's behaviour agreeing, arrived at independently.
+
 ## Still unmeasured
 
-- **A phone.** The per-worker figure is desktop Chrome. Run
-  `?n=2` on the phone to see both the cost and whether the second worker survives.
+- **Whether concurrency actually HELPS on a phone.** Both runs only LOAD models; neither
+  runs inference on several at once. On 4 cores with ORT already threading inside each
+  worker, two workers may finish a pair of interviews in half the time — or in the same
+  time, with contention eating the gain. That is the measurement any allocation policy
+  rests on, and it needs no memory API: it is a stopwatch on N jobs at concurrency 1
+  versus N.
+- **Per-worker memory on iOS.** Not merely unmeasured but unmeasurable. The desktop's
+  219 MB is the only figure we will get, and whether a phone's arenas are comparable is
+  something only a crash will ever tell us.
 - **The bigger models.** `base` and `small` are priced in the pool by scaling from their
   download, which assumes the arena cost is mostly fixed. Worth checking before anyone
   runs four `small` workers.
