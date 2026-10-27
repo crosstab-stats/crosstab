@@ -1666,11 +1666,61 @@ bottom; they are the project's memory and are not summarised away.
         The plugin never reads it — the coded quote is `doc.text.slice(lo, hi)` — and a
         test now forbids reaching for `range.toString()`, which would look like a
         simplification and would start putting clocks inside quotes.
-  - [ ] **Whisper auto-transcription (Phase 2 — DEFERRED, feasibility confirmed).** In-
-        browser transcription via transformers.js (WebGPU + WASM fallback) or whisper.cpp
-        WASM; models cache offline like the R packages. A real epic (30–180 MB model
-        download, worker architecture) — the deferral is scope/effort, not feasibility.
-        See the Whisper feasibility notes under #139 above.
+  - [~] **Whisper auto-transcription (Phase 2) — SPIKED 2026-10-26, and the spike
+        changed the design.** The owner asked to de-risk before committing to the epic:
+        *"build the narrowest end-to-end slice… turn the July estimates into measurements."*
+        Done, under CrossTab's own isolation (`sample-data/whisper-spike.html`, gitignored,
+        served by the dev server so `COOP: same-origin` / `COEP: credentialless` are real).
+        It loads a model, transcribes a public-domain clip, repeats it to ~60 s and reports
+        the real-time factor.
+
+        **It works, and it is much faster than July estimated.** Transcription is correct —
+        *"And so my fellow Americans ask not what your country can do for you…"* — and
+        nothing about the isolation gets in the way: `crossOriginIsolated: true`, WebGPU
+        available, model weights fetched straight from the CDN.
+
+        | config | over the wire | pipeline ready | 60 s RTF | an hour of audio |
+        | --- | --- | --- | --- | --- |
+        | WebGPU fp32 | 149.8 MB | 83.8 s | 15.1× | 4.0 min |
+        | WebGPU q4 | 91.3 MB | 50.9 s | **17.0×** | 3.5 min |
+        | **WASM q8** | **39.0 MB** | **3.9 s** | 9.4× | 6.4 min |
+
+        **Against July's estimates:** it said WebGPU ~5–8× and WASM ~2–3× real-time.
+        Measured **15–17×** and **9.4×** — two to three times better on both paths. It also
+        said "tiny 75 MB (Q5 31 MB)"; fp32 is really **149.8 MB**, and the quantised WASM
+        build is **39 MB**, close to the quoted Q5 figure. So the size estimate was right
+        only for the quantised variant, and the speed estimate was pessimistic throughout.
+
+        **The design change: WASM q8 should be the DEFAULT, not the fallback.** July's note
+        said "treat WebGPU as the bonus fast path, WASM as baseline" for mobile reasons, but
+        the measurements make it the better default everywhere: a quarter of the download,
+        **twenty times faster to be ready** (3.9 s against 50–84 s), and still 9.4× real
+        time. WebGPU q4 buys 1.8× throughput for 2.3× the bytes and a minute of startup —
+        worth offering as "faster, bigger", not worth making anyone wait for by default.
+        A first-time user transcribing one interview is better served by the 39 MB path.
+
+        **An honesty caveat on the WASM figure.** It was measured on a 16-core desktop with
+        WebGPU deliberately disabled, so it says "a desktop without WebGPU is fine" and says
+        nothing reliable about a tablet CPU. July's advice to prefer transcript import or
+        desktop-transcribe on older iPads still stands until someone runs the spike there —
+        which is why the spike file is kept rather than deleted. It takes a `?device=` and
+        `?dtype=` query, so re-running it on an iPad is opening a URL.
+
+        **What the spike did NOT do**, and what the epic still is: worker architecture (this
+        ran on the main thread and froze the tab for seconds at a time — unacceptable in the
+        app), chunking and progress for long recordings, cancellation, model choice UI, and
+        the cache/offline integration. The feasibility question is now closed; the effort
+        question is not.
+
+        **Still to decide (deferred by the owner until the spike reported):** where the
+        weights come from. The numbers now favour the established pattern — pinned CDN pull,
+        cached by "make available offline", vendorable for air-gap (#71) — because 39 MB is
+        the same order as the R packages already fetched on demand, and an explicit
+        size-gated prompt would be heavier than the thing it guards.
+
+        Original note: in-browser transcription via transformers.js (WebGPU + WASM fallback)
+        or whisper.cpp WASM; models cache offline like the R packages. A real epic — the
+        deferral was scope/effort, not feasibility. See the feasibility notes under #139.
 
 - [~] **File import — as a plugin extension point. THE FILE HALF IS NOW THE CODEC
       INTERFACE** (#98/#130; verified 2026-08-21). `builtin-csv-codec` says it plainly:
@@ -9159,10 +9209,13 @@ The record of what shipped and why. Kept in full, in the original sections.
     (surfaces core/zip.js) and **`app.state.read(wsId)`** (owner-scoped read of a
     workspace blob the plugin declares, from the compute frame — #89-safe). text/image-
     rect/time round-trip; region-over-time exports time-span only. SCHEMA to validate vs
-    NVivo/ATLAS (time units ms vs s = `TIME_SCALE`; not XSD-verified). Remaining: (5b)
-    QDPX **import** (time-selections → time codings, faithful, per user; spatialize-later
-    needs a time-coding→region-over-time upgrade path that does NOT exist yet) and (6)
-    Whisper.
+    NVivo/ATLAS (time units ms vs s = `TIME_SCALE`; not XSD-verified).
+    **(5b) QDPX IMPORT IS ALSO BUILT** — corrected 2026-10-26: this line still read
+    "Remaining: (5b) QDPX import", but `parseQdpx` is wired as an import verb behind a
+    `.qdpx` picker and the self round-trip was verified 2026-10-21. What is genuinely
+    missing from 5b is narrower than "import": the **spatialize-later** path, i.e.
+    upgrading an imported time-coding into a region-over-time, which does not exist.
+    **So (6) Whisper is the only remaining step of the six.**
   - **Video region-over-time — tracker rungs (built 1–3; rung 4 deferred).** Region-over-
     time coding is a spatiotemporal segment `{keys:[{t,x,y,w,h}], tStart,tEnd}` — a box
     that interpolates between keyframes (`regionAtTime`). **Built:** (1) static region +
