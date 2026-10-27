@@ -196,14 +196,57 @@ const REFERENCE = q.get('reference') || './ami-ES2002a-reference.json';
  */
 const FILLERS = new Set(['um', 'uh', 'erm', 'er', 'mm', 'hmm', 'mmhmm', 'uhhuh', 'huh', 'mmm']);
 
-function normalise(text, { dropFillers = false } = {}) {
-  const words = String(text)
+// Standard ASR scoring normalises BOTH sides before comparing, and Whisper ships a
+// normaliser for exactly this reason. Without one, the error list fills up with things
+// that are not recognition failures at all: "gonna -> to" x10, "five -> 25" x5,
+// "favourite -> favorite" x3, "alright -> right" x2. Measured on the full file, normalising
+// is worth 2.5 points of WER and costs nothing but agreement about spelling.
+const UNITS = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19 };
+const TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70,
+  eighty: 80, ninety: 90 };
+const SPELL = { gonna: 'going to', wanna: 'want to', gotta: 'got to', dunno: 'dont know',
+  kinda: 'kind of', sorta: 'sort of', cause: 'because', cos: 'because',
+  alright: 'all right', ok: 'okay', okey: 'okay', yep: 'yes',
+  favourite: 'favorite', colour: 'color', realise: 'realize', organise: 'organize',
+  recognise: 'recognize', behaviour: 'behavior', centre: 'center', analyse: 'analyze',
+  metre: 'meter', programme: 'program' };
+
+/** Spelled numbers to digits on both sides, so "twenty five" and "25" stop being an error. */
+function numbersToDigits(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w in TENS) {
+      const next = words[i + 1];
+      if (next && next in UNITS && UNITS[next] > 0 && UNITS[next] < 10) {
+        out.push(String(TENS[w] + UNITS[next]));
+        i += 1;
+        continue;
+      }
+      out.push(String(TENS[w]));
+      continue;
+    }
+    if (w in UNITS) { out.push(String(UNITS[w])); continue; }
+    out.push(w);
+  }
+  return out;
+}
+
+
+function normalise(text, { dropFillers = false, fix = false } = {}) {
+  let words = String(text)
     .toLowerCase()
     .replace(/[‘’']/g, '')          // apostrophes, straight and curly
     .replace(/[^a-z0-9\s-]/g, ' ')            // everything else that is not a word
     .replace(/-/g, ' ')                       // hyphenated forms split, both sides alike
     .split(/\s+/)
     .filter(Boolean);
+  if (fix) {
+    words = words.flatMap((w) => (w in SPELL ? SPELL[w].split(' ') : [w]));
+    words = numbersToDigits(words);
+  }
   return dropFillers ? words.filter((w) => !FILLERS.has(w)) : words;
 }
 
@@ -684,9 +727,13 @@ document.getElementById('run').addEventListener('click', async () => {
         const sNo = score(refNoFill, normalise(out.text, { dropFillers: true }));
         const uniq = hyp.length ? new Set(hyp).size / hyp.length : 0;
         const recall = bagRecall(refN, hyp);
+        // Also score the normalised forms, which is what standard ASR practice reports.
+        const sFix = score(normalise(refText, { fix: true }), normalise(out.text, { fix: true }));
+        const sFixNoFill = score(normalise(refText, { fix: true, dropFillers: true }),
+          normalise(out.text, { fix: true, dropFillers: true }));
         const fill = fillerStats(hyp);
         runs.push({ name: label, model: key, gen: genName, weightsMb, workers: ws.length,
-          s, sNo, uniq, recall, ms, fill, text: out.text });
+          s, sNo, sFix, sFixNoFill, uniq, recall, ms, fill, text: out.text });
         log(`  ${pad(label, 22)}${pad(pct(s.wer), 8)}${pad(pct(sNo.wer), 8)}${pad(s.sub, 6)}`
           + `${pad(s.del, 6)}${pad(s.ins, 6)}${pad(s.hypWords, 7)}${pad(uniq.toFixed(3), 7)}`
           + `${pad(pct(recall), 8)}${(pcm.length / SR / (ms / 1000)).toFixed(1)}`,
@@ -731,8 +778,23 @@ document.getElementById('run').addEventListener('click', async () => {
     log('  anthropology that loss is the finding, not formatting.', 'dim');
 
     log('');
+    log('--- with a text normaliser applied to both sides (standard ASR practice) ---');
+    log(`  ${pad('model', 22)}${pad('raw', 9)}${pad('-fillers', 10)}${pad('normalised', 12)}`
+      + 'normalised -fillers');
+    for (const r of runs) {
+      log(`  ${pad(r.name, 22)}${pad(pct(r.s.wer), 9)}${pad(pct(r.sNo.wer), 10)}`
+        + `${pad(pct(r.sFix.wer), 12)}${pct(r.sFixNoFill.wer)}`,
+          r.sFixNoFill.wer < 0.3 ? 'ok' : '');
+    }
+    log('  Normalising maps "gonna"/"going to", "25"/"twenty five" and British to American', 'dim');
+    log('  spelling on BOTH sides. None of those were ever recognition failures, and the', 'dim');
+    log('  error list above is full of them.', 'dim');
+
+    log('');
     log(`best: ${best.name} at ${pct(best.s.wer)} WER (${pct(best.sNo.wer)} without fillers), `
       + `${best.weightsMb} MB of weights`, 'ok');
+    log(`  normalised: ${pct(best.sFix.wer)}, and ${pct(best.sFixNoFill.wer)} ignoring fillers`
+      + ` — ${pct(1 - best.sFixNoFill.wer)} accuracy`, 'ok');
     const hour = (r) => {
       const rt = (pcm.length / SR) / (r.ms / 1000);
       return `${(3600 / rt / 60).toFixed(0)} min per hour of audio on ${r.workers} worker(s)`;

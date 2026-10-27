@@ -1063,6 +1063,68 @@ disfluencies" as a display option. Do **not** offer a verbatim or filler-retenti
 captures about a tenth of disfluencies, and anyone studying them should import their own
 transcript — a path the product already treats as first-class.
 
+## Cross-device: the numbers are not close, they are identical
+
+The owner repeated the full-file measurement on their phone - `small`, one worker, 17.7
+minutes - to see whether the figures hold across devices and browser engines.
+
+| | WER | no fillers | sub | del | ins | hyp | uniq | recall | x real |
+|---|---|---|---|---|---|---|---|---|---|
+| phone, Safari/WebKit, **1 worker** | 32.7% | 28.6% | 255 | 471 | 136 | 2298 | 0.245 | 79.1% | 1.4 |
+| desktop, Chrome/Blink, **3 workers** | 32.7% | 28.6% | 255 | 471 | 136 | 2298 | 0.245 | 79.1% | 2.9 |
+
+**Every figure matches** - the same transcript, across different CPU architectures, browser
+engines and worker counts. ONNX q8 inference is deterministic, and worker count does not
+affect output at all (independently confirmed: one and two workers on the decode path both
+gave 36.7% and 259 words on a two-minute sample).
+
+Only speed differs. Per worker the phone is now slightly SLOWER than the desktop, reversing
+the 1.87x advantage it held with `tiny` - consistent with memory bandwidth mattering more
+as the weights grow sixfold, and with the phone being warm after twelve minutes of load.
+
+### That identity depended on not decoding the audio
+
+Reading 16-bit PCM directly instead of through the browser's decoder is what made this
+comparison clean. On the decode path the same desktop scored **31.2%**, so **1.5 points was
+the browser's audio decoder** rather than anything about the device. A fixed divide by
+32768 is identical on every engine; each decoder is its own black box, and engine is the
+variable a cross-engine comparison must not contain.
+
+## A third of the "errors" were never recognition failures
+
+The error breakdown makes the number interpretable for the first time.
+
+**Most-missed words**: `um x69, yeah x31, uh x25, mm x22, hmm x19, like x12, so x11, a x10,
+okay x9, know x9`. Almost the entire head of that list is fillers and backchannels.
+
+**Most-misheard**: `gonna -> to x10, five -> 25 x5, dunno -> know x4, favourite -> favorite
+x3, okay -> ok x2, alright -> right x2, fifty -> 1250 x2`. British spelling, digits against
+words, and colloquial contractions - not one of them a mishearing.
+
+Standard ASR practice normalises both sides before scoring, and Whisper ships a normaliser
+for exactly this. Applied to the full transcript:
+
+| | WER | accuracy | errors |
+|---|---|---|---|
+| as scored | 32.7% | 67.3% | 862 |
+| ignoring fillers | 28.6% | 71.4% | 704 |
+| **normalised** | **30.2%** | **69.8%** | 802 |
+| **normalised, ignoring fillers** | **26.0%** | **74.0%** | 646 |
+
+So on the hardest free benchmark available - four people interrupting each other - `small`
+reads 74% accurate once spelling and disfluencies are set aside, against a raw 67.3%.
+
+The normaliser is verified to collapse only non-errors: `gonna`/`going to`, `twenty five`/`25`,
+`favourite`/`favorite` all agree, while `craig`/`greg` and `five`/`four` stay distinct, so
+real errors are not being hidden.
+
+### Still visibly wrong, and not ours
+
+A whole clause appears duplicated in the transcript (`DO YOU WANT TO INTRODUCE YOURSELF
+AGAIN HI IM LAURA AND IM THE PROJECT MANAGER`). That is Whisper's own 30-second chunking
+with `stride_length_s: 5` failing to dedupe its overlap - our segmentation ran with none.
+It accounts for a visible share of the 136 insertions and is worth chasing separately.
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The

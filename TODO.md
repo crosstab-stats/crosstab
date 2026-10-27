@@ -1976,6 +1976,42 @@ bottom; they are the project's memory and are not summarised away.
         verbatim so disfluency researchers import their own transcripts — already a
         first-class path.
 
+        **CROSS-DEVICE: THE NUMBERS ARE IDENTICAL, NOT MERELY CLOSE.** The owner reran
+        the full file on their phone (`small`, ONE worker - two crashed the tab at ~1.1 GB
+        of weights and arenas):
+
+        | | WER | noFill | sub | del | ins | hyp | uniq | x real |
+        |---|---|---|---|---|---|---|---|---|
+        | phone, Safari, 1 worker | 32.7% | 28.6% | 255 | 471 | 136 | 2298 | 0.245 | 1.4 |
+        | desktop, Chrome, 3 workers | 32.7% | 28.6% | 255 | 471 | 136 | 2298 | 0.245 | 2.9 |
+
+        Same transcript across CPU architectures, browser engines and worker counts. Only
+        speed differs, and per worker the phone is now slightly SLOWER than the desktop -
+        reversing the 1.87x advantage it had with `tiny`, consistent with bandwidth
+        mattering more as weights grow sixfold (and with a phone that was warm afterwards).
+
+        That identity depended on **reading 16-bit PCM directly instead of decoding it**: on
+        the decode path the same desktop scored 31.2%, so 1.5 points was the browser's audio
+        decoder rather than the device.
+
+        **A third of the "errors" were never recognition failures.** Top deletions:
+        `um x69, yeah x31, uh x25, mm x22, hmm x19` - fillers and backchannels. Top
+        substitutions: `gonna->to, five->25, favourite->favorite, alright->right` - spelling,
+        digits, contractions. With a standard normaliser applied to both sides (now in the
+        spike, and verified to keep `craig`/`greg` and `five`/`four` distinct):
+
+        | | WER | accuracy |
+        |---|---|---|
+        | as scored | 32.7% | 67.3% |
+        | normalised | 30.2% | 69.8% |
+        | **normalised, ignoring fillers** | **26.0%** | **74.0%** |
+
+        So on four people interrupting each other, `small` is 74% accurate once spelling and
+        disfluencies are set aside. An interview should be markedly better.
+
+        Still visibly wrong and NOT ours: a whole clause duplicated in the transcript, from
+        Whisper's own 30 s chunking with `stride_length_s: 5` failing to dedupe its overlap.
+
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
         app), chunking and progress for long recordings, cancellation, model choice UI, and
