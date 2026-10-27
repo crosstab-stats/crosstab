@@ -203,3 +203,82 @@ export function transcribe(audio, opts = {}) {
     },
   });
 }
+
+/**
+ * The host service behind `app.transcribe` — see `core/plugin-broker.js`.
+ *
+ * Core owns transcription only because a sandbox cannot have it: an opaque-origin plugin
+ * frame cannot create a Worker, and every CSP tier is `connect-src 'none'`, so it could
+ * neither run a model nor fetch one. Everything else about the feature belongs to whoever
+ * builds on this — the dialog, the language choice, what a transcript becomes.
+ *
+ * Progress and cancellation are rendered HERE rather than handed back, because a function
+ * cannot cross the broker's structured clone. A caller simply awaits a result.
+ *
+ * @param {object} deps
+ * @param {(opts: object) => object} deps.showProgress  host progress UI; returns
+ *   `{update(state), close()}` and calls `onCancel` if the user stops it.
+ */
+export function createTranscribeService({ showProgress } = {}) {
+  let active = null;
+
+  return {
+    /** What a caller can ask for, so a plugin's dialog is built from the model's own
+     * truth rather than a copied list that will drift. */
+    options() {
+      return {
+        languages: WHISPER_LANGUAGES.map(([code, name]) => ({ code, name })),
+        sizes: MODEL_SIZES.map((m) => ({ ...m })),
+        modes: [
+          { id: 'both', label: 'Transcribe and identify speakers' },
+          { id: 'text', label: 'Transcribe only' },
+          // Listed last but not least: this is the mode that works for a language
+          // Whisper does not know, which is most of the world's languages.
+          { id: 'speakers', label: 'Identify speakers only (works in any language)' },
+        ],
+      };
+    },
+
+    /**
+     * Transcribe and/or diarize `bytes` (any audio the browser can decode).
+     *
+     * @param {ArrayBuffer|Uint8Array} bytes
+     * @param {object} [opts] see {@link transcribe}; `language` must be an explicit code
+     *   unless the caller deliberately passes null to auto-detect.
+     * @returns {Promise<{vtt: string, chunks: object[], turns: object[]|null, seconds: number}>}
+     */
+    async run(bytes, opts = {}) {
+      if (active) throw new Error('A transcription is already running.');
+      const audio = await decodeAudio(bytes);
+      const mode = opts.mode ?? 'both';
+
+      let ui = null;
+      const job = transcribe(audio, {
+        ...opts,
+        mode,
+        onProgress: (p) => ui?.update(p),
+      });
+      active = job;
+
+      ui = showProgress?.({
+        title: mode === 'speakers' ? 'Identifying speakers' : 'Transcribing',
+        // Said up front because the first run is a download, and a silent 238 MB fetch
+        // reads as a hang.
+        hint: 'The first run downloads the model. Everything stays on this device.',
+        onCancel: () => job.cancel(),
+      }) ?? null;
+
+      try {
+        return await job;
+      } finally {
+        active = null;
+        ui?.close();
+      }
+    },
+
+    /** Whether a job is running — so a caller can refuse to start a second. */
+    get busy() {
+      return !!active;
+    },
+  };
+}

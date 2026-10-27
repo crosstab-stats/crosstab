@@ -129,6 +129,67 @@ test('the model sizes name their real download', () => {
 });
 
 // =============================================================================
+// It is a CAPABILITY, not a privileged feature
+// =============================================================================
+
+test('transcription is exposed to plugins, like zip and state.read', async () => {
+  // The owner's architectural point, and the project's own rule: everything is a plugin
+  // except where technically not possible. Core owns the worker and the model fetch
+  // because a sandbox can have neither — an opaque-origin frame cannot create a Worker
+  // (measured, see plugin-sandbox.js) and every CSP tier is connect-src 'none'. Nothing
+  // beyond that is forced, so nothing beyond that should be core's.
+  const broker = codeOf('core/plugin-broker.js');
+  assert.match(broker, /if \(services\.transcribe\) \{/, 'conditional, like zip');
+  assert.match(broker, /'transcribe\.run'/);
+  assert.match(broker, /'transcribe\.options'/);
+
+  const host = readFileSync('plugin-host.html', 'utf8');
+  assert.match(host, /transcribe: makeNamespace\('transcribe', \['run', 'options'\]\)/);
+
+  const app = codeOf('core/app.js');
+  assert.match(app, /services\.transcribe = createTranscribeService\(/);
+});
+
+test('options() reports the model’s own truth, so a plugin dialog cannot drift', async () => {
+  const { createTranscribeService } = await import('../core/transcribe.js');
+  const svc = createTranscribeService({});
+  const o = svc.options();
+  assert.equal(o.languages.length, 99);
+  assert.ok(o.languages.every((l) => l.code && l.name));
+  assert.deepEqual(o.sizes.map((x) => x.id), ['tiny', 'base', 'small']);
+  // Speakers-only must be offered, and must say why it is different — it is the mode
+  // that works for the languages Whisper has never heard of.
+  const speakers = o.modes.find((m) => m.id === 'speakers');
+  assert.ok(speakers, 'speakers-only is an offered mode');
+  assert.match(speakers.label, /any language/i);
+});
+
+test('a second job is refused rather than queued', async () => {
+  // Two models and an hour of audio in parallel is a way to run a device out of memory.
+  const { createTranscribeService } = await import('../core/transcribe.js');
+  const svc = createTranscribeService({});
+  assert.equal(svc.busy, false);
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /if \(active\) throw new Error\('A transcription is already running\.'\)/);
+});
+
+test('progress and cancel are HOST-rendered, because a callback cannot cross the broker', () => {
+  // The same wall that made Layer 3b's `onRedraw` undeliverable: a function does not
+  // survive a structured clone. Rather than invent a callback channel for one caller,
+  // the host draws the dialog — as it already does for webr.installPackages.
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /showProgress\?\.\(/);
+  assert.match(src, /onCancel: \(\) => job\.cancel\(\)/);
+  const app = codeOf('core/app.js');
+  assert.match(app, /showProgress: \(\{ title, hint, onCancel \}\)/);
+  // And it says the data stays put, because a model download looks like an upload to
+  // someone watching a progress bar on their own interview recording.
+  assert.match(app, /showModal\(\)/);
+  const svc = readFileSync('core/transcribe.js', 'utf8');
+  assert.match(svc, /Everything stays on this device/);
+});
+
+// =============================================================================
 // The worker's own decisions, read from its source
 // =============================================================================
 

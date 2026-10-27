@@ -61,6 +61,7 @@ import {
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { renderProjectList } from './project-list.js';
+import { createTranscribeService } from './transcribe.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
@@ -690,6 +691,49 @@ export async function boot(mounts) {
     make: async (entries) => new Uint8Array(await makeZip(entries).arrayBuffer()),
     read: (bytes) => readZipEntries(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)),
   };
+  // On-device transcription for plugins (#139 Phase 2). Core owns the worker and the
+  // model fetch because a sandbox can have neither — an opaque-origin frame cannot create
+  // a Worker, and every plugin CSP tier is `connect-src 'none'`. Everything else about
+  // the feature belongs to whichever plugin builds on it.
+  //
+  // The progress dialog is host-rendered for the same reason `webr.installPackages` is: a
+  // callback cannot survive the broker's structured clone. It is not politeness — a first
+  // run fetches 39–238 MB and then works for minutes, and silence there reads as a hang.
+  services.transcribe = createTranscribeService({
+    showProgress: ({ title, hint, onCancel }) => {
+      const dlg = el('dialog', { class: 'ct-dialog ct-transcribe' });
+      const status = el('p', { class: 'ct-transcribe__status', text: 'Starting…' });
+      const bar = el('progress', { class: 'ct-transcribe__bar' });
+      bar.max = 1;
+      const stop = el('button', { type: 'button', class: 'ct-btn', text: 'Stop' });
+      stop.addEventListener('click', () => { stop.disabled = true; status.textContent = 'Stopping…'; onCancel?.(); });
+      dlg.append(
+        el('h2', { text: title }),
+        el('p', { class: 'ct-hint', text: hint }),
+        status,
+        bar,
+        el('div', { class: 'ct-dialog__actions' }, [stop]),
+      );
+      document.body.append(dlg);
+      dlg.showModal();
+      return {
+        update(p) {
+          if (p.stage === 'speakers' && !p.total) { status.textContent = 'Identifying speakers…'; return; }
+          if (p.total) {
+            const pct = Math.min(1, (p.loaded || 0) / p.total);
+            bar.value = pct;
+            const what = p.stage === 'model' ? 'Downloading the model' : 'Working';
+            status.textContent = `${what}… ${Math.round(pct * 100)}%`;
+          } else if (p.stage === 'transcribe') {
+            bar.removeAttribute('value'); // indeterminate: Whisper reports no per-chunk total
+            status.textContent = 'Transcribing…';
+          }
+        },
+        close() { try { dlg.close(); } catch { /* already closed */ } dlg.remove(); },
+      };
+    },
+  });
+
   // Media importers are per-medium plugins (builtin-image/audio/video-import, #139):
   // they probe in their own media-CSP sandbox and stream bytes into the store via the
   // `assets.put` sink above — no privileged host importer.

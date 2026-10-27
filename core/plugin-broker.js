@@ -202,6 +202,19 @@ export class PluginBroker {
       this.#dispatch['zip.make'] = (entries) => services.zip.make(entries);
       this.#dispatch['zip.read'] = (bytes) => services.zip.read(bytes);
     }
+    // On-device transcription (#139 Phase 2). Core owns the worker and the network
+    // because a sandbox can have neither — an opaque-origin frame cannot create a Worker,
+    // and every CSP tier here is `connect-src 'none'`. Everything else about the feature
+    // is a plugin's: the dialog, the language picker, what the transcript becomes.
+    //
+    // Progress and cancellation are HOST-rendered rather than passed back, because a
+    // callback cannot survive the structured clone this broker is built on — the same
+    // wall that made Layer 3b's `onRedraw` undeliverable. A plugin awaits a result, the
+    // way it does for `webr.installPackages` and its watchdog.
+    if (services.transcribe) {
+      this.#dispatch['transcribe.run'] = (bytes, opts) => services.transcribe.run(bytes, opts);
+      this.#dispatch['transcribe.options'] = () => services.transcribe.options();
+    }
     // Owner-scoped read of a workspace blob the plugin declares (#139, #146).
     if (services.stateRead) {
       this.#dispatch['state.read'] = (wsId, slotId) => services.stateRead(wsId, slotId);

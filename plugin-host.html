@@ -288,6 +288,16 @@
             selection: makeNamespace('selection', ['get', 'dataset']),
             // ZIP for archive-format plugins (#139): make(entries)->bytes, read(bytes).
             zip: makeNamespace('zip', ['make', 'read']),
+            // On-device speech-to-text and speaker diarization (#139 Phase 2).
+            // `run(bytes, opts)` -> {vtt, chunks, turns, seconds}; `options()` -> the
+            // languages and model sizes, so a plugin can build its own dialog rather
+            // than hardcoding a list that will drift from the model.
+            //
+            // Core owns this only because a sandbox cannot: an opaque-origin frame
+            // cannot create a Worker, and every CSP tier here is `connect-src 'none'`,
+            // so it could neither run the model nor fetch it. Progress and cancel are
+            // host-rendered — a callback cannot cross this postMessage boundary.
+            transcribe: makeNamespace('transcribe', ['run', 'options']),
             // Cross-plugin discovery + invocation (#147): list active plugins and
             // their analysis functions, run another plugin's analysis.
             plugins: Object.freeze({
