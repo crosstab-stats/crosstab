@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Whisper spike — does on-device transcription hold up?</title>
+<!--
+  A SPIKE, not a feature — see spike/RESULTS.md for the verdict and the numbers.
+  Its job is to turn July's #139 estimates into measurements, and it is kept rather than
+  deleted because the interesting question is hardware-dependent and this is how you
+  re-ask it: `?device=webgpu|wasm` and `?dtype=fp32|q4|q8`.
+
+  On the dev server it runs under the REAL isolation CrossTab runs under
+  (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy:
+  credentialless`), which is what makes the desktop numbers trustworthy. On GitHub Pages
+  there are no such headers — isolation comes from the service worker — so the page
+  reports `crossOriginIsolated` first. Read that line before the timings: without
+  isolation there is no SharedArrayBuffer, WASM runs single-threaded, and the figure is a
+  floor rather than the real fallback speed.
+
+  What it measures, because these are the numbers the decision needs:
+    1. Is WebGPU actually available here, or do we fall back to WASM?
+    2. How long does the model take to arrive, and how big is it really?
+    3. How long to transcribe a short clip, and a ~60-second one?
+    4. What is the real-time factor — the figure that decides whether an hour of
+       interview audio is a coffee break or an afternoon.
+-->
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+  h1 { font-size: 1.2rem; }
+  button { font: inherit; padding: .5rem 1rem; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px;
+         background: #f6f8fa; border: 1px solid #d0d7de; padding: 1rem; margin-top: 1rem; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; } .dim { color: #656d76; }
+</style>
+
+<h1>Whisper spike</h1>
+<p>Measures what July's feasibility note estimated: model size, load time, and real-time
+   factor, under CrossTab's own cross-origin isolation.</p>
+<button id="run">Run the spike</button>
+<div id="log">idle</div>
+
+<script type="module">
+const logEl = document.getElementById('log');
+const lines = [];
+const log = (s, cls = '') => {
+  lines.push(cls ? `<span class="${cls}">${s}</span>` : s);
+  logEl.innerHTML = lines.join('\n');
+};
+const ms = (n) => `${Math.round(n)} ms`;
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+
+document.getElementById('run').addEventListener('click', async () => {
+  lines.length = 0;
+  log('--- environment ---');
+  log(`crossOriginIsolated: ${crossOriginIsolated}`);
+  log(`hardwareConcurrency: ${navigator.hardwareConcurrency}`);
+  const hasWebGPU = 'gpu' in navigator;
+  let adapter = null;
+  if (hasWebGPU) {
+    try { adapter = await navigator.gpu.requestAdapter(); } catch { /* reported below */ }
+  }
+  log(`WebGPU: ${hasWebGPU ? (adapter ? 'available' : 'navigator.gpu present but no adapter') : 'absent'}`,
+      adapter ? 'ok' : 'bad');
+
+  // Count the bytes the model actually costs, by wrapping fetch. The published figure is
+  // a compressed artefact list; what matters is what crosses the wire here.
+  let bytes = 0;
+  const realFetch = window.fetch;
+  window.fetch = async (...args) => {
+    const res = await realFetch(...args);
+    const len = Number(res.headers.get('content-length')) || 0;
+    bytes += len;
+    const url = String(args[0]?.url ?? args[0]);
+    if (len > 100000) log(`  fetched ${mb(len)}  ${url.split('/').slice(-1)[0]}`, 'dim');
+    return res;
+  };
+
+  try {
+    log('\n--- loading transformers.js ---');
+    let t = performance.now();
+    // Pinned, like every other runtime this project pulls from a CDN.
+    const lib = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1');
+    log(`import: ${ms(performance.now() - t)}`, 'ok');
+
+    log('\n--- building the pipeline (downloads the model) ---');
+    // Both halves are a decision input: the device decides SPEED, the dtype decides
+    // DOWNLOAD. fp32 on WebGPU measured 149.8 MB, which is twice what July's note quoted
+    // for "tiny", so the quantised variant is worth its own measurement.
+    const q = new URLSearchParams(location.search);
+    const device = q.get('device') || (adapter ? 'webgpu' : 'wasm');
+    const dtype = q.get('dtype') || (device === 'webgpu' ? 'fp32' : 'q8');
+    log(`device: ${device} · dtype: ${dtype}`);
+    t = performance.now();
+    const asr = await lib.pipeline('automatic-speech-recognition', 'onnx-community/whisper-tiny.en', {
+      device,
+      dtype,
+      progress_callback: (p) => { if (p.status === 'progress' && p.progress === 100) log(`  ready: ${p.file}`, 'dim'); },
+    });
+    const loadMs = performance.now() - t;
+    log(`pipeline ready: ${ms(loadMs)}  |  bytes over the wire: ${mb(bytes)}`, 'ok');
+
+    log('\n--- audio ---');
+    // The standard transformers.js sample: public-domain JFK speech, ~11 s.
+    t = performance.now();
+    const wav = await (await fetch('https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/jfk.wav')).arrayBuffer();
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    const decoded = await ctx.decodeAudioData(wav.slice(0));
+    const one = decoded.getChannelData(0);
+    log(`clip: ${(one.length / 16000).toFixed(1)} s, decoded in ${ms(performance.now() - t)}`);
+
+    // A ~60 s workload, by repeating the same speech. Not a transcription-quality test —
+    // it is a TIMING test, and real speech is the right load for that.
+    const reps = Math.ceil(60 / (one.length / 16000));
+    const long = new Float32Array(one.length * reps);
+    for (let i = 0; i < reps; i++) long.set(one, i * one.length);
+    log(`long clip: ${(long.length / 16000).toFixed(1)} s (${reps}x the sample)`);
+
+    for (const [label, audio] of [['short', one], ['~60 s', long]]) {
+      const secs = audio.length / 16000;
+      t = performance.now();
+      const out = await asr(audio, { chunk_length_s: 30, stride_length_s: 5 });
+      const took = performance.now() - t;
+      log(`\n${label}: ${ms(took)} for ${secs.toFixed(1)} s audio`);
+      log(`  real-time factor: ${(secs / (took / 1000)).toFixed(1)}x`, 'ok');
+      if (label === 'short') log(`  text: ${JSON.stringify(String(out.text).slice(0, 120))}`, 'dim');
+    }
+
+    log('\n--- verdict inputs ---');
+    log(`device ${device} · model bytes ${mb(bytes)} · load ${ms(loadMs)}`);
+    log('An hour of interview audio at the factor above:');
+    log('  (3600 / factor) seconds of grinding — compare against "a coffee break".');
+  } catch (err) {
+    log(`\nFAILED: ${err?.message ?? err}`, 'bad');
+    log(String(err?.stack ?? '').split('\n').slice(0, 6).join('\n'), 'dim');
+  } finally {
+    window.fetch = realFetch;
+  }
+});
+</script>

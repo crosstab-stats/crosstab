@@ -195,3 +195,70 @@ common type faithfully — with two SQL-side rules baked in (`CAST` decimals/int
 recode user-missing) and temporal reconstruction pinned to UTC. **Cleared to
 build the real DuckDB-backed `DataStore`.** Remaining unknown is device-only:
 the whole path on **iPad Safari** (Milestone 3).
+
+
+---
+
+# Spike results — Whisper on-device transcription (`whisper-spike.html`)
+
+De-risking #139 Phase 2 before committing to the epic, at the owner's request: turn July's
+feasibility estimates into measurements. **Verdict: viable, materially faster than
+estimated, and the measurements invert the intended default.**
+
+## Setup
+
+- **Where:** desktop Chrome, 16 cores, served by the dev server with real COOP
+  `same-origin` + COEP `credentialless` (`crossOriginIsolated === true`).
+- **transformers.js** `@huggingface/transformers@4.3.1` from jsDelivr, pinned the way every
+  other runtime here is.
+- **Model:** `onnx-community/whisper-tiny.en`, the smallest practical Whisper.
+- **Audio:** the standard public-domain JFK clip (11 s), and the same speech repeated to
+  **66 s** for a sustained real-time factor. A timing load, not a transcription-quality
+  test — but the text came back correct, which is worth knowing too.
+- **Bytes** counted by wrapping `fetch` and summing `content-length`, so the figures are
+  what actually crossed the wire, not a published artefact list.
+
+## Numbers
+
+| config | over the wire | pipeline ready | 11 s clip | 66 s clip | an hour of audio |
+|---|---|---|---|---|---|
+| WebGPU fp32 | 149.8 MB | 83.8 s | 4.2× | 15.1× | 4.0 min |
+| WebGPU q4 | 91.3 MB | 50.9 s | 7.0× | **17.0×** | 3.5 min |
+| **WASM q8** | **39.0 MB** | **3.9 s** | 7.1× | 9.4× | 6.4 min |
+
+The short-clip factors are dominated by first-inference warm-up; the 66 s column is the one
+to quote.
+
+## Against the July 2026 estimates
+
+| | estimated | measured |
+|---|---|---|
+| WebGPU throughput | ~5–8× real-time | **15–17×** |
+| WASM throughput | ~2–3× real-time | **9.4×** |
+| "tiny" download | 75 MB (Q5 31 MB) | 149.8 MB fp32 · **39.0 MB** quantised WASM |
+
+Two to three times faster on both paths. The size estimate was right only for the
+quantised variant.
+
+## What it changes
+
+**WASM q8 should be the default and WebGPU the opt-in**, which is the reverse of the plan.
+July said "treat WebGPU as the bonus fast path, WASM as baseline" for mobile reasons; the
+numbers make WASM the better default everywhere. A quarter of the download, **twenty times
+faster to be ready** (3.9 s against 50–84 s), and still 9.4× real time. WebGPU q4 buys 1.8×
+throughput for 2.3× the bytes and a minute of startup — offer it as "faster, bigger"; do
+not make a first-time user transcribing one interview wait for it.
+
+## What this does NOT establish
+
+- **Phone and tablet speed.** The WASM figure came off a 16-core desktop with WebGPU
+  disabled. It says "a desktop without WebGPU is fine" and nothing reliable about a phone.
+  Re-run with `?device=wasm&dtype=q8` there; **read the `crossOriginIsolated` line first**,
+  because GitHub Pages sends no COOP/COEP and without the service worker's isolation there
+  is no SharedArrayBuffer, WASM is single-threaded, and the number is a floor.
+- **Accuracy on real material.** One clean, famous, well-enunciated clip. Interview audio
+  has crosstalk, accents and room noise.
+- **Anything about the epic.** This ran on the main thread and froze the tab for seconds at
+  a time. The feature still needs a worker, chunking, progress, cancellation, model choice
+  and cache/offline integration. Feasibility is closed; effort is not.
+

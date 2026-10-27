@@ -1669,8 +1669,8 @@ bottom; they are the project's memory and are not summarised away.
   - [~] **Whisper auto-transcription (Phase 2) — SPIKED 2026-10-26, and the spike
         changed the design.** The owner asked to de-risk before committing to the epic:
         *"build the narrowest end-to-end slice… turn the July estimates into measurements."*
-        Done, under CrossTab's own isolation (`sample-data/whisper-spike.html`, gitignored,
-        served by the dev server so `COOP: same-origin` / `COEP: credentialless` are real).
+        Done, under CrossTab's own isolation (`spike/whisper-spike.html`, served by the dev
+        server so `COOP: same-origin` / `COEP: credentialless` are real).
         It loads a model, transcribes a public-domain clip, repeats it to ~60 s and reports
         the real-time factor.
 
@@ -1703,8 +1703,9 @@ bottom; they are the project's memory and are not summarised away.
         WebGPU deliberately disabled, so it says "a desktop without WebGPU is fine" and says
         nothing reliable about a tablet CPU. July's advice to prefer transcript import or
         desktop-transcribe on older iPads still stands until someone runs the spike there —
-        which is why the spike file is kept rather than deleted. It takes a `?device=` and
-        `?dtype=` query, so re-running it on an iPad is opening a URL.
+        which is why the spike is kept in `spike/` beside the other seven, with its verdict in
+        `spike/RESULTS.md`. It takes `?device=` and `?dtype=`, so re-running it on a phone or
+        an iPad is opening a URL.
 
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
