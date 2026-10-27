@@ -823,6 +823,84 @@ and consistent with the hallucination loops already measured. Still the biggest 
 question, and the AMI fixture with ground-truth transcripts and speaker labels is the way
 to answer it.
 
+## Accuracy: the shipping configuration produces a loop, not a transcript
+
+`spike/transcribe-accuracy.html` scores Whisper against the AMI human transcript - 2600
+annotated words, four speakers, CC BY 4.0 - using Levenshtein alignment over normalised
+word sequences. `scripts/extract-ami-reference.mjs` turns the annotation bundle into a
+reference JSON; the scorer was verified against fourteen hand-computed cases first,
+including that substitutions + deletions + insertions always equal the total.
+
+### The first result was not a recognition result
+
+| | |
+|---|---|
+| reference | `okay right um well this is the kick off meeting for our our project` |
+| transcript | `okay okay all right all right all right all right all right all right` |
+
+Unique-word ratio **0.287**, bag-of-words recall 40.7%. The model starts correctly and
+collapses into a **repetition loop** - the same failure already seen on the Army tape's
+opening minute (one four-word phrase 34 times). A word error rate computed over that
+measures a malfunction, which is why the spike now prints the unique ratio next to it.
+
+### Whisper's own anti-loop mechanism is not available here
+
+The reference implementation catches loops by retrying a chunk at higher temperature when
+its compression ratio looks degenerate. transformers.js 4.3.1 exposes **no**
+`compression_ratio_threshold`, `logprob_threshold`, `no_speech_threshold` or
+`condition_on_prev_tokens` - so the shipping worker has no guard at all. What it does expose
+is `repetition_penalty`, `no_repeat_ngram_size`, `temperature` and `num_beams`.
+
+Three minutes of ES2002a, 363 reference words:
+
+| setting | WER | uniq | recall | x real time |
+|---|---|---|---|---|
+| **default (what ships)** | **105.5%** | 0.224 | 47.1% | 4.6 |
+| rep1.1 | 93.7% | 0.338 | 55.9% | 11.8 |
+| **rep1.2** | **81.8%** | **0.435** | 55.9% | **12.9** |
+| ngram6 | 108.8% | 0.220 | 45.7% | 9.4 |
+| beams2 | 105.5% | 0.224 | 47.1% | 5.0 |
+
+**`repetition_penalty: 1.2` is worth 23.7 points of WER, drops insertions from 105 to 2,
+and runs 2.8x faster** - the loop was burning time generating garbage, which means every
+speed figure recorded in this file is partly a measurement of looping.
+
+`no_repeat_ngram_size` makes it WORSE, and `num_beams: 2` is byte-identical to the default,
+so it is not reaching the generate call.
+
+### The control that would separate model size from overlap - and did not
+
+81.8% cannot distinguish "whisper-tiny is too small" from "four people are talking over each
+other", and those have opposite consequences: an interview is one or two people taking
+turns. So the spike grew a `?solo=1` mode keeping only stretches where exactly one person
+speaks - 98 stretches, 10.2 min, 1747 words from the same recording.
+
+| | WER | uniq | sub | del | ins |
+|---|---|---|---|---|---|
+| solo, default | 180.8% | 0.087 | 1049 | 93 | 2032 |
+| solo, rep1.2 | **72.7%** | 0.286 | 651 | **589** | 36 |
+
+`rep1.2` is worth 108 points here, which reinforces the headline. But **this control is
+confounded and should not be quoted as a verdict on overlap**: concatenating 98 stretches
+creates 97 abrupt joins, and deletions jumped from 34 (on the mix) to 589. That is about six
+words lost per join, where the mode's own note predicted one. The joins are doing the
+damage, not the isolation.
+
+The clean version transcribes **each solo stretch as its own segment** and scores it against
+its own words, so no artificial joins exist at all. That is the next measurement, and it is
+a small change to the same spike.
+
+### Where this leaves accuracy
+
+- **A real bug, in the product, found by measuring**: the shipping configuration loops on
+  real audio and emits more wrong words than there are right ones. `repetition_penalty`
+  should go into `core/transcribe-worker.js` regardless of anything else here.
+- **whisper-tiny on a four-way meeting mix is not usable** at 81.8%, even fixed.
+- **Whether it is usable on interview audio is still open.** One or two people on a close
+  mic is a much easier problem than AMI, and nothing has measured it cleanly yet.
+- **`base` and `small` are untested.** The worker hard-codes tiny; the model is the most
+  obvious lever and the one with a known cost (73 MB and 238 MB against 39 MB).
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The

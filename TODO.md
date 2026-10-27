@@ -1876,6 +1876,39 @@ bottom; they are the project's memory and are not summarised away.
         the biggest open question — 42359 characters over 40 minutes is ~212 wpm, above
         conversational and consistent with the hallucination loops already measured.
 
+        **ACCURACY: the shipping configuration produces a repetition loop, not a
+        transcript.** Scored against the AMI human reference (2600 words, 4 speakers, CC BY
+        4.0; `scripts/extract-ami-reference.mjs`, scorer verified against 14 hand-computed
+        cases): reference "okay right um well this is the kick off meeting", transcript
+        "okay okay all right all right all right all right" - unique-word ratio 0.287,
+        **105.5% WER**. The same failure as the Army tape's opening minute.
+
+        Whisper's own fix (retry a chunk at higher temperature when its compression ratio
+        looks degenerate) is unavailable: transformers.js 4.3.1 exposes no
+        `compression_ratio_threshold`, `logprob_threshold` or `condition_on_prev_tokens`. It
+        does expose `repetition_penalty`, and on three minutes of ES2002a:
+
+        | setting | WER | uniq | x real |
+        |---|---|---|---|
+        | default (ships) | 105.5% | 0.224 | 4.6 |
+        | **rep1.2** | **81.8%** | 0.435 | **12.9** |
+        | ngram6 | 108.8% | 0.220 | 9.4 |
+        | beams2 (identical to default) | 105.5% | 0.224 | 5.0 |
+
+        **`repetition_penalty: 1.2` is worth 23.7 points, drops insertions 105 -> 2, and is
+        2.8x FASTER** - so every speed figure in this epic is partly a measurement of
+        looping. It belongs in `core/transcribe-worker.js` regardless of what else happens.
+        `no_repeat_ngram_size` makes things worse; `num_beams` is not reaching generate.
+
+        Still open, and honestly so: **whether tiny is usable on INTERVIEW audio.** 81.8% on
+        a four-way meeting mix cannot distinguish "model too small" from "four people at
+        once", and an interview is one or two people taking turns. A `?solo=1` control
+        (stretches where exactly one person speaks) gave 72.7% with rep1.2 - but it
+        concatenates 98 stretches, and deletions jumped 34 -> 589, about six words per join.
+        **The control is confounded**; the clean version transcribes each stretch as its own
+        segment. Also untested: `base` and `small`, the most obvious lever (73 MB and 238 MB
+        against tiny's 39 MB).
+
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
         app), chunking and progress for long recordings, cancellation, model choice UI, and

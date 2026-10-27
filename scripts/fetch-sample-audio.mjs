@@ -87,6 +87,19 @@ const FIXTURES = [
     default: false,
   },
   {
+    id: 'ami-es2002a-headset0',
+    file: 'ami-ES2002a-headset0.wav',
+    url: 'https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2002a/audio/ES2002a.Headset-0.wav',
+    bytes: null,
+    about: "The same meeting from ONE participant's close-talking headset: a single speaker "
+      + 'on a close mic, which is what an interview recording actually sounds like.',
+    licence: 'CC BY 4.0',
+    attribution: 'AMI Meeting Corpus, University of Edinburgh. https://groups.inf.ed.ac.uk/ami/corpus/',
+    note: 'The control that separates small-model failure from four-people-at-once failure.'
+      + " Scored against that speaker's words alone.",
+    default: false,
+  },
+  {
     id: 'ami-annotations',
     file: 'ami_public_manual_1.6.2.zip',
     url: 'https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip',

@@ -1,0 +1,517 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcription accuracy — word error rate against a human transcript</title>
+<!--
+  A SPIKE. Verdict goes in spike/RESULTS.md.
+
+  Everything measured so far is speed. A transcript that arrives in three minutes and is
+  wrong is worth nothing, and there were already warning signs: the Army tape's opening
+  minute came back with a unique-word ratio of 0.163 and one four-word phrase repeated 34
+  times — a hallucination loop.
+
+  This scores Whisper against a HUMAN transcript. AMI ES2002a: 21 minutes, four speakers,
+  CC BY 4.0, with word-level annotations carrying timings and speaker labels. 2600 spoken
+  words between 50.4 s and 1109.5 s, at 147 words per minute — a real conversational rate,
+  not a lecture.
+
+    node scripts/fetch-sample-audio.mjs ami-es2002a ami-annotations
+    node scripts/extract-ami-reference.mjs
+
+  AMI audio is served without CORS headers, so this runs against the dev server rather than
+  the deployed build. That is fine: accuracy is a property of the model and the audio, not
+  of the device.
+
+  ## What is scored, and what is deliberately not
+
+  Word error rate is (substitutions + deletions + insertions) / reference words, computed by
+  Levenshtein alignment over word sequences. Both sides are normalised the same way:
+  lowercased, punctuation and apostrophes stripped, whitespace collapsed. Punctuation is not
+  scored because Whisper's punctuation is a formatting choice rather than a recognition
+  result, and the AMI annotations carry it as separate elements anyway.
+
+  Filler words are reported BOTH ways. AMI transcribes "um" and "uh" faithfully; Whisper
+  usually drops them, which shows up as deletions that have nothing to do with whether the
+  content was understood. Excluding them is defensible and so is keeping them, so the run
+  prints both and lets the difference speak.
+
+  ## Why it keeps the multi-worker shape
+
+  Because that is what will ship: the one-call path crashed a phone on a 40-minute
+  interview. But segmenting raises its own accuracy question — a word cut across a boundary
+  is lost or doubled — so this scores the segmented transcript against the one-call
+  transcript on identical audio. That difference IS the stitching problem, measured.
+
+  ?overlap=0    seconds of overlap between segments. The default is 0, which gives the
+                clean comparison. Raising it measures what NAIVE concatenation costs, since
+                nothing here deduplicates the repeated words: that is the work a real
+                implementation has to do, and this says how much it is worth.
+  ?segment=120  seconds per segment
+  ?workers=3    how many workers share the segments
+  ?single=0     skip the one-call comparison pass
+  ?full=1       transcribe the whole recording instead of just the annotated span
+-->
+<script src="../sw.js"></script>
+
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 1rem; max-width: 50rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .25rem; }
+  button { font: inherit; padding: .7rem 1.2rem; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px;
+         background: #f6f8fa; border: 1px solid #d0d7de; padding: .6rem; margin-top: .8rem;
+         overflow-x: auto; }
+  #status { font-weight: 600; margin-top: .6rem; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; } .dim { color: #656d76; }
+  @media (prefers-color-scheme: dark) {
+    #log { background: #161b22; border-color: #30363d; }
+    .ok { color: #3fb950; } .bad { color: #f85149; } .dim { color: #8b949e; }
+  }
+</style>
+
+<h1>Transcription accuracy</h1>
+<p>Word error rate against the AMI human transcript — 21 minutes, four speakers, 2600
+   annotated words. Segmented across workers, the shape that will ship.</p>
+<button id="run">Score it</button>
+<div id="status">idle</div>
+<div id="log"></div>
+
+<script type="module">
+import { decodeAudio } from '../core/transcribe.js';
+
+const SR = 16000;
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const lines = [];
+const log = (s = '', cls = '') => {
+  lines.push(cls ? `<span class="${cls}">${s}</span>` : s);
+  logEl.innerHTML = lines.join('\n');
+};
+const status = (s, cls = '') => { statusEl.textContent = s; statusEl.className = cls; };
+const pad = (s, n) => String(s).padEnd(n);
+const pct = (x) => `${(x * 100).toFixed(1)}%`;
+
+const q = new URLSearchParams(location.search);
+const SEGMENT = Math.max(20, Number(q.get('segment') || 120));
+const OVERLAP = Math.max(0, Number(q.get('overlap') || 0));
+const WORKERS = Math.max(1, Number(q.get('workers') || 3));
+const WANT_SINGLE = q.get('single') !== '0';
+const FULL = q.get('full') === '1';
+// Cap the audio for a quick check. The reference is cut to the same window, or the missing
+// audio would show up as thousands of deletions and look like a catastrophic model failure.
+const MINUTES = Number(q.get('minutes') || 0);
+// Score against ONE participant's words. With a single close-talking headset recording this
+// is the control that separates two very different failures: whisper-tiny being too small
+// for the job, and four people talking over each other. An interview is one or two people
+// on a close mic, so if tiny does well here it may do well on the actual use case even
+// though it fails on a four-way meeting mix.
+const SPEAKER = (q.get('speaker') || '').toUpperCase();
+// ?solo=1 keeps only the stretches where EXACTLY ONE person is talking.
+//
+// This is the control that decides whether the feature is viable. Scoring 81.8% WER on a
+// four-way meeting mix cannot distinguish "whisper-tiny is too small" from "four people are
+// talking over each other" — and those have opposite consequences, because an interview is
+// one or two people taking turns. Keeping only the non-overlapping stretches of the SAME
+// recording isolates recognition from overlap, with no second download and no new variables.
+const SOLO = q.get('solo') === '1';
+const SOLO_MIN = Math.max(0.5, Number(q.get('soloMin') || 2));
+const AUDIO = q.get('audio') || '/sample-data/audio/ami-ES2002a-mix-headset.wav';
+
+/**
+ * Anti-repetition settings to compare.
+ *
+ * The first run against this audio returned "okay okay all right all right all right..." —
+ * a degenerate repetition loop, unique-word ratio 0.287. That is not a recognition result
+ * and scoring it measures a malfunction. Whisper's reference implementation catches loops
+ * by retrying a chunk at higher temperature when its compression ratio looks wrong, but
+ * transformers.js 4.3.1 exposes no compression_ratio_threshold, logprob_threshold or
+ * condition_on_prev_tokens — so the shipping config has NO guard. What it does expose is
+ * repetition_penalty, no_repeat_ngram_size, temperature and num_beams, and this measures
+ * which of them helps.
+ *
+ * no_repeat_ngram_size is the blunt one: it forbids any n-gram recurring, and people
+ * genuinely repeat themselves — the reference here contains "our our project". Expect it to
+ * suppress loops and cost real words, which is exactly what the table should show.
+ */
+const GEN_VARIANTS = {
+  default: {},
+  'rep1.1': { repetition_penalty: 1.1 },
+  'rep1.2': { repetition_penalty: 1.2 },
+  'rep1.5': { repetition_penalty: 1.5 },
+  ngram4: { no_repeat_ngram_size: 4 },
+  ngram6: { no_repeat_ngram_size: 6 },
+  beams2: { num_beams: 2 },
+  'rep1.2+ngram6': { repetition_penalty: 1.2, no_repeat_ngram_size: 6 },
+};
+const WANT_GEN = String(q.get('gen') || 'default').split(',').map((x) => x.trim())
+  .filter((x) => x in GEN_VARIANTS);
+const REFERENCE = q.get('reference') || '/sample-data/audio/ami-ES2002a-reference.json';
+
+// =============================================================================
+// Scoring
+// =============================================================================
+
+/**
+ * The same normalisation on both sides, which is the only thing that makes the comparison
+ * mean anything. Apostrophes go too: AMI writes "I'm" and Whisper writes "I'm", but AMI
+ * also writes "doesn't" where Whisper sometimes writes "does n't", and stripping them
+ * consistently costs nothing and removes a class of false errors.
+ */
+const FILLERS = new Set(['um', 'uh', 'erm', 'er', 'mm', 'hmm', 'mmhmm', 'uhhuh', 'huh', 'mmm']);
+
+function normalise(text, { dropFillers = false } = {}) {
+  const words = String(text)
+    .toLowerCase()
+    .replace(/[‘’']/g, '')          // apostrophes, straight and curly
+    .replace(/[^a-z0-9\s-]/g, ' ')            // everything else that is not a word
+    .replace(/-/g, ' ')                       // hyphenated forms split, both sides alike
+    .split(/\s+/)
+    .filter(Boolean);
+  return dropFillers ? words.filter((w) => !FILLERS.has(w)) : words;
+}
+
+/**
+ * Levenshtein alignment over word sequences, carrying the error breakdown.
+ *
+ * Rolling rows rather than a full matrix: 2600 x 3000 cells of four Int32Arrays is a few
+ * MB, where keeping the whole grid for a backtrace would be ~120 MB for no extra insight.
+ * Counts propagate with the minimum, so they describe one optimal alignment.
+ */
+function score(ref, hyp) {
+  const n = ref.length;
+  const m = hyp.length;
+  let d = new Int32Array(m + 1);
+  let sub = new Int32Array(m + 1);
+  let del = new Int32Array(m + 1);
+  let ins = new Int32Array(m + 1);
+  for (let j = 0; j <= m; j++) { d[j] = j; ins[j] = j; }
+  let nd = new Int32Array(m + 1);
+  let ns = new Int32Array(m + 1);
+  let ndel = new Int32Array(m + 1);
+  let nins = new Int32Array(m + 1);
+  for (let i = 1; i <= n; i++) {
+    nd[0] = i; ns[0] = 0; ndel[0] = i; nins[0] = 0;
+    for (let j = 1; j <= m; j++) {
+      const match = ref[i - 1] === hyp[j - 1];
+      const costSub = d[j - 1] + (match ? 0 : 1);
+      const costDel = d[j] + 1;          // a reference word with no hypothesis word
+      const costIns = nd[j - 1] + 1;     // a hypothesis word with no reference word
+      if (costSub <= costDel && costSub <= costIns) {
+        nd[j] = costSub;
+        ns[j] = sub[j - 1] + (match ? 0 : 1);
+        ndel[j] = del[j - 1];
+        nins[j] = ins[j - 1];
+      } else if (costDel <= costIns) {
+        nd[j] = costDel; ns[j] = sub[j]; ndel[j] = del[j] + 1; nins[j] = ins[j];
+      } else {
+        nd[j] = costIns; ns[j] = ns[j - 1]; ndel[j] = ndel[j - 1]; nins[j] = nins[j - 1] + 1;
+      }
+    }
+    [d, nd] = [nd, d]; [sub, ns] = [ns, sub]; [del, ndel] = [ndel, del]; [ins, nins] = [nins, ins];
+  }
+  const errors = d[m];
+  return {
+    wer: n ? errors / n : NaN,
+    errors, sub: sub[m], del: del[m], ins: ins[m], refWords: n, hypWords: m,
+  };
+}
+
+/**
+ * How many reference words appear ANYWHERE in the hypothesis, as a multiset.
+ *
+ * This is the diagnostic that separates two very different failures which produce the same
+ * word error rate. If the model heard the meeting correctly but the transcript is offset or
+ * out of order, bag recall stays high while WER is terrible. If the model genuinely misheard
+ * it, both are bad. Without this, a high WER cannot be read as a verdict on the model.
+ */
+function bagRecall(ref, hyp) {
+  const have = new Map();
+  for (const w of hyp) have.set(w, (have.get(w) ?? 0) + 1);
+  let hit = 0;
+  for (const w of ref) {
+    const n = have.get(w) ?? 0;
+    if (n > 0) { have.set(w, n - 1); hit += 1; }
+  }
+  return ref.length ? hit / ref.length : NaN;
+}
+
+const report = (name, s) => {
+  log(`  ${pad(name, 26)}${pad(pct(s.wer), 9)}${pad(s.sub, 7)}${pad(s.del, 7)}${pad(s.ins, 7)}`
+    + `${pad(s.refWords, 8)}${s.hypWords}`,
+      s.wer < 0.35 ? 'ok' : (s.wer > 0.6 ? 'bad' : ''));
+};
+
+// =============================================================================
+// Transcription
+// =============================================================================
+
+const WORKER_URL = new URL('./transcribe-pressure-worker.js', import.meta.url);
+
+const loadWorker = (w) => new Promise((resolve) => {
+  w.onmessage = (e) => resolve(e.data?.type === 'ready' ? true : (e.data?.message || 'load failed'));
+  w.onerror = (e) => resolve(e.message || 'worker failed to load');
+  setTimeout(() => resolve('timed out loading'), 180000);
+  w.postMessage({ type: 'load' });
+});
+
+const runOn = (w, audio, gen = null) => new Promise((resolve) => {
+  w.onmessage = (e) => resolve(e.data?.type === 'done' ? e.data : { ms: null, err: e.data?.message });
+  w.onerror = (e) => resolve({ ms: null, err: e.message || 'worker died' });
+  setTimeout(() => resolve({ ms: null, err: 'timed out' }), 2700000);
+  w.postMessage({ type: 'run', audio, longForm: true, timestamps: true, wantText: true, gen },
+    [audio.buffer]);
+});
+
+/**
+ * Segments across workers, with results kept BY INDEX.
+ *
+ * A shared queue finishes out of order, and a transcript assembled in completion order is
+ * scrambled — which would show up as a catastrophic word error rate and look like a model
+ * problem rather than a bookkeeping one.
+ */
+async function transcribeSegments(pcm, ws, onProgress, gen = null) {
+  const step = Math.round(SEGMENT * SR);
+  const over = Math.round(OVERLAP * SR);
+  const count = Math.ceil(pcm.length / step);
+  const texts = new Array(count).fill('');
+  let next = 0;
+  let done = 0;
+  let err = null;
+  await Promise.all(ws.map(async (w) => {
+    while (!err && next < count) {
+      const i = next;
+      next += 1;
+      const from = i * step;
+      const seg = new Float32Array(pcm.subarray(from, Math.min(pcm.length, from + step + over)));
+      const r = await runOn(w, seg, gen);
+      if (r.ms === null) { err = r.err; break; }
+      texts[i] = r.text ?? '';
+      onProgress?.(++done, count);
+    }
+  }));
+  return { text: texts.join(' '), err, count };
+}
+
+// =============================================================================
+
+document.getElementById('run').addEventListener('click', async () => {
+  const btn = document.getElementById('run');
+  btn.disabled = true;
+  lines.length = 0;
+  const workers = [];
+  try {
+    status('fetching the reference transcript…');
+    const refRes = await fetch(REFERENCE);
+    if (!refRes.ok) {
+      throw new Error(`no reference at ${REFERENCE} (run scripts/extract-ami-reference.mjs)`);
+    }
+    const ref = await refRes.json();
+    log('--- reference ---');
+    log(`${ref.meeting}: ${ref.wordCount} words, ${ref.speakers.length} speakers `
+      + `(${ref.speakers.join(', ')})`, 'ok');
+    log(`speech from ${ref.firstWordAt.toFixed(1)}s to ${ref.lastWordEndsAt.toFixed(1)}s`
+      + ` — ${(ref.wordCount / ((ref.lastWordEndsAt - ref.firstWordAt) / 60)).toFixed(0)} words/min`, 'dim');
+    log(`${ref.licence}. ${ref.source}`, 'dim');
+
+    status('fetching audio…');
+    const aRes = await fetch(AUDIO);
+    if (!aRes.ok) throw new Error(`HTTP ${aRes.status} fetching ${AUDIO}`);
+    status('decoding…');
+    const all = await decodeAudio(await aRes.arrayBuffer());
+
+    // Score only the annotated span by default. Audio before the first word and after the
+    // last is real but unannotated, so anything Whisper says there is an insertion against
+    // a reference that was never written — which would measure the annotation, not the model.
+    const startSec = FULL ? 0 : ref.firstWordAt;
+    const endSec = MINUTES > 0
+      ? Math.min(FULL ? all.length / SR : ref.lastWordEndsAt, startSec + MINUTES * 60)
+      : (FULL ? all.length / SR : ref.lastWordEndsAt);
+    const from = Math.floor(startSec * SR);
+    const to = Math.ceil(endSec * SR);
+    let pcm = all.subarray(from, Math.min(all.length, to));
+    // The reference has to be cut to exactly the audio being scored, or every unheard word
+    // counts as a deletion and the result describes the window rather than the model.
+    let refWords = ref.words.filter((w) => w.e > startSec && w.t < endSec);
+    if (SPEAKER) {
+      const before = refWords.length;
+      refWords = refWords.filter((w) => w.s === SPEAKER);
+      log(`scoring against speaker ${SPEAKER} only: ${refWords.length} of ${before} words`,
+          refWords.length > 30 ? 'ok' : 'bad');
+      if (refWords.length < 30) {
+        log('  Too few words to score meaningfully. Speakers in this meeting are lopsided', 'bad');
+        log('  (B 1300, D 985, A 233, C 82), so pick a talkative one or a longer window.', 'dim');
+      }
+    }
+    log('');
+    log(`audio: ${(pcm.length / SR / 60).toFixed(1)} min`
+      + (FULL ? ' (whole recording)' : ' (the annotated span)')
+      + (MINUTES > 0 ? `, capped at ${MINUTES} min` : '')
+      + ` — ${refWords.length} reference words in that window`, 'ok');
+    if (!FULL) {
+      log('  Audio outside the annotated span is excluded: words spoken there would count', 'dim');
+      log('  as insertions against a reference nobody wrote. ?full=1 includes it.', 'dim');
+    }
+
+    // ---- optionally, only the one-speaker-at-a-time stretches ------------------------
+    let soloNote = '';
+    if (SOLO) {
+      // Utterances: a speaker's consecutive words with gaps under half a second. Word-level
+      // intervals alone would fragment every pause into a separate region.
+      const utter = [];
+      for (const w of refWords) {
+        const last = utter[utter.length - 1];
+        if (last && last.s === w.s && w.t - last.e < 0.5) last.e = Math.max(last.e, w.e);
+        else utter.push({ s: w.s, t: w.t, e: w.e });
+      }
+      // Sweep the timeline counting concurrent speakers; keep runs where the count is one.
+      const edges = [];
+      for (const u of utter) { edges.push([u.t, 1, u.s]); edges.push([u.e, -1, u.s]); }
+      edges.sort((a, b) => a[0] - b[0]);
+      const regions = [];
+      let active = 0;
+      let who = null;
+      let since = 0;
+      for (const [t, delta, sp] of edges) {
+        if (active === 1 && t - since >= SOLO_MIN) regions.push({ t: since, e: t, s: who });
+        active += delta;
+        who = delta > 0 ? sp : who;
+        since = t;
+      }
+      if (!regions.length) throw new Error('no solo stretches found');
+      // Keep only words wholly inside a solo region, and only the audio of those regions.
+      const kept = [];
+      const parts = [];
+      let total = 0;
+      for (const r of regions) {
+        const from = Math.max(0, Math.round((r.t - startSec) * SR));
+        const to = Math.min(pcm.length, Math.round((r.e - startSec) * SR));
+        if (to <= from) continue;
+        parts.push(pcm.subarray(from, to));
+        total += to - from;
+        for (const w of refWords) if (w.t >= r.t && w.e <= r.e) kept.push(w);
+      }
+      const joined = new Float32Array(total);
+      let off = 0;
+      for (const part of parts) { joined.set(part, off); off += part.length; }
+      pcm = joined;
+      refWords = kept.sort((a, b) => a.t - b.t);
+      soloNote = `${regions.length} solo stretches, ${(total / SR / 60).toFixed(1)} min, `
+        + `${refWords.length} words`;
+      log('');
+      log(`SOLO mode: ${soloNote}`, 'ok');
+      log(`  Only stretches of at least ${SOLO_MIN}s where exactly one person speaks, taken`, 'dim');
+      log('  from the same recording and concatenated. This separates recognition from', 'dim');
+      log('  overlap: an interview is people taking turns, not four talking at once.', 'dim');
+      log('  The joins between stretches are artificial and may cost a word apiece.', 'dim');
+    }
+
+    status(`loading ${WORKERS} workers…`);
+    for (let i = 0; i < WORKERS; i++) {
+      const w = new Worker(WORKER_URL, { type: 'module' });
+      const ok = await loadWorker(w);
+      if (ok !== true) { log(`worker ${i + 1} failed: ${ok}`, 'bad'); w.terminate(); break; }
+      workers.push(w);
+    }
+    if (!workers.length) throw new Error('no workers loaded');
+    log('');
+    log(`--- transcribing: ${workers.length} workers, ${SEGMENT} s segments, `
+      + `${OVERLAP} s overlap ---`);
+
+    // ---- transcribe once per anti-repetition setting -----------------------------------
+    const refText = refWords.map((w) => w.w).join(' ');
+    const refN = normalise(refText);
+    const refNoFill = normalise(refText, { dropFillers: true });
+    log('');
+    log(`--- scoring ${WANT_GEN.length} setting${WANT_GEN.length > 1 ? 's' : ''} against `
+      + `${refN.length} reference words ---`);
+    log(`  ${pad('setting', 16)}${pad('WER', 8)}${pad('noFill', 8)}${pad('sub', 6)}${pad('del', 6)}`
+      + `${pad('ins', 6)}${pad('hyp', 7)}${pad('uniq', 7)}${pad('recall', 8)}x real`);
+
+    const runs = [];
+    for (const name of WANT_GEN) {
+      status(`transcribing with ${name}…`);
+      const t0 = performance.now();
+      const out = await transcribeSegments(pcm, workers,
+        (d, n) => status(`${name}: segment ${d}/${n}…`), GEN_VARIANTS[name]);
+      const ms = performance.now() - t0;
+      if (out.err) { log(`  ${pad(name, 16)}FAILED — ${out.err}`, 'bad'); continue; }
+      const hyp = normalise(out.text);
+      const s = score(refN, hyp);
+      const sNo = score(refNoFill, normalise(out.text, { dropFillers: true }));
+      // The unique-word ratio is the loop detector: a transcript that says "all right" a
+      // hundred times scores a plausible-looking WER while being worthless.
+      const uniq = hyp.length ? new Set(hyp).size / hyp.length : 0;
+      const recall = bagRecall(refN, hyp);
+      runs.push({ name, s, sNo, uniq, recall, ms, text: out.text });
+      log(`  ${pad(name, 16)}${pad(pct(s.wer), 8)}${pad(pct(sNo.wer), 8)}${pad(s.sub, 6)}`
+        + `${pad(s.del, 6)}${pad(s.ins, 6)}${pad(s.hypWords, 7)}${pad(uniq.toFixed(3), 7)}`
+        + `${pad(pct(recall), 8)}${(pcm.length / SR / (ms / 1000)).toFixed(1)}`,
+          uniq < 0.35 ? 'bad' : (s.wer < 0.45 ? 'ok' : ''));
+    }
+    if (!runs.length) throw new Error('every setting failed');
+
+    // ---- one call, to price segmentation ------------------------------------------------
+    let single = null;
+    if (WANT_SINGLE) {
+      status('one call, for comparison…');
+      const r = await runOn(workers[0], new Float32Array(pcm), GEN_VARIANTS[WANT_GEN[0]]);
+      if (r.ms !== null) {
+        single = score(refN, normalise(r.text ?? ''));
+        log(`  ${pad('(one call)', 16)}${pad(pct(single.wer), 8)}${pad('', 8)}${pad(single.sub, 6)}`
+          + `${pad(single.del, 6)}${pad(single.ins, 6)}${pad(single.hypWords, 7)}`, 'dim');
+      } else {
+        log(`  one call FAILED — ${r.err}`, 'bad');
+      }
+    }
+
+    const best = runs.reduce((a, b) => (b.s.wer < a.s.wer ? b : a));
+    const base = runs.find((r) => r.name === 'default') ?? runs[0];
+    window.__texts = { reference: refText, best: best.text, bestName: best.name };
+
+    // ---- what it means -------------------------------------------------------------------
+    log('');
+    log('--- reading this ---');
+    log(`uniq is the loop detector. Natural speech sits near 0.5; the first run against this`, 'dim');
+    log('audio came back at 0.287 — "okay okay all right all right all right…" — which is a', 'dim');
+    log('malfunction, not a recognition result. Any row below ~0.35 is scoring a loop.', 'dim');
+    log('');
+    if (base.uniq < 0.35) {
+      log(`The shipping setting LOOPS on this audio (uniq ${base.uniq.toFixed(3)}, `
+        + `WER ${pct(base.s.wer)}).`, 'bad');
+    }
+    if (best.name !== base.name) {
+      log(`${best.name} is the best of those tried: ${pct(best.s.wer)} WER against `
+        + `${pct(base.s.wer)}, uniq ${best.uniq.toFixed(3)} against ${base.uniq.toFixed(3)}.`, 'ok');
+      log(`  That is ${((base.s.wer - best.s.wer) * 100).toFixed(1)} points, from one`, 'dim');
+      log('  generation option the shipping worker does not set.', 'dim');
+    } else if (runs.length > 1) {
+      log('None of the anti-repetition settings beat the default, so looping here is not', 'bad');
+      log('something a generation option fixes — it needs the temperature-fallback retry', 'dim');
+      log('that transformers.js does not expose, or a bigger model.', 'dim');
+    }
+    if (best.s.wer > 0.5) {
+      log('');
+      log(`Even the best setting is ${pct(best.s.wer)} WER, which is not a usable transcript.`, 'bad');
+      log('  whisper-tiny is the smallest model there is and AMI is four people talking over', 'dim');
+      log('  each other; `base` and `small` are the next measurement, not a UI.', 'dim');
+    }
+    if (single) {
+      const diff = base.s.wer - single.wer;
+      log('');
+      log(`segmenting costs ${diff >= 0 ? '+' : ''}${(diff * 100).toFixed(1)} points of WER`
+        + ` (${pct(single.wer)} in one call vs ${pct(base.s.wer)} segmented)`,
+          Math.abs(diff) < 0.02 ? 'ok' : 'bad');
+      log('  The one-call path crashes a phone on a long interview, so this is the price of', 'dim');
+      log('  the only shape that works, not a choice between equals.', 'dim');
+    }
+    status('done', 'ok');
+  } catch (err) {
+    log('');
+    log(`FAILED — ${err.message}`, 'bad');
+    status('failed', 'bad');
+  } finally {
+    for (const w of workers) w.terminate();
+    btn.disabled = false;
+  }
+});
+</script>

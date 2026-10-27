@@ -17,7 +17,7 @@ let lib = null;
  * without a cap the timing would measure how chatty the model felt rather than how much
  * the device could get through. Capped, the work per job is near enough constant.
  */
-async function run(audio, maxTokens, longForm = true, timestamps = true) {
+async function run(audio, maxTokens, longForm = true, timestamps = true, wantText = false, gen = null) {
   const t = performance.now();
   // THE OPTIONS THAT SHIP. core/transcribe-worker.js passes chunk_length_s: 30,
   // stride_length_s: 5 and return_timestamps: true, and without them Whisper runs as a
@@ -29,8 +29,9 @@ async function run(audio, maxTokens, longForm = true, timestamps = true) {
   // diarized speaker turns to text, so it defaults on — but it is the single biggest
   // performance lever in the shipping configuration and worth being able to toggle.
   const opts = longForm
-    ? { chunk_length_s: 30, stride_length_s: 5, ...(timestamps ? { return_timestamps: true } : {}) }
-    : { max_new_tokens: maxTokens };
+    ? { chunk_length_s: 30, stride_length_s: 5, ...(timestamps ? { return_timestamps: true } : {}),
+        ...(gen || {}) }
+    : { max_new_tokens: maxTokens, ...(gen || {}) };
   let out;
   try {
     out = await self.pipe(audio, opts);
@@ -57,6 +58,9 @@ async function run(audio, maxTokens, longForm = true, timestamps = true) {
   const topGram = [...grams.values()].reduce((a, b) => Math.max(a, b), 0);
   return {
     ms: Math.round(performance.now() - t),
+    // The transcript itself, for scoring against a reference. Off by default because the
+    // timing spikes do not need it and a 40-minute transcript is a lot to hand back.
+    text: wantText ? text : undefined,
     chars: text.length,
     words: words.length,
     uniqueRatio: words.length ? +(uniq / words.length).toFixed(3) : null,
@@ -75,7 +79,8 @@ self.onmessage = async (e) => {
     try {
       if (!self.pipe) throw new Error('asked to run before loading');
       const r = await run(e.data.audio, e.data.maxTokens ?? 48,
-        e.data.longForm !== false, e.data.timestamps !== false);
+        e.data.longForm !== false, e.data.timestamps !== false, e.data.wantText === true,
+        e.data.gen ?? null);
       self.postMessage({ type: 'done', ...r });
     } catch (err) {
       self.postMessage({ type: 'error', message: String(err?.message ?? err) });
