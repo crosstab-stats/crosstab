@@ -1,0 +1,531 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcription endurance — does it hold up over dozens of interviews?</title>
+<!--
+  A SPIKE, built for a PHONE. Verdict goes in spike/RESULTS.md.
+
+  Everything measured so far is a burst of under two minutes, and the headline claim is
+  "an hour of audio in 4.5 minutes" — an extrapolation. The owner asked for three things
+  this answers together:
+
+    1. The real speed-up at 1, 2 and 3 workers on a phone, using REAL SPEECH. The phone has
+       only ever run synthetic noise, which turned out to overstate concurrency by about 2x
+       (3.11x on noise against 1.64x on real audio, same desktop).
+    2. Whether the numbers DRIFT over repeated runs in the same tab, reusing the same
+       workers — which is what the app will do when someone transcribes a dozen interviews
+       in a sitting, and where a leak or a degrading allocator would show up.
+    3. Thermal behaviour, which needs sustained load rather than a burst. Hence a 40-minute
+       recording and several minutes of continuous work.
+
+  ## The methodological trap this avoids
+
+  Running 1 worker, then 2, then 3 in that order puts N=3 on the hottest phone. Concurrency
+  and thermal drift would then be mixed into one number, and the obvious reading ("3 workers
+  barely help") could be entirely thermal. So the schedule is PASSES, each pass visiting all
+  three counts, with the DIRECTION ALTERNATING: pass 1 goes 1,2,3 and pass 2 goes 3,2,1.
+
+    - Comparing counts WITHIN a pass is time-local, so it measures concurrency.
+    - Comparing the same count ACROSS passes of the same direction measures drift.
+    - Alternating direction cancels the residual warming that happens inside a pass.
+
+  This was validated by simulating devices with a known speed-up and a known thermal decay
+  and checking that the reported statistics recover them (scratch sim, 2026-10-27):
+
+                              true 3-worker    this schedule    naive 1,1,1,2,2,2,3,3,3
+    no drift                      1.50x        1.50x (0.0%)     1.50x (0.0%)
+    +8% per minute                1.50x        1.51x (0.9%)     1.14x (24% WRONG)
+    no gain at all, +8%/min       1.00x        1.02x (1.8%)     0.70x (claims 3 is SLOWER)
+
+  The naive order does not merely add noise: on a throttling device it reports concurrency
+  as actively harmful when it is neutral, and understates a real 50% gain as 14%. The
+  reported DRIFT is conservative in exchange — it compares the first and last forward
+  passes, so it recovered 33% of a true 42%.
+
+  ## Why the work is exactly proportional to N
+
+  Three distinct clips are drawn from across the recording, and each configuration runs
+  every clip the same number of times: at N workers there are N x 3 jobs, so each clip runs
+  exactly N times. Content therefore cannot tilt one row against another — which matters
+  because real speech varies a lot in cost per minute, unlike the synthetic noise this
+  replaces.
+
+  ## Why it fetches byte ranges instead of the whole file
+
+  Decoding 40 minutes at 16 kHz is ~153 MB of Float32 on top of a 56 MB download, and this
+  phone already ran out of memory loading a FOURTH 219 MB worker (so somewhere near 880 MB
+  total). Spending 210 MB on audio before the workers even load would invite the same death
+  for no reason. archive.org serves Range requests with `access-control-allow-origin: *`,
+  so instead this pulls ~2 MB from three places in the file, decodes each separately, keeps
+  60 seconds from each, and releases the rest BEFORE any worker is created. Peak audio cost
+  is about 11 MB.
+
+  ## Query parameters
+
+  ?passes=6     how many times to visit all three worker counts
+  ?clips=3      distinct clips drawn from across the recording
+  ?k=3          clips each worker transcribes per configuration
+  ?seconds=60   clip length
+  ?max=3        highest worker count to test
+  ?audio=URL    override the recording (a local path works on the dev server)
+  ?full=1       decode the whole file instead of byte ranges (desktop only, really)
+-->
+<script src="../sw.js"></script>
+
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 1rem; max-width: 46rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .25rem; }
+  p { margin: .5rem 0; }
+  button { font: inherit; padding: .7rem 1.2rem; margin-right: .5rem; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px;
+         background: #f6f8fa; border: 1px solid #d0d7de; padding: .6rem; margin-top: .8rem;
+         overflow-x: auto; }
+  #status { font-weight: 600; margin-top: .6rem; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; } .dim { color: #656d76; }
+  @media (prefers-color-scheme: dark) {
+    #log { background: #161b22; border-color: #30363d; }
+    .ok { color: #3fb950; } .bad { color: #f85149; } .dim { color: #8b949e; }
+  }
+  label { display: block; margin: .4rem 0; }
+</style>
+
+<h1>Transcription endurance</h1>
+<p>Real speech at 1, 2 and 3 workers, repeated over several passes in one tab with the same
+   workers reused — so concurrency, drift and thermal throttling can be told apart.</p>
+<p class="dim"><strong>Keep the screen on and this tab in front.</strong> A screen that
+   sleeps freezes the tab, and a backgrounded tab on iOS gets suspended. This page requests
+   a wake lock where the browser offers one.</p>
+<p><label>Audio (optional — otherwise a 40-minute public-domain interview is fetched):
+   <input type="file" id="file" accept="audio/*,video/*"></label></p>
+<button id="run">Start</button><button id="stop" disabled>Stop</button>
+<div id="status">idle</div>
+<div id="log"></div>
+
+<script type="module">
+// The app's own decoder, so the spike measures the path that ships.
+import { decodeAudio } from '../core/transcribe.js';
+
+const SR = 16000;
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const lines = [];
+const log = (s = '', cls = '') => {
+  lines.push(cls ? `<span class="${cls}">${s}</span>` : s);
+  logEl.innerHTML = lines.join('\n');
+};
+const status = (s, cls = '') => { statusEl.textContent = s; statusEl.className = cls; };
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+const pad = (s, n) => String(s).padEnd(n);
+
+const q = new URLSearchParams(location.search);
+const PASSES = Math.max(1, Number(q.get('passes') || 6));
+const CLIPS = Math.max(1, Number(q.get('clips') || 3));
+const K = Math.max(1, Number(q.get('k') || 3));
+const SECONDS = Math.max(5, Number(q.get('seconds') || 60));
+const MAXW = Math.max(1, Number(q.get('max') || 3));
+const FULL = q.get('full') === '1';
+// A 40-minute, two-speaker oral history recorded by the US Army: public domain by origin
+// rather than by assertion, and it sounds like archival interview audio rather than a clean
+// lab recording. archive.org serves it with CORS and Range support, which is what lets a
+// deployed phone build reach it at all — sample-data/ is gitignored and never deployed.
+const DEFAULT_AUDIO = 'https://archive.org/download/VNIT541Reid/VNIT-541_Reid.mp3';
+const AUDIO = q.get('audio') || DEFAULT_AUDIO;
+
+let picked = null;
+document.getElementById('file').addEventListener('change', (e) => {
+  picked = e.target.files?.[0] ?? null;
+  status(picked ? `will use ${picked.name} (${mb(picked.size)})` : 'idle');
+});
+
+let stopping = false;
+document.getElementById('stop').addEventListener('click', () => {
+  stopping = true;
+  status('stopping after the current clip…', 'bad');
+});
+
+// =============================================================================
+// Audio: three clips from across the recording, at minimal peak memory
+// =============================================================================
+
+/** Take exactly `SECONDS` from a decoded slice, skipping the ragged start of it. */
+function carve(pcm, skipSeconds) {
+  const want = Math.round(SECONDS * SR);
+  const skip = Math.round(skipSeconds * SR);
+  if (pcm.length < skip + want) return null;
+  return pcm.slice(skip, skip + want);
+}
+
+/**
+ * Pull one clip by byte range.
+ *
+ * MP3 frames are self-synchronising, so a decoder handed a slice from the middle of a file
+ * finds the next frame boundary and carries on; the first second or so can be ragged, which
+ * is why `carve` skips it. If a slice will not decode at all the caller falls back to
+ * fetching the whole file.
+ */
+async function clipFromRange(url, totalBytes, index, count) {
+  // ~24 kB per second of audio for this recording, so take generous margin for VBR.
+  const sliceBytes = Math.round(SECONDS * 24000 * 1.8) + 65536;
+  const span = Math.max(0, totalBytes - sliceBytes);
+  const start = count > 1 ? Math.round((index * span) / (count - 1)) : 0;
+  const res = await fetch(url, { headers: { Range: `bytes=${start}-${start + sliceBytes - 1}` } });
+  if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status} on range request`);
+  const bytes = await res.arrayBuffer();
+  if (res.status !== 206 && bytes.byteLength > sliceBytes * 2) {
+    throw new Error('server ignored Range and sent the whole file');
+  }
+  const pcm = await decodeAudio(bytes);
+  return carve(pcm, index === 0 ? 0.2 : 1.5);
+}
+
+async function buildClips() {
+  // ---- a local file: decode once, slice evenly, release the big buffer ------------------
+  if (picked) {
+    status(`decoding ${picked.name}…`);
+    const pcm = await decodeAudio(await picked.arrayBuffer());
+    const per = Math.round(SECONDS * SR);
+    const fit = Math.floor(pcm.length / per);
+    const take = Math.min(CLIPS, Math.max(1, fit));
+    const out = [];
+    for (let j = 0; j < take; j++) {
+      const at = (take > 1 ? Math.round((j * (fit - 1)) / (take - 1)) : 0) * per;
+      out.push(pcm.slice(at, at + per));
+    }
+    return { clips: out, label: `${picked.name}, ${(pcm.length / SR / 60).toFixed(1)} min` };
+  }
+
+  // ---- a URL: byte ranges, so a phone never holds the whole recording ------------------
+  //
+  // The size has to come from HEAD, not from the Range probe's `content-range`. That header
+  // is NOT CORS-safelisted, and archive.org sends no `access-control-expose-headers`, so
+  // cross-origin JS reads null from it even though the server sent it. Reading null here
+  // would have meant "ranges unsupported" and a fallback to downloading all 56 MB and
+  // decoding 40 minutes on the phone — precisely the memory blow-up ranges exist to avoid.
+  // `content-length` IS safelisted, so HEAD gives the size; the probe only has to prove
+  // that a 206 comes back, and a status code is always readable.
+  status('fetching audio…');
+  let totalBytes = 0;
+  try {
+    const h = await fetch(AUDIO, { method: 'HEAD' });
+    totalBytes = Number(h.headers.get('content-length')) || 0;
+  } catch { /* some servers refuse HEAD; the probe below may still tell us */ }
+  const probe = await fetch(AUDIO, { headers: { Range: 'bytes=0-1' } });
+  if (!totalBytes) {
+    // Same-origin, or a server generous with expose-headers.
+    const cr = probe.headers.get('content-range');
+    if (cr) totalBytes = Number(cr.split('/')[1]) || 0;
+  }
+  const ranged = probe.status === 206 && totalBytes > 0;
+  if (!ranged) {
+    log(`  no usable Range support (status ${probe.status}, size ${totalBytes || 'unknown'})`, 'dim');
+  }
+
+  if (ranged && !FULL) {
+    const out = [];
+    for (let j = 0; j < CLIPS; j++) {
+      status(`fetching clip ${j + 1} of ${CLIPS}…`);
+      try {
+        const c = await clipFromRange(AUDIO, totalBytes, j, CLIPS);
+        if (c) out.push(c);
+      } catch (err) {
+        log(`  clip ${j + 1} by range failed (${err.message}) — will try a full decode`, 'dim');
+        out.length = 0;
+        break;
+      }
+    }
+    if (out.length) {
+      return {
+        clips: out,
+        label: `${AUDIO.split('/').pop()}, ${CLIPS} clips spread over `
+          + `${(totalBytes / 24000 / 60).toFixed(0)} min (${mb(CLIPS * SECONDS * SR * 4)} held)`,
+      };
+    }
+  }
+
+  // ---- fallback: the whole file -------------------------------------------------------
+  status('fetching the whole recording…');
+  const res = await fetch(AUDIO);
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching audio`);
+  const buf = await res.arrayBuffer();
+  status(`decoding ${mb(buf.byteLength)}…`);
+  const pcm = await decodeAudio(buf);
+  const per = Math.round(SECONDS * SR);
+  const fit = Math.floor(pcm.length / per);
+  const take = Math.min(CLIPS, Math.max(1, fit));
+  const out = [];
+  for (let j = 0; j < take; j++) {
+    const at = (take > 1 ? Math.round((j * (fit - 1)) / (take - 1)) : 0) * per;
+    out.push(pcm.slice(at, at + per));
+  }
+  return { clips: out, label: `${AUDIO.split('/').pop()}, ${(pcm.length / SR / 60).toFixed(1)} min` };
+}
+
+// =============================================================================
+// Workers
+// =============================================================================
+
+const WORKER_URL = new URL('./transcribe-pressure-worker.js', import.meta.url);
+
+function spawn() {
+  const w = new Worker(WORKER_URL, { type: 'module' });
+  w.__clips = 0;                       // how much this worker has been reused
+  return w;
+}
+
+const loadWorker = (w) => new Promise((resolve) => {
+  w.onmessage = (e) => resolve(e.data?.type === 'ready' ? true : (e.data?.message || 'load failed'));
+  w.onerror = (e) => resolve(e.message || 'worker failed to load');
+  setTimeout(() => resolve('timed out loading after 180 s'), 180000);
+  w.postMessage({ type: 'load' });
+});
+
+const runClip = (w, clip) => new Promise((resolve) => {
+  w.onmessage = (e) => resolve(e.data?.type === 'done' ? e.data : { ms: null, err: e.data?.message });
+  w.onerror = (e) => resolve({ ms: null, err: e.message || 'worker died' });
+  setTimeout(() => resolve({ ms: null, err: 'timed out after 300 s' }), 300000);
+  // 400 tokens is effectively uncapped for a minute of speech; the cap only exists so a
+  // pathological case cannot run away. Measured: 16, 48 and 220 give identical output on
+  // audio that has nothing to say, so the cap is not what shapes these numbers.
+  w.postMessage({ type: 'run', audio: clip, maxTokens: 400 });
+});
+
+/**
+ * Run `jobs` clips across `ws` from a shared queue — the structure the real pool uses.
+ *
+ * Static round-robin would bias against larger N: with an uneven split the wall clock
+ * follows whichever worker drew the extra clip, which looks exactly like the sub-linearity
+ * being measured. Here `jobs` is always a multiple of the clip count, so every worker does
+ * the same amount and every clip is transcribed the same number of times.
+ */
+async function drain(ws, jobs, clips) {
+  let claimed = 0;
+  let err = null;
+  let chars = 0;
+  await Promise.all(ws.map(async (w) => {
+    while (!err && !stopping && claimed < jobs) {
+      const i = claimed;
+      claimed += 1;
+      const r = await runClip(w, clips[i % clips.length]);
+      if (r.ms === null) err = r.err;
+      else { chars += r.chars || 0; w.__clips += 1; }
+    }
+  }));
+  return { err, chars, ran: claimed };
+}
+
+// =============================================================================
+// The run
+// =============================================================================
+
+document.getElementById('run').addEventListener('click', async () => {
+  const runBtn = document.getElementById('run');
+  const stopBtn = document.getElementById('stop');
+  runBtn.disabled = true;
+  stopBtn.disabled = false;
+  lines.length = 0;
+  stopping = false;
+
+  // Requested from the click, which is the gesture the API requires. This is the direct fix
+  // for the display-sleep problem that has frozen tabs mid-measurement before.
+  let lock = null;
+  let lockWhy = 'not offered by this browser';
+  try {
+    lock = (await navigator.wakeLock?.request('screen')) ?? null;
+  } catch (err) {
+    // request() rejects with NotAllowedError when the document is not visible, which is a
+    // different problem from the API being missing — and it is the likely one here, since
+    // the whole point is a phone with the tab in front. Say which.
+    lockWhy = err?.name === 'NotAllowedError'
+      ? 'refused because the tab is not visible — bring it to the front and restart'
+      : `refused: ${err?.name || err?.message || 'unknown'}`;
+  }
+
+  log('--- environment ---');
+  log(`crossOriginIsolated: ${crossOriginIsolated}`, crossOriginIsolated ? 'ok' : 'bad');
+  if (!crossOriginIsolated) {
+    log('  NOT ISOLATED: no SharedArrayBuffer, so WASM is single-threaded and every', 'dim');
+    log('  timing below is a floor. Reload once the service worker has activated.', 'dim');
+  }
+  log(`hardwareConcurrency: ${navigator.hardwareConcurrency ?? 'absent'}`);
+  log(`deviceMemory: ${navigator.deviceMemory ?? 'absent (not Chromium)'}`);
+  log(`screen wake lock: ${lock ? 'held' : `NO — ${lockWhy}`}`, lock ? 'ok' : 'bad');
+  if (!lock) log('  Without it, a sleeping screen freezes the tab mid-measurement.', 'dim');
+  log(`document.hidden: ${document.hidden}`, document.hidden ? 'bad' : '');
+
+  try {
+    // ---- audio first, so its transient memory is gone before workers exist -------------
+    const { clips, label } = await buildClips();
+    log('');
+    log(`audio: ${label}`, 'ok');
+
+    // Fairness invariant: every configuration must transcribe each clip the same number of
+    // times, or a cheap clip could land on one worker count and an expensive one on
+    // another — and real speech varies a lot in cost per minute, unlike the noise this
+    // replaces. At N workers there are N*k jobs assigned round-robin over C clips, so each
+    // clip runs N*k/C times; that is a whole number for every N only when k is a multiple
+    // of C. It is by default (k=3, C=3), but a clip that fails to decode changes C, and
+    // then the default would quietly stop being fair.
+    const k = Math.ceil(K / clips.length) * clips.length;
+    if (k !== K) log(`  k raised ${K} -> ${k} so each of ${clips.length} clips runs equally often`, 'dim');
+    log(`${clips.length} distinct clips of ${SECONDS} s; each configuration runs every clip`, 'dim');
+    log('the same number of times, so content cannot favour one worker count.', 'dim');
+
+    // ---- workers, loaded once and reused for the whole run -----------------------------
+    log('');
+    log(`--- loading up to ${MAXW} workers (reused for every pass) ---`);
+    const workers = [];
+    for (let i = 1; i <= MAXW; i++) {
+      status(`loading worker ${i} of ${MAXW}…`);
+      const w = spawn();
+      const t = performance.now();
+      const ok = await loadWorker(w);
+      if (ok !== true) {
+        log(`worker ${i}: FAILED — ${ok}`, 'bad');
+        log('  That is itself a finding: this device will not hold this many. Carrying on', 'dim');
+        log(`  with ${workers.length}.`, 'dim');
+        w.terminate();
+        break;
+      }
+      workers.push(w);
+      log(`worker ${i}: ready in ${Math.round(performance.now() - t)} ms`, 'ok');
+    }
+    if (!workers.length) throw new Error('no workers loaded at all');
+
+    const counts = [];
+    for (let n = 1; n <= workers.length; n++) counts.push(n);
+
+    log('');
+    log(`--- ${PASSES} passes over ${counts.join(', ')} workers, direction alternating ---`);
+    log('Within a pass, comparing counts measures CONCURRENCY (time-local).', 'dim');
+    log('Across passes, comparing one count measures DRIFT (leak, or thermal).', 'dim');
+    log('The direction flips each pass so warming inside a pass cancels out.', 'dim');
+    log('');
+    log(`  pass  dir  ${counts.map((n) => pad(`N=${n}`, 9)).join('')}${counts.slice(1).map((n) => pad(`su${n}`, 7)).join('')}elapsed`);
+    log(`             ${counts.map(() => pad('ms/clip', 9)).join('')}`, 'dim');
+
+    const started = performance.now();
+    const results = [];          // {pass, n, wall, perClip, throughput}
+    let totalChars = 0;
+    let totalClips = 0;
+    let died = null;
+
+    for (let p = 1; p <= PASSES && !stopping && !died; p++) {
+      const forward = p % 2 === 1;
+      const order = forward ? counts : [...counts].reverse();
+      const byN = new Map();
+
+      for (const n of order) {
+        if (stopping || died) break;
+        const jobs = n * k;
+        const eta = p > 1 || results.length
+          ? ` · about ${Math.max(0, Math.round(
+              ((performance.now() - started) / Math.max(1, p - 1)) * (PASSES - p + 1) / 60000))} min left`
+          : '';
+        status(`pass ${p}/${PASSES} · ${n} worker${n > 1 ? 's' : ''} · ${jobs} clips${eta}`);
+        const t = performance.now();
+        const { err, chars, ran } = await drain(workers.slice(0, n), jobs, clips);
+        const wall = performance.now() - t;
+        if (err) { died = `${err} (pass ${p}, N=${n})`; break; }
+        totalChars += chars;
+        totalClips += ran;
+        byN.set(n, { wall, perClip: wall / k, throughput: (jobs / wall) * 1000 });
+        results.push({ pass: p, n, forward, wall, perClip: wall / k, throughput: (jobs / wall) * 1000 });
+      }
+
+      if (died) break;
+      const base = byN.get(1);
+      const cells = counts.map((n) => pad(byN.has(n) ? Math.round(byN.get(n).perClip) : '—', 9));
+      const sus = counts.slice(1).map((n) => pad(
+        byN.has(n) && base ? `${(byN.get(n).throughput / base.throughput).toFixed(2)}x` : '—', 7));
+      log(`  ${pad(p, 6)}${pad(forward ? '→' : '←', 5)}${cells.join('')}${sus.join('')}`
+        + `${((performance.now() - started) / 60000).toFixed(1)} min`);
+    }
+
+    if (died) {
+      log('');
+      log(`STOPPED — ${died}`, 'bad');
+      log('A worker dying part-way through sustained work is the most important result', 'dim');
+      log('this spike can produce: it means the app must survive it, not just avoid it.', 'dim');
+    }
+
+    // ---- what the table says ------------------------------------------------------------
+    log('');
+    log('--- reading the table ---');
+    const perN = (n) => results.filter((r) => r.n === n);
+    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
+
+    // Concurrency: average the within-pass speed-ups, which are immune to drift.
+    for (const n of counts.slice(1)) {
+      const ratios = [];
+      for (let p = 1; p <= PASSES; p++) {
+        const a = results.find((r) => r.pass === p && r.n === 1);
+        const b = results.find((r) => r.pass === p && r.n === n);
+        if (a && b) ratios.push(b.throughput / a.throughput);
+      }
+      if (ratios.length) {
+        log(`${n} workers: ${mean(ratios).toFixed(2)}x mean speed-up over ${ratios.length} passes`
+          + ` (range ${Math.min(...ratios).toFixed(2)}–${Math.max(...ratios).toFixed(2)})`, 'ok');
+      }
+    }
+
+    // Drift: the same count, first pass against last.
+    // Drift compares passes of the SAME DIRECTION. Alternating the order is what keeps
+    // the concurrency comparison clean, but it means N=1 runs first in forward passes and
+    // last in reverse ones — so a naive first-pass-to-last-pass comparison would mix
+    // position-in-pass into a number that is supposed to be about elapsed time.
+    log('');
+    for (const n of counts) {
+      const rs = perN(n).filter((r) => r.forward);
+      if (rs.length < 2) {
+        log(`N=${n}: not enough same-direction passes to separate drift from position`, 'dim');
+        continue;
+      }
+      const first = rs[0].perClip;
+      const last = rs[rs.length - 1].perClip;
+      const pct = ((last - first) / first) * 100;
+      log(`N=${n}: ${Math.round(first)} ms/clip in pass ${rs[0].pass} -> ${Math.round(last)} ms/clip`
+        + ` in pass ${rs[rs.length - 1].pass} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)`,
+        Math.abs(pct) > 15 ? 'bad' : 'ok');
+    }
+    log('This is a LOWER BOUND on drift: it compares the first and last FORWARD passes,', 'dim');
+    log('so heat accumulated during the final reverse pass is not counted. Simulated with', 'dim');
+    log('a known +8%/min decay it recovered 33% of a true 42%.', 'dim');
+    log('A rise of more than about 15% is real degradation, not noise: either thermal', 'dim');
+    log('throttling or something accumulating in a reused worker. A phone that throttles', 'dim');
+    log('will not hold its burst rate for an hour of audio, which is exactly the claim', 'dim');
+    log('every earlier measurement had to extrapolate.', 'dim');
+
+    const minutes = (performance.now() - started) / 60000;
+    const audioMin = (totalClips * SECONDS) / 60;
+    log('');
+    log(`total: ${totalClips} clips (${audioMin.toFixed(0)} min of audio) in ${minutes.toFixed(1)} min`
+      + ` — ${(audioMin / minutes).toFixed(1)}x real time overall`, 'ok');
+    // The guard that the noise mistake earned: too little text means the decoder barely
+    // ran, so the result is encoder-only and overstates concurrency by about 2x. The
+    // threshold scales with clip length, or a short-clip run raises a false alarm (137
+    // characters from a 20 s clip is proportionally the same as 411 from 60 s).
+    const perClipChars = totalChars / Math.max(1, totalClips);
+    const floorChars = 200 * (SECONDS / 60);
+    log(`transcript: ${totalChars} characters, ${Math.round(perClipChars)} per clip`
+      + ` (expect over ${Math.round(floorChars)} for real speech)`,
+        perClipChars > floorChars ? 'ok' : 'bad');
+    if (perClipChars <= floorChars) {
+      log('  TOO LITTLE TEXT: the decoder barely ran, so this is an encoder-only result', 'bad');
+      log('  and overstates concurrency by roughly 2x. Check the audio.', 'dim');
+    }
+    log(`worker reuse: ${workers.map((w, i) => `#${i + 1}=${w.__clips}`).join(' ')} clips each`, 'dim');
+
+    for (const w of workers) w.terminate();
+    status(died ? 'stopped early — see the log' : 'done', died ? 'bad' : 'ok');
+  } catch (err) {
+    log('');
+    log(`FAILED — ${err.message}`, 'bad');
+    status('failed', 'bad');
+  } finally {
+    try { await lock?.release(); } catch { /* already gone */ }
+    runBtn.disabled = false;
+    stopBtn.disabled = true;
+  }
+});
+</script>
