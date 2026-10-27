@@ -23,9 +23,10 @@
  * footnote markers, and infers a column as numeric when most of its cells start
  * with a number (so `"168.2 cm (5 ft 6 in)"` → `168.2`, `"1,234"` → `1234`).
  * Real-world tables are messy; this is best-effort, not guaranteed-clean. It
- * pulls ONE table per import — to combine tables across pages by a key (e.g.
- * height vs. electricity by country) you'd need a dataset *join*, which the
- * engine doesn't have yet (append only stacks rows). See TODO.
+ * pulls ONE table per import. To combine tables across pages by a key (e.g. height vs.
+ * electricity by country), the import dialog's **Join (match on a key)** mode does it —
+ * this comment claimed the engine had no join "yet", which stopped being true when the
+ * join shipped alongside this plugin.
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
@@ -82,7 +83,22 @@ export async function importTable(app) {
   const raw = (form.page || '').trim();
   if (!raw) throw new Error('an article URL or title is required');
 
-  const { lang, title } = parsePage(raw);
+  const { lang, title: asked } = parsePage(raw);
+
+  // Resolve the title BEFORE fetching the article, because a redirect is a dead end
+  // otherwise. `app.web.get` refuses to follow redirects on purpose (#89: a grant for a
+  // trusted host must not let its open redirect bounce the request to an origin the user
+  // never approved), and a `redirect: 'manual'` response is OPAQUE — verified: status 0,
+  // no headers, no `location`. So the host cannot say where a redirect goes, and the user
+  // gets "use the direct URL" for a title that was perfectly reasonable.
+  //
+  // Wikipedia will say where it goes, which is what makes the better answer possible here
+  // even though it is impossible in general. Alternate names and renamed articles are
+  // ordinary — `USA`, `UK`, and in testing `List of countries by population (United
+  // Nations)`, which is a redirect.
+  const title = await resolveTitle(app, lang, asked);
+  if (title === null) return null; // the user declined the redirect
+
   const url = `https://${lang}.wikipedia.org/api/rest_v1/page/html/${encodeURIComponent(title)}`;
   const res = await app.web.get(url);
   if (!res.ok) {
@@ -114,6 +130,54 @@ export async function importTable(app) {
   if (dataset.variables.length === 0) throw new Error('the chosen table had no usable columns');
   dataset.source = title.replace(/_/g, ' ');
   return dataset;
+}
+
+/**
+ * The canonical title for what the user typed, asking first if it redirects somewhere else.
+ *
+ * Returns the title to fetch, or `null` if the user declined the redirect. Falls back to
+ * the asked-for title whenever the lookup is unhelpful — a failed resolve must not block an
+ * import that would have worked, so the original request still goes out and fails on its
+ * own terms if it was going to.
+ *
+ * @param {object} app @param {string} lang @param {string} asked
+ * @returns {Promise<string|null>}
+ */
+async function resolveTitle(app, lang, asked) {
+  // `origin=*` is what makes the action API send `Access-Control-Allow-Origin: *`; without
+  // it this is a CORS failure rather than an answer.
+  const api = `https://${lang}.wikipedia.org/w/api.php?action=query&redirects=1&format=json`
+    + `&origin=*&titles=${encodeURIComponent(asked)}`;
+  let data;
+  try {
+    const res = await app.web.get(api);
+    if (!res.ok) return asked;
+    data = JSON.parse(res.text);
+  } catch {
+    return asked; // offline, blocked, or malformed — let the article fetch be the judge
+  }
+
+  // The API answers in DISPLAY form — spaces, not underscores — and the REST endpoint
+  // redirects a %20 title to its underscored form. So a resolved title handed straight to
+  // `encodeURIComponent` trades one redirect for another, which is exactly what happened
+  // the first time this was tested live.
+  const wikiForm = (t) => String(t).replace(/\s+/g, '_');
+
+  const hop = data?.query?.redirects?.[data.query.redirects.length - 1];
+  if (!hop?.to) {
+    // No redirect. `normalized` is just spacing/underscores and needs no permission.
+    return wikiForm(data?.query?.normalized?.[0]?.to ?? asked);
+  }
+
+  // A form with no fields IS the confirm: `showForm` defaults `fields` to empty and
+  // resolves `{}` on OK, `null` on Cancel. The plugin UI surface has no `confirm`, and
+  // inventing one for a single caller would be a wider change than this needs.
+  const ok = await app.ui.showForm({
+    title: 'That article redirects',
+    hint: `“${hop.from}” redirects to “${hop.to}”. Import “${hop.to}” instead?`,
+    okLabel: 'Import it',
+  });
+  return ok ? wikiForm(hop.to) : null;
 }
 
 /**

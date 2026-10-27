@@ -9840,6 +9840,64 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### More analyses (each is just another plugin)
 
+- [x] **The Wikipedia importer is tested, and it now follows a redirect by ASKING —
+      2026-10-26.** Picked up directly from the FRED removal: the `web` source kind was
+      kept on the grounds that *"Wikipedia earns it"*, and I had said in the same breath
+      that I had not tested it either. That made the claim load-bearing and unverified.
+
+      **It works.** Driven end to end through the real UI — the consent gate fired naming
+      the exact URL, the fetch and parse ran, and it produced **239 rows across 6 columns**
+      (`Country or territory`, `Population (1 July 2023)`, `UN continental region`, …) with
+      populations parsed as numbers (8,091,734,930 for World). The CORS claim holds too:
+      `api/rest_v1` answers with `Access-Control-Allow-Origin: *`, so the no-proxy
+      justification is real.
+
+      **But a redirecting title dead-ended, and Wikipedia titles redirect constantly.** I
+      hit it on the first plausible guess: `List of countries by population (United
+      Nations)` redirects to `…and dependencies by population…`. The user saw `web.get`'s
+      safety message — *"a redirect could send your data to a site you did not approve. Use
+      the direct URL"* — which is **wrong here and unactionable**: the redirect is
+      same-origin, so the stated danger does not apply, and knowing the canonical title is
+      exactly what the user lacked. `USA`, `UK` and every renamed article hit this.
+
+      **The owner's design — prompt to approve the redirect — is right, and cannot be built
+      generally.** Verified in the browser: a `redirect: 'manual'` response is **opaque**.
+      `status: 0`, zero headers, no `location`, empty body. The host cannot name the
+      destination without performing the hop it is refusing, and following-then-checking
+      would not help, because the hop itself is what carries data to an unapproved origin
+      (#89). So `web.get` is unchanged; the property stays.
+
+      **Where it IS possible is per-source, because Wikipedia will say where a title goes.**
+      `action=query&redirects=1&origin=*` is CORS-open and returns the redirect chain, so
+      the importer resolves the title first, names the destination, and asks: *"'X'
+      redirects to 'Y'. Import 'Y' instead?"* — the owner's design, at the one layer that
+      has the information to support it. A failed lookup falls back to the asked-for title,
+      so a resolver outage cannot block an import that would have worked.
+
+      The confirm is a `showForm` with no fields — it defaults `fields` to empty and
+      resolves `{}` on OK, `null` on Cancel. The plugin UI surface has no `confirm`, and
+      adding one for a single caller would be a wider change than this needed.
+
+      **A bug the live test caught that no unit test would have.** The action API answers in
+      DISPLAY form — spaces, not underscores — and the REST endpoint redirects a `%20`
+      title to its underscored form. So the first version traded one redirect for another
+      and failed in exactly the same way, one step later. Resolved titles are now put in
+      wiki form, the way `parsePage` already did for typed input.
+
+      **Also corrected:** the plugin's header claimed that combining tables across pages
+      *"you'd need a dataset join, which the engine doesn't have yet"*. The join shipped
+      alongside this plugin — **Join (match on a key)** is in the import dialog, visible in
+      the same screenshot as the test.
+
+      **A premise worth correcting too.** The owner thought a dedicated Wikipedia importer
+      already handled redirects, separate from the generic web import. It did not — there
+      was no mention of redirects anywhere in the plugin, and `parsePage` only extracted a
+      title before a single `web.get`. The importer that failed in testing was the
+      dedicated one.
+
+      **Verified live after the fix:** the same redirecting title now shows the confirm,
+      and importing it yields 239 rows with the columns above. 2396 tests pass.
+
 - [x] **A COLON in an imported column name addressed the wrong column — FIXED
       2026-10-26.** Found while preparing the NUL question below for a decision; the same
       boundary had a far more reachable hole, and this one was not loud.
