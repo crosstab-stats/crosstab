@@ -1699,13 +1699,24 @@ bottom; they are the project's memory and are not summarised away.
         worth offering as "faster, bigger", not worth making anyone wait for by default.
         A first-time user transcribing one interview is better served by the 39 MB path.
 
-        **An honesty caveat on the WASM figure.** It was measured on a 16-core desktop with
-        WebGPU deliberately disabled, so it says "a desktop without WebGPU is fine" and says
-        nothing reliable about a tablet CPU. July's advice to prefer transcript import or
-        desktop-transcribe on older iPads still stands until someone runs the spike there —
-        which is why the spike is kept in `spike/` beside the other seven, with its verdict in
-        `spike/RESULTS.md`. It takes `?device=` and `?dtype=`, so re-running it on a phone or
-        an iPad is opening a URL.
+        **Then the owner ran it on a phone, and it overturned the mobile assumption.**
+        Four cores, `crossOriginIsolated: true` on the deployed Pages build (so the service
+        worker's isolation reaches `/spike/` and WASM had threads): **44.3 MB, ready in
+        5.2 s, 17.0× on the 66-second clip** — nearly twice the 16-core desktop's WASM
+        figure and equal to that desktop's WebGPU-q4 result, on a quarter of the download.
+        Four fast cores beat sixteen slower ones; ORT's WASM threading does not scale with
+        core count.
+
+        So July's advice to *"prefer transcript import or desktop-transcribe-then-sync over
+        grinding a model on-device"* on tablets is wrong for current hardware, and so was my
+        own caveat predicting a phone would land well below the desktop. An hour of audio is
+        ~3.5 minutes there. **On-device transcription is phone-first as much as desktop.**
+
+        What is still untested: an OLDER device (this phone reports WebGPU, so it is recent
+        iOS — the aging institutional iPad is the population July actually worried about),
+        and **sustained load**. Sixty-six seconds finishes in under four; an hour does not,
+        and a throttling phone will not hold 17×, so "3.5 minutes per hour" is an
+        extrapolation from a burst.
 
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the

@@ -220,11 +220,22 @@ estimated, and the measurements invert the intended default.**
 
 ## Numbers
 
+Desktop Chrome, 16 cores:
+
 | config | over the wire | pipeline ready | 11 s clip | 66 s clip | an hour of audio |
 |---|---|---|---|---|---|
 | WebGPU fp32 | 149.8 MB | 83.8 s | 4.2× | 15.1× | 4.0 min |
 | WebGPU q4 | 91.3 MB | 50.9 s | 7.0× | **17.0×** | 3.5 min |
 | **WASM q8** | **39.0 MB** | **3.9 s** | 7.1× | 9.4× | 6.4 min |
+
+**Phone, 4 cores, WASM q8** (owner's run on the deployed Pages build, 2026-10-26):
+
+| config | over the wire | pipeline ready | 11 s clip | 66 s clip | an hour of audio |
+|---|---|---|---|---|---|
+| WASM q8 | 44.3 MB | 5.2 s | 9.1× | **17.0×** | 3.5 min |
+
+`crossOriginIsolated: true` on Pages, so the service worker's isolation reaches `/spike/`
+and WASM had SharedArrayBuffer and threads. WebGPU was present but unused (a recent iOS).
 
 The short-clip factors are dominated by first-inference warm-up; the 66 s column is the one
 to quote.
@@ -249,15 +260,28 @@ faster to be ready** (3.9 s against 50–84 s), and still 9.4× real time. WebGP
 throughput for 2.3× the bytes and a minute of startup — offer it as "faster, bigger"; do
 not make a first-time user transcribing one interview wait for it.
 
-## What this does NOT establish
+## The phone result overturns the mobile assumption
 
-- **Phone and tablet speed.** The WASM figure came off a 16-core desktop with WebGPU
-  disabled. It says "a desktop without WebGPU is fine" and nothing reliable about a phone.
-  Re-run with `?device=wasm&dtype=q8` there; **read the `crossOriginIsolated` line first**,
-  because GitHub Pages sends no COOP/COEP and without the service worker's isolation there
-  is no SharedArrayBuffer, WASM is single-threaded, and the number is a floor.
+**The phone is nearly twice the desktop's WASM throughput — 17.0× against 9.4× — and equal
+to the desktop's WebGPU-q4 figure**, on a quarter of the download and a tenth of the
+startup. Four fast cores beat sixteen slower ones; ORT's WASM threading does not scale the
+way a core count suggests.
+
+So July's advice to *"prefer transcript import or desktop-transcribe-then-sync over
+grinding a model on-device"* on tablets is wrong, at least for current hardware. So was the
+caveat written here before the run (*"says nothing reliable about a phone"* — true, and the
+unmeasured guess underneath it, that a phone would be slower, was the wrong way round).
+On-device transcription is a **phone-first** feature as much as a desktop one.
+
+## What this still does NOT establish
+
+- **Older devices.** This phone reports WebGPU, so it is recent iOS. An institutional iPad
+  several years old is untested, and that is the population July was actually worried about.
+- **Sustained load and thermal throttling.** 66 seconds of audio finishes in under four
+  seconds; an hour does not, and a phone that throttles mid-transcription will not hold
+  17×. The "3.5 minutes per hour" figure is an extrapolation from a short burst.
 - **Accuracy on real material.** One clean, famous, well-enunciated clip. Interview audio
-  has crosstalk, accents and room noise.
+  has crosstalk, accents and room noise — and `tiny.en` is the smallest model there is.
 - **Anything about the epic.** This ran on the main thread and froze the tab for seconds at
   a time. The feature still needs a worker, chunking, progress, cancellation, model choice
   and cache/offline integration. Feasibility is closed; effort is not.
