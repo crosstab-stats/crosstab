@@ -74,6 +74,20 @@ document.getElementById('run').addEventListener('click', async () => {
   log('\n  An ABSENT above is the point: the pool cannot depend on reading a gauge that', 'dim');
   log('  half the devices do not have. It has to adapt by watching jobs instead.', 'dim');
 
+  log(`service worker controlling: ${navigator.serviceWorker?.controller ? 'yes' : 'NO'}`,
+      navigator.serviceWorker?.controller ? '' : 'bad');
+  if (!crossOriginIsolated) {
+    log('\n  NOT ISOLATED — reload before trusting anything below.', 'bad');
+    log('  These spike pages do not register the service worker themselves. They inherit', 'dim');
+    log('  isolation from the one the app installs, and GitHub Pages sends no COOP/COEP of', 'dim');
+    log('  its own. A fresh deploy REPLACES that worker, and a navigation while the new one', 'dim');
+    log('  is installing is uncontrolled — so nothing injects the headers. Reload once it', 'dim');
+    log('  has activated. If it stays NO, open the app itself once, then come back.', 'dim');
+    log('  Un-isolated costs two things: no SharedArrayBuffer, so WASM is single-threaded', 'dim');
+    log('  and every timing is a floor; and no measureUserAgentSpecificMemory, so the', 'dim');
+    log('  memory figures read "unmeasurable".', 'dim');
+  }
+
   // A real same-origin file, like the production worker. The blob version of this hung
   // with no error, which is a question about blob module workers, not about memory.
   const url = new URL('./transcribe-pressure-worker.js', import.meta.url);

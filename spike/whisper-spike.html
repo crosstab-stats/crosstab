@@ -50,7 +50,20 @@ const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
 document.getElementById('run').addEventListener('click', async () => {
   lines.length = 0;
   log('--- environment ---');
-  log(`crossOriginIsolated: ${crossOriginIsolated}`);
+  log(`crossOriginIsolated: ${crossOriginIsolated}`, crossOriginIsolated ? 'ok' : 'bad');
+  log(`service worker controlling: ${navigator.serviceWorker?.controller ? 'yes' : 'NO'}`,
+      navigator.serviceWorker?.controller ? '' : 'bad');
+  if (!crossOriginIsolated) {
+    log('\n  NOT ISOLATED — reload before trusting anything below.', 'bad');
+    log('  These spike pages do not register the service worker themselves. They inherit', 'dim');
+    log('  isolation from the one the app installs, and GitHub Pages sends no COOP/COEP of', 'dim');
+    log('  its own. A fresh deploy REPLACES that worker, and a navigation while the new one', 'dim');
+    log('  is installing is uncontrolled — so nothing injects the headers. Reload once it', 'dim');
+    log('  has activated. If it stays NO, open the app itself once, then come back.', 'dim');
+    log('  Un-isolated costs two things: no SharedArrayBuffer, so WASM is single-threaded', 'dim');
+    log('  and every timing is a floor; and no measureUserAgentSpecificMemory, so the', 'dim');
+    log('  memory figures read "unmeasurable".', 'dim');
+  }
   log(`hardwareConcurrency: ${navigator.hardwareConcurrency}`);
   const hasWebGPU = 'gpu' in navigator;
   let adapter = null;
