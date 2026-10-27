@@ -164,13 +164,23 @@ test('options() reports the model’s own truth, so a plugin dialog cannot drift
   assert.match(speakers.label, /any language/i);
 });
 
-test('a second job is refused rather than queued', async () => {
-  // Two models and an hour of audio in parallel is a way to run a device out of memory.
+test('a second job is QUEUED, not refused', async () => {
+  // This asserted the opposite until 2026-10-27. The refusal was justified by "two models
+  // and an hour of audio in parallel is how a phone runs out of memory" — never measured,
+  // and wrong as policy besides: transcribing a set of interviews is an ordinary need, and
+  // one weak device should not cap every device. See transcribe-pool.test.mjs for what the
+  // measurement actually says (219 MB per worker, linear, fully reclaimed).
   const { createTranscribeService } = await import('../core/transcribe.js');
   const svc = createTranscribeService({});
   assert.equal(svc.busy, false);
   const src = codeOf('core/transcribe.js');
-  assert.match(src, /if \(active\) throw new Error\('A transcription is already running\.'\)/);
+  assert.doesNotMatch(src, /already running/, 'no blanket refusal');
+  assert.match(src, /pool\.run\(/, 'it goes through the pool');
+  // And the pool's limit is reportable, because "running 2 at a time" needs a because.
+  const cap = svc.capacity;
+  assert.ok(cap.limit >= 1);
+  assert.ok(cap.basis, 'the limit can explain itself');
+  assert.equal(typeof svc.setConcurrency, 'function', 'and the user can override it');
 });
 
 test('progress and cancel are HOST-rendered, because a callback cannot cross the broker', () => {

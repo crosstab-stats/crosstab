@@ -30,6 +30,7 @@
  */
 
 import { getAssets } from './assets.js';
+import { createPool, deviceCapacity } from './transcribe-pool.js';
 
 /** Whisper's own language set, read from the model's `generation_config.json` (99 codes).
  * Kept here so the dialog can SHOW the limit rather than letting someone discover it
@@ -219,8 +220,15 @@ export function transcribe(audio, opts = {}) {
  * @param {(opts: object) => object} deps.showProgress  host progress UI; returns
  *   `{update(state), close()}` and calls `onCancel` if the user stops it.
  */
-export function createTranscribeService({ showProgress } = {}) {
-  let active = null;
+export function createTranscribeService({ showProgress, concurrency } = {}) {
+  // A QUEUE, not a refusal. The first version threw on a second job, justified by a claim
+  // about phone memory that had never been measured — and transcribing a set of interviews
+  // is an ordinary thing to want. What the measurement actually says is in
+  // `transcribe-pool.js`: 219 MB per worker, linear, fully reclaimed on terminate. So the
+  // answer is to run as many as this device can take and queue the rest.
+  let pool = null;
+  let active = 0;
+  let lastChange = null;
 
   return {
     /** What a caller can ask for, so a plugin's dialog is built from the model's own
@@ -248,37 +256,55 @@ export function createTranscribeService({ showProgress } = {}) {
      * @returns {Promise<{vtt: string, chunks: object[], turns: object[]|null, seconds: number}>}
      */
     async run(bytes, opts = {}) {
-      if (active) throw new Error('A transcription is already running.');
-      const audio = await decodeAudio(bytes);
       const mode = opts.mode ?? 'both';
+      const size = opts.size ?? 'tiny';
+      if (!pool) pool = createPool({ concurrency, size, onChange: (i) => { lastChange = i; } });
 
-      let ui = null;
-      const job = transcribe(audio, {
-        ...opts,
-        mode,
-        onProgress: (p) => ui?.update(p),
+      // Decoded BEFORE queueing, so a job waiting its turn holds audio rather than an
+      // undecoded file — and so a format the browser cannot read fails immediately
+      // instead of after a queue wait.
+      const audio = await decodeAudio(bytes);
+
+      return pool.run(async () => {
+        let ui = null;
+        const job = transcribe(audio, { ...opts, mode, onProgress: (p) => ui?.update(p) });
+        active += 1;
+        ui = showProgress?.({
+          title: mode === 'speakers' ? 'Identifying speakers' : 'Transcribing',
+          // Said up front because the first run is a download, and a silent 238 MB fetch
+          // reads as a hang.
+          hint: 'The first run downloads the model. Everything stays on this device.',
+          onCancel: () => job.cancel(),
+        }) ?? null;
+        try {
+          return await job;
+        } finally {
+          active -= 1;
+          ui?.close();
+        }
       });
-      active = job;
-
-      ui = showProgress?.({
-        title: mode === 'speakers' ? 'Identifying speakers' : 'Transcribing',
-        // Said up front because the first run is a download, and a silent 238 MB fetch
-        // reads as a hang.
-        hint: 'The first run downloads the model. Everything stays on this device.',
-        onCancel: () => job.cancel(),
-      }) ?? null;
-
-      try {
-        return await job;
-      } finally {
-        active = null;
-        ui?.close();
-      }
     },
 
-    /** Whether a job is running — so a caller can refuse to start a second. */
+    /** How many run at once, why, and how to change it — so the UI can explain itself
+     * rather than appearing to be slow for no reason. */
+    get capacity() {
+      const cap = deviceCapacity({ size: 'tiny' });
+      return {
+        limit: pool?.limit ?? cap.concurrency,
+        running: pool?.running ?? 0,
+        pending: pool?.pending ?? 0,
+        basis: pool?.basis ?? cap.basis,
+        lastChange,
+      };
+    },
+    setConcurrency(n) {
+      if (!pool) pool = createPool({ concurrency: n, onChange: (i) => { lastChange = i; } });
+      else pool.setLimit(n);
+    },
+
+    /** Whether anything is running. No longer a gate — just a fact. */
     get busy() {
-      return !!active;
+      return active > 0;
     },
   };
 }

@@ -325,3 +325,62 @@ On-device transcription is a **phone-first** feature as much as a desktop one.
   a time. The feature still needs a worker, chunking, progress, cancellation, model choice
   and cache/offline integration. Feasibility is closed; effort is not.
 
+
+---
+
+# Spike results — what a transcription worker costs (`transcribe-pressure.html`)
+
+I claimed in a commit message that *"two models and an hour of audio in parallel is how a
+phone runs out of memory"*, and had measured none of it. The owner rejected it on three
+counts, all correct: **we do not know that**, **transcribing several interviews is a very
+likely need**, and **one device being unable to do it should not put it off limits for
+every device**. This is the measurement that should have come first.
+
+## Setup
+
+- Desktop Chrome, 16 cores, `deviceMemory` 32, served under real COOP/COEP so
+  `performance.measureUserAgentSpecificMemory()` is available and counts WASM.
+- Each worker is a real same-origin module worker loading `onnx-community/whisper-tiny`
+  at `q8` on WASM — the production default.
+- A first draft used a blob-URL worker and hung with no error. Switched to a real file,
+  which is also what ships; the blob question is left alone.
+
+## Numbers
+
+| | memory after | this worker | ready in |
+|---|---|---|---|
+| baseline | 0.9 MB | — | — |
+| worker 1 | 219.8 MB | **+219.0 MB** | 4 645 ms |
+| worker 2 | 438.7 MB | +218.8 MB | 1 287 ms |
+| worker 3 | 657.5 MB | +218.8 MB | 1 106 ms |
+| worker 4 | 876.0 MB | +218.5 MB | 933 ms |
+| after `terminate()` × 4 | **0.9 MB** | — | — |
+
+**219 MB per worker for a 39 MB model** — the ONNX runtime's arenas are about 5.6× the
+weights. **Perfectly linear**: separate memory spaces share nothing. **Fully reclaimed on
+terminate**, so per-job workers are fine and reuse is only about skipping the ~1 s reload
+(the first load pays for the HTTP fetch; later ones do not).
+
+## The finding that shaped the design
+
+**A device may tell you nothing.** On this desktop every gauge was available. But
+`navigator.deviceMemory` is Chromium-only and `measureUserAgentSpecificMemory` requires
+cross-origin isolation — on iOS Safari there is no memory reading at all, and that is
+where a good deal of this will run. A policy that reads a gauge would silently degrade to
+a guess on exactly the devices where guessing is most dangerous.
+
+So `core/transcribe-pool.js` starts from whatever the device *will* say — memory if
+offered, otherwise half the core count, capped while blind — and then **adapts on
+evidence**. A worker that dies is a signal every device produces, and it costs one
+requeued job to learn from. That is what makes "a new phone gets two, an old phone one,
+an iPad four, a desktop ten" happen without anyone maintaining a table of devices, and the
+user can override the number anyway.
+
+## Still unmeasured
+
+- **A phone.** The per-worker figure is desktop Chrome. Run
+  `?n=2` on the phone to see both the cost and whether the second worker survives.
+- **The bigger models.** `base` and `small` are priced in the pool by scaling from their
+  download, which assumes the arena cost is mostly fixed. Worth checking before anyone
+  runs four `small` workers.
+

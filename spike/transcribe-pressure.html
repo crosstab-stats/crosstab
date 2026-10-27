@@ -1,0 +1,125 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Transcription pressure — what does a worker actually cost?</title>
+<!--
+  A SPIKE. Companion to whisper-spike.html; verdict goes in spike/RESULTS.md.
+
+  I claimed in a commit message that "two models and an hour of audio in parallel is how a
+  phone runs out of memory". I had not measured that, and the owner called it: we do not
+  know it, batch transcription of several interviews is a likely need, and one weak device
+  should not set the ceiling for every device.
+
+  So this measures the thing the claim was about:
+
+    1. What memory does ONE transcription worker cost, with the model loaded?
+    2. Does that scale linearly with more workers, or do they share something?
+    3. What does a device actually tell us about its limits — `deviceMemory`,
+       `measureUserAgentSpecificMemory`, `jsHeapSizeLimit` — and which of those exist on
+       a phone rather than a desktop?
+
+  Question 3 matters most for the design: `measureUserAgentSpecificMemory` requires
+  cross-origin isolation and `deviceMemory` is Chromium-only, so on iOS the honest answer
+  may be "you cannot read memory at all", and the pool has to adapt by watching jobs
+  succeed or die instead of by reading a gauge.
+
+  Run with ?n=4 to change how many workers it spins up.
+-->
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+  h1 { font-size: 1.2rem; }
+  button { font: inherit; padding: .5rem 1rem; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px;
+         background: #f6f8fa; border: 1px solid #d0d7de; padding: 1rem; margin-top: 1rem; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; } .dim { color: #656d76; }
+</style>
+
+<h1>Transcription pressure</h1>
+<p>What one transcription worker costs, whether N of them cost N times that, and what this
+   device will actually tell us about its own limits.</p>
+<button id="run">Measure</button>
+<div id="log">idle</div>
+
+<script type="module">
+const logEl = document.getElementById('log');
+const lines = [];
+const log = (s, cls = '') => {
+  lines.push(cls ? `<span class="${cls}">${s}</span>` : s);
+  logEl.innerHTML = lines.join('\n');
+};
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+
+/** Total agent memory, or null where the browser will not say. */
+async function measure() {
+  if (typeof performance.measureUserAgentSpecificMemory !== 'function') return null;
+  try {
+    const m = await performance.measureUserAgentSpecificMemory();
+    return m.bytes;
+  } catch { return null; }
+}
+
+document.getElementById('run').addEventListener('click', async () => {
+  lines.length = 0;
+  const q = new URLSearchParams(location.search);
+  const N = Number(q.get('n') || 4);
+
+  log('--- what this device will tell us ---');
+  log(`crossOriginIsolated:            ${crossOriginIsolated}`);
+  log(`hardwareConcurrency:            ${navigator.hardwareConcurrency ?? 'ABSENT'}`);
+  log(`navigator.deviceMemory:         ${navigator.deviceMemory ?? 'ABSENT (not Chromium)'}`,
+      navigator.deviceMemory ? '' : 'bad');
+  log(`measureUserAgentSpecificMemory: ${typeof performance.measureUserAgentSpecificMemory === 'function' ? 'present' : 'ABSENT'}`,
+      typeof performance.measureUserAgentSpecificMemory === 'function' ? '' : 'bad');
+  log(`performance.memory.jsHeapSizeLimit: ${performance.memory ? mb(performance.memory.jsHeapSizeLimit) : 'ABSENT'}`,
+      performance.memory ? '' : 'bad');
+  log('\n  An ABSENT above is the point: the pool cannot depend on reading a gauge that', 'dim');
+  log('  half the devices do not have. It has to adapt by watching jobs instead.', 'dim');
+
+  // A real same-origin file, like the production worker. The blob version of this hung
+  // with no error, which is a question about blob module workers, not about memory.
+  const url = new URL('./transcribe-pressure-worker.js', import.meta.url);
+  const workers = [];
+  const base = await measure();
+  log(`\n--- spinning up ${N} workers, each loading whisper-tiny q8 ---`);
+  log(`baseline: ${base === null ? 'unmeasurable' : mb(base)}`);
+
+  let prev = base;
+  for (let i = 1; i <= N; i++) {
+    const w = new Worker(url, { type: 'module' });
+    workers.push(w);
+    const t = performance.now();
+    const ok = await new Promise((resolve) => {
+      w.onmessage = (e) => resolve(e.data?.type === 'ready' ? true : e.data?.message || false);
+      w.onerror = (e) => resolve(e.message || 'worker failed to load');
+      // Say something rather than hanging silently, which is how the first draft failed.
+      setTimeout(() => resolve('timed out after 120 s'), 120000);
+      w.postMessage({ type: 'load' });
+    });
+    const took = Math.round(performance.now() - t);
+    if (ok !== true) { log(`worker ${i}: FAILED after ${took} ms — ${ok}`, 'bad'); break; }
+
+    const now = await measure();
+    const delta = now !== null && prev !== null ? now - prev : null;
+    log(`worker ${i}: ready in ${took} ms` + (delta !== null
+      ? ` · total ${mb(now)} · this worker +${mb(delta)}`
+      : ' · memory unmeasurable here'), 'ok');
+    prev = now;
+  }
+
+  if (base !== null && prev !== null && workers.length) {
+    const per = (prev - base) / workers.length;
+    log(`\naverage per worker: ${mb(per)} across ${workers.length}`, 'ok');
+    if (navigator.deviceMemory) {
+      log(`device claims ${navigator.deviceMemory} GB — that is ${Math.floor((navigator.deviceMemory * 1073741824 * 0.25) / per)} workers at a 25% budget`, 'dim');
+    }
+  }
+
+  log('\n--- tearing down ---');
+  for (const w of workers) w.terminate();
+  await new Promise((r) => setTimeout(r, 1500));
+  const after = await measure();
+  log(after === null ? 'post-teardown: unmeasurable' : `post-teardown: ${mb(after)}`
+    + (base !== null ? ` (baseline was ${mb(base)})` : ''));
+  log('A number well above the baseline means terminate() does not promptly return it,', 'dim');
+  log('which is a reason to reuse a pool rather than spawn per job.', 'dim');
+});
+</script>
