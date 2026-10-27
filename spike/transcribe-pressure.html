@@ -24,6 +24,20 @@
 
   Run with ?n=4 to change how many workers it spins up.
 -->
+<!--
+  Register the service worker the way index.html does. GitHub Pages sends no COOP/COEP, so
+  isolation comes from this worker injecting them into the navigations it controls — and a
+  page that does not register it only gets isolated if the app happened to install it
+  first. That is a dependency on what the user did earlier, which is not a property a
+  measurement should have: the owner reloaded a phone repeatedly and stayed un-isolated,
+  because nothing on this page was registering anything.
+
+  The script self-registers and handles the reload-to-isolate dance, with a session flag
+  so a context that genuinely cannot isolate reloads once and then stops. Its scope comes
+  from ITS path (/crosstab/), which covers /crosstab/spike/.
+-->
+<script src="../sw.js"></script>
+
 <style>
   body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
   h1 { font-size: 1.2rem; }
