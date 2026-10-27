@@ -1909,6 +1909,38 @@ bottom; they are the project's memory and are not summarised away.
         segment. Also untested: `base` and `small`, the most obvious lever (73 MB and 238 MB
         against tiny's 39 MB).
 
+        **THE MODEL LADDER: tiny was the problem.** Same 2-minute AMI window, 305
+        reference words, one worker:
+
+        | model | weights | WER | uniq | x real |
+        |---|---|---|---|---|
+        | tiny (ships) | 39 MB | **105.5%** | 0.224 | 4.6 |
+        | tiny + rep1.2 | 39 MB | 81.8% | 0.435 | 12.9 |
+        | **base** | **73 MB** | **37.0%** | 0.508 | **3.7** |
+        | small | 238 MB | 32.8% | 0.477 | 1.4 |
+        | large-v3-turbo | 1035 MB | 27.2% | 0.525 | 0.5 |
+
+        **`base` costs 34 MB more than tiny and is worth 68 points of WER**, landing within
+        10 points of a model fourteen times its size. Nothing except tiny loops — every
+        larger model has a healthy unique-word ratio at default settings.
+
+        **This overturns the previous recommendation: do NOT ship `repetition_penalty`.** On
+        `small` it makes things worse (32.8% -> 47.9%, deletions 44 -> 101) because it
+        suppresses the repeated words real speech is full of. It is a crutch for a failing
+        model; the fix is a better model.
+
+        On the owner's 90% threshold: not reachable on AMI by anything. Published Whisper
+        large-v2 is 16.9% WER on AMI-IHM and 36.4% on AMI-SDM, and our 27.2% on the
+        mixed-headset variant sits exactly between — so the harness agrees with the
+        published model. AMI is four people interrupting each other; it was chosen for its
+        ground truth, not its resemblance to the product. **An interview is a much easier
+        problem and remains unmeasured.**
+
+        Decided by this: default to **base**, offer **small** for quality, drop
+        `repetition_penalty`, treat large-v3-turbo as a ceiling rather than an option (1 GB
+        and 0.5x real time — an hour of audio takes two hours, and the phone cannot hold the
+        weights). Caveat: 2-minute windows, so the gaps are solid but the decimals are not.
+
         **What the spike did NOT do**, and what the epic still is: worker architecture (this
         ran on the main thread and froze the tab for seconds at a time — unacceptable in the
         app), chunking and progress for long recordings, cancellation, model choice UI, and

@@ -901,6 +901,81 @@ a small change to the same spike.
 - **`base` and `small` are untested.** The worker hard-codes tiny; the model is the most
   obvious lever and the one with a known cost (73 MB and 238 MB against 39 MB).
 
+## The model ladder: tiny was the problem, and base fixes most of it
+
+The owner asked for the best model Whisper has, with a threshold: "if it still can't get
+over 90% I'm hesitant to even use Whisper at all." `medium` and `large-v3` are not published
+under onnx-community, so **large-v3-turbo** is the best model a browser can actually load.
+Same two-minute window of ES2002a, 305 reference words, one worker:
+
+| model | q8 weights | WER | fillers dropped | uniq | recall | x real time |
+|---|---|---|---|---|---|---|
+| tiny (what ships) | 39 MB | **105.5%** | 111.8% | 0.224 | 47.1% | 4.6 |
+| tiny + rep1.2 | 39 MB | 81.8% | 82.7% | 0.435 | 55.9% | 12.9 |
+| **base** | **73 MB** | **37.0%** | **31.0%** | 0.508 | 72.8% | **3.7** |
+| small | 238 MB | 32.8% | 26.7% | 0.477 | 77.4% | 1.4 |
+| large-v3-turbo | 1035 MB | **27.2%** | **21.3%** | 0.525 | 77.4% | 0.5 |
+
+**`base` costs 34 MB more than tiny and is worth 68 points of word error rate.** It lands
+within 10 points of a model fourteen times its size, and it does not loop.
+
+### The repetition loop was a tiny problem, not a Whisper problem
+
+Every larger model has a healthy unique-word ratio at default settings — 0.508, 0.477,
+0.525 against tiny's 0.224. Nothing loops except tiny.
+
+Which overturns the previous entry's recommendation. **`repetition_penalty: 1.2` must NOT be
+shipped**: on `small` it makes things actively worse, 32.8% -> 47.9%, with deletions jumping
+from 44 to 101, because it suppresses the genuinely repeated words that speech is full of.
+It is a crutch for a model that is failing, and the fix is to stop using that model.
+
+### About the 90% threshold
+
+It is not reachable on this benchmark by anything, and that is a fact about AMI rather than
+about Whisper. Published figures for Whisper large-v2 are **16.9% WER on AMI-IHM and 36.4%
+on AMI-SDM** ([Whisper paper](https://cdn.openai.com/papers/whisper.pdf)) — 83.1% and 63.6%
+accuracy from the best model there is. Our 27.2% on the mixed-headset variant sits exactly
+between those two, which is where it should sit: Mix-Headset has IHM's close-mic quality
+and SDM's cross-talk. **The harness agrees with the published model**, so the numbers above
+can be trusted as a measurement of the models rather than of our plumbing.
+
+AMI is four people in a meeting interrupting each other. It was chosen because it is the
+only free corpus with word-level ground truth AND speaker labels, not because it resembles
+the product. **An interview — one or two people taking turns on a close mic — is a much
+easier problem, and nothing has measured it yet.** Judging "should we use Whisper at all"
+on AMI is judging a car by how it handles off-road.
+
+### Speed, which now cuts the other way
+
+`large-v3-turbo` runs at **0.5x real time** on desktop WASM: an hour of audio takes two
+hours. It also needs a gigabyte of weights, which the phone cannot hold at all. `small` is
+1.4x (43 min per hour). `base` is 3.7x — about 16 minutes per hour on this desktop, and the
+phone measured ~1.9x the desktop, so roughly 8 minutes per hour there, or 5 with the
+three-way split.
+
+Note that tiny's 4.6x was never real speed: it was looping, and generating garbage takes
+time. The honest comparison is base at 3.7x against tiny+rep1.2 at 12.9x — base is ~3.5x
+slower than a tiny that has been forced to behave, and 68 points more accurate.
+
+### What this makes the recommendation
+
+- **Default to `base`, not `tiny`.** 73 MB is the same order as the R packages already
+  fetched on demand, and it is the difference between a transcript and a loop.
+- **Offer `small`** where the user wants quality and will wait: 4 points better, 2.6x slower,
+  238 MB.
+- **Do not ship `repetition_penalty`.** It helps only the model we should stop using.
+- **`large-v3-turbo` is not a product option** at 1 GB and 0.5x real time, but it is a
+  useful ceiling: it says the best available answer on this audio is 27.2%, so `small` at
+  32.8% is giving up very little.
+- **Measure interview audio before deciding anything final.** Every number here is from a
+  four-way meeting.
+
+### Caveat on sample size
+
+These are two-minute windows, 305 reference words. The gaps (105 -> 37 -> 33 -> 27) are far
+larger than sampling noise could explain, but the individual percentages carry real
+uncertainty and should not be quoted to a decimal place.
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The
