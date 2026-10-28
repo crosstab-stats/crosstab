@@ -1,127 +1,140 @@
 /**
  * @file transcribe-pool.js
- * How many transcriptions run at once — measured, adaptive, and per device.
+ * How many transcriptions run at once — discovered by trying, not calculated.
  *
- * ## Why this exists
+ * ## What the previous version got wrong
  *
- * The first version refused a second job outright, on the grounds that "two models and an
- * hour of audio in parallel is how a phone runs out of memory". The owner rejected that,
- * correctly, on three counts: **it was never measured**, **transcribing several interviews
- * is an ordinary need**, and **one weak device should not set the ceiling for every
- * device**.
+ * It divided a quarter of `navigator.deviceMemory` by a measured 219 MB per worker. That
+ * arithmetic is wrong twice over, and both errors were found by measuring:
  *
- * So it was measured (`spike/transcribe-pressure.html`, desktop Chrome, 2026-10-27):
+ *  - **It predicts the wrong number.** On a 16-core desktop with 32 GB it offered ten
+ *    workers. Measured on real speech, throughput peaks at **1.64x around four workers and
+ *    never improves again** — so six of those ten were 219 MB each buying nothing. The
+ *    *blind* branch (`cores / 2`) was closer to the truth than the one with data.
+ *  - **It cannot see the thing that actually fails.** iOS reports no memory at all, and a
+ *    phone with 238 MB-weight `small` workers crashed the tab on the second one while the
+ *    same model ran three deep on a desktop. No formula over reported memory predicts that,
+ *    because the cost depends on the model's arenas, not on a number the device publishes.
  *
- *  - One worker with `whisper-tiny` q8 loaded costs **219 MB** — the weights are 39 MB, so
- *    the ONNX runtime's arenas are about 5.6× the model.
- *  - It is **perfectly linear**: 219.0, 218.8, 218.8, 218.5 MB for workers one to four.
- *    Separate memory spaces share nothing, so N workers really do cost N times one.
- *  - `terminate()` **reclaims promptly and completely** — 876 MB back to the 0.9 MB
- *    baseline. Spawning per job is therefore fine; the pool reuses workers to skip the
- *    ~1 s model reload, not to avoid a leak.
+ * ## What it does instead
  *
- * ## Why it adapts rather than reading a number
+ * Start with **one** worker, which every device can manage. Whenever there is work waiting
+ * and nothing has failed yet, allow one more. A worker that dies taking its job with it is
+ * the signal to stop and step back down — that signal exists on every device, including the
+ * ones that report nothing.
  *
- * The honest finding from the same spike is that **a device may not tell you anything**.
- * `navigator.deviceMemory` is Chromium-only and `performance.measureUserAgentSpecificMemory`
- * needs cross-origin isolation — on iOS Safari, where a good deal of this will run, there
- * is no memory gauge at all. A policy that depends on reading one would silently fall back
- * to a guess on exactly the devices where the guess matters most.
+ * The ceiling is a sanity bound rather than a prediction: measured on real speech, two
+ * workers give ~1.4x and three ~1.7x, and past four nothing moves even with sixteen cores
+ * available. There is no point probing into a region with no reward.
  *
- * So the pool starts from whatever the device WILL say, then **adapts on evidence**: a
- * worker that dies is a real signal available everywhere, and it costs one requeued job to
- * learn from. That is the mechanism that makes "a new phone gets two, an old phone one, an
- * iPad four, a desktop ten" happen without anyone maintaining a table of devices.
+ * Worth knowing when reading the numbers above: **worker count does not change the
+ * transcript.** The same audio through one worker and through three produced identical
+ * output, word for word, on two different browser engines. Concurrency buys wall-clock on a
+ * batch of files and nothing else.
  */
 
-/** Measured: one loaded `whisper-tiny` q8 worker, desktop Chrome, 2026-10-27. The bigger
- * models are scaled from their download, since the arena cost is mostly fixed. */
-const WORKER_MB = Object.freeze({ tiny: 219, base: 253, small: 418 });
-
-/** Of the memory a device admits to, how much this feature may use. A quarter leaves the
- * browser, the page, DuckDB and WebR room — CrossTab is not alone in this tab. */
-const BUDGET_FRACTION = 0.25;
-
-/** Without a gauge, what a core count is worth. Transcription is CPU-bound, so more
- * workers than cores buys nothing — and ORT already threads inside each worker, so the
- * cores are shared rather than owned. Half, floored at one, capped where memory on an
- * unknown device stops being a guess and starts being a gamble. */
-const BLIND_CAP = 3;
+/** Past this, measurement shows no further throughput on any device tried. */
+export const MAX_WORKERS = 4;
 
 /**
- * What this device is willing to say about itself.
+ * The most workers worth *attempting* on this device.
  *
- * Exported because the UI should be able to show it: "running 2 at a time" is an
- * explicable number, and a user who disagrees can change it.
+ * Not a prediction of what will fit — the probe discovers that. This only avoids climbing
+ * into a region measurement says is empty: transcription is CPU-bound and the ONNX runtime
+ * already threads inside each worker, so more workers than half the cores buys contention.
  */
-export function deviceCapacity({ size = 'tiny' } = {}) {
-  const cores = Number(navigator?.hardwareConcurrency) || 2;
-  const gb = Number(navigator?.deviceMemory) || 0;
-  const perWorker = WORKER_MB[size] ?? WORKER_MB.tiny;
+export function workerCeiling({ max = MAX_WORKERS } = {}) {
+  const cores = Number(globalThis.navigator?.hardwareConcurrency) || 2;
+  return Math.max(1, Math.min(max, Math.floor(cores / 2) || 1));
+}
 
-  if (gb > 0) {
-    const budgetMb = gb * 1024 * BUDGET_FRACTION;
-    const byMemory = Math.floor(budgetMb / perWorker);
-    return {
-      concurrency: Math.max(1, Math.min(byMemory, cores, 10)),
-      basis: `${gb} GB reported, ~${perWorker} MB per worker`,
-      measured: true,
-    };
-  }
-  // No gauge — iOS Safari, and anywhere else that declines to answer. Be modest and let
-  // the adaptation do the rest; a device that copes will not be punished for long.
-  return {
-    concurrency: Math.max(1, Math.min(Math.floor(cores / 2), BLIND_CAP)),
-    basis: `${cores} cores, no memory reading available`,
-    measured: false,
-  };
+/** A failure that means the DEVICE said no, as opposed to the job being bad. */
+function looksLikeDeviceLimit(err) {
+  return /worker failed|terminated|out of memory|allocation|load failed|Failed to (fetch|construct)/i
+    .test(String(err?.message ?? ''));
 }
 
 /**
- * A queue that runs up to `concurrency` jobs at once and shrinks when the device objects.
+ * A queue that starts at one worker and grows only as far as the device allows.
  *
- * `run(fn)` takes a function returning a promise — the pool does not know or care that it
- * is transcription, which keeps the policy testable without a 39 MB download.
+ * `run(fn)` takes a function returning a promise; the pool neither knows nor cares that it
+ * is transcription, which is what makes the policy testable without downloading a model.
  *
  * @param {object} [opts]
- * @param {number} [opts.concurrency]  overrides the device reading
- * @param {(info: object) => void} [opts.onChange]  called when the limit adapts, so the UI
- *   can say what happened rather than appearing to slow down for no reason
+ * @param {number} [opts.max]  hard ceiling on attempts
+ * @param {number} [opts.start]  how many to begin with (one, unless a caller insists)
+ * @param {(info: object) => void} [opts.onChange]  called whenever the limit moves, so the
+ *   UI can say what happened rather than appearing to slow down for no reason
  */
-export function createPool({ concurrency, onChange = null, size = 'tiny' } = {}) {
-  const cap = deviceCapacity({ size });
-  let limit = Math.max(1, concurrency || cap.concurrency);
+export function createPool({ max = MAX_WORKERS, start = 1, onChange = null } = {}) {
+  const ceiling = Math.max(1, Math.min(workerCeiling({ max }), max));
+  let limit = Math.max(1, Math.min(start, ceiling));
+  let probing = limit < ceiling;      // until the device refuses, or we reach the ceiling
+  let reached = limit;                // the most that ever ran at once
   let running = 0;
   const queue = [];
+
+  const announce = (reason, adapted) => onChange?.({
+    limit, ceiling, probing, reason, adapted,
+  });
 
   const pump = () => {
     while (running < limit && queue.length) {
       const job = queue.shift();
       running += 1;
+      reached = Math.max(reached, running);
       job.start();
     }
   };
 
   /**
-   * A job died. If it looks like the device running out rather than the audio being bad,
-   * shrink and retry it — once. A second failure at a lower limit is about the job.
+   * One more, if there is anything for it to do.
+   *
+   * Only ever after a job has SUCCEEDED, and only while work is waiting: growing into an
+   * empty queue costs a worker's memory to achieve nothing, and growing after a failure is
+   * how you discover the same limit twice.
    */
-  const shrink = (reason) => {
-    if (limit <= 1) return false;
+  const grow = () => {
+    if (!probing || limit >= ceiling || !queue.length) return;
+    limit += 1;
+    if (limit >= ceiling) probing = false;
+    announce(`trying ${limit} at once`, true);
+    pump();
+  };
+
+  /** The device refused. Step back and stop asking. */
+  const backOff = (reason) => {
+    probing = false;
+    if (limit <= 1) {
+      announce(`${reason} — already at one, nothing left to give up`, true);
+      return false;
+    }
     limit -= 1;
-    onChange?.({ limit, reason, adapted: true });
+    announce(`${reason} — backing off to ${limit}`, true);
     return true;
   };
 
   return {
     get limit() { return limit; },
+    get ceiling() { return ceiling; },
     get running() { return running; },
     get pending() { return queue.length; },
-    get basis() { return cap.basis; },
-    /** The user's call beats ours — the whole point is that devices differ. */
+    get probing() { return probing; },
+    get reached() { return reached; },
+
+    /** Why this many, in words a person can read. */
+    get basis() {
+      const cores = Number(globalThis.navigator?.hardwareConcurrency) || 2;
+      if (probing) return `${limit} at once, trying for more (${cores} cores, up to ${ceiling})`;
+      if (limit < ceiling) return `${limit} at once — this device would not take more`;
+      return `${limit} at once (${cores} cores)`;
+    },
+
+    /** The user's call beats ours; devices differ more than any rule about them. */
     setLimit(n) {
       limit = Math.max(1, Math.floor(n) || 1);
-      onChange?.({ limit, reason: 'set by you', adapted: false });
+      probing = false;
+      announce('set by you', false);
       pump();
     },
 
@@ -133,19 +146,24 @@ export function createPool({ concurrency, onChange = null, size = 'tiny' } = {})
           Promise.resolve()
             .then(fn)
             .then(
-              (value) => { running -= 1; resolve(value); pump(); },
+              (value) => {
+                running -= 1;
+                resolve(value);
+                // Succeeded, so this many demonstrably fits. Ask for one more.
+                grow();
+                pump();
+              },
               (err) => {
                 running -= 1;
-                // An out-of-memory shows up as the worker dying, not as a typed error —
-                // there is no portable OOM exception in a browser. A terminated worker is
-                // the signal, and it is available on every device including the ones that
-                // will not report memory at all.
-                const died = /worker failed|terminated|out of memory|allocation/i.test(String(err?.message ?? ''));
-                if (died && attempts === 1 && shrink('a worker ran out of room')) {
-                  queue.unshift({ start: attempt }); // retry first, at the lower limit
+                // There is no portable out-of-memory exception in a browser: the signal is
+                // a worker dying. Retry once at the lower limit, because the job itself is
+                // probably fine — it was the company it was keeping.
+                if (looksLikeDeviceLimit(err) && attempts === 1 && backOff('a worker died')) {
+                  queue.unshift({ start: attempt });
                   pump();
                   return;
                 }
+                if (looksLikeDeviceLimit(err)) backOff('a worker died');
                 reject(err);
                 pump();
               },

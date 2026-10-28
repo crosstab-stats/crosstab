@@ -61,7 +61,7 @@ import {
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { renderProjectList } from './project-list.js';
-import { createTranscribeService } from './transcribe.js';
+import { createTranscribeService, LIMITATIONS } from './transcribe.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
@@ -707,17 +707,47 @@ export async function boot(mounts) {
       bar.max = 1;
       const stop = el('button', { type: 'button', class: 'ct-btn', text: 'Stop' });
       stop.addEventListener('click', () => { stop.disabled = true; status.textContent = 'Stopping…'; onCancel?.(); });
+      // Said every time, where it cannot be missed. Measured: Whisper kept 17 of the 168
+      // filler tokens a human transcriber recorded for the same audio, and filler rate
+      // varies 1.9x between speakers — so anyone studying disfluency would be handed a
+      // confident number drawn from a tenth of the data. Better they learn it here than
+      // after building an analysis on it.
+      const fillers = LIMITATIONS.find((l) => l.id === 'disfluencies');
       dlg.append(
         el('h2', { text: title }),
         el('p', { class: 'ct-hint', text: hint }),
+        el('p', { class: 'ct-hint ct-transcribe__caveat', text: fillers ? fillers.detail : '' }),
         status,
         bar,
-        el('div', { class: 'ct-dialog__actions' }, [stop]),
+        // `children` goes in the OPTIONS object. Passed positionally it is silently
+        // dropped, which is how this dialog shipped without a Stop button at all: the
+        // element existed, had its handler, and was never appended to anything.
+        el('div', { class: 'ct-dialog__actions', children: [stop] }),
       );
       document.body.append(dlg);
       dlg.showModal();
       return {
         update(p) {
+          // A clock, because the model call reports nothing from inside it. transformers.js
+          // has no per-chunk callback, so an hour of audio is one opaque await of twenty
+          // minutes — silence long enough to read as a crash. An estimate shown AS an
+          // estimate beats an indeterminate bar that never moves.
+          if (p.type === 'elapsed') {
+            const mins = (ms) => {
+              const t = Math.max(0, Math.round(ms / 1000));
+              return t < 60 ? `${t}s` : `${Math.floor(t / 60)}m${String(t % 60).padStart(2, '0')}s`;
+            };
+            const share = p.estimateMs > 0 ? p.elapsedMs / p.estimateMs : 0;
+            if (share < 1) bar.value = Math.min(0.99, share);
+            else bar.removeAttribute('value');
+            const audio = `${(p.seconds / 60).toFixed(1)} min of audio`;
+            status.textContent = share < 1
+              ? `Transcribing ${audio} — ${mins(p.elapsedMs)} in, about `
+                + `${mins(p.estimateMs - p.elapsedMs)} to go`
+              : `Transcribing ${audio} — ${mins(p.elapsedMs)} in, longer than estimated `
+                + 'but still working';
+            return;
+          }
           if (p.stage === 'speakers' && !p.total) { status.textContent = 'Identifying speakers…'; return; }
           if (p.total) {
             const pct = Math.min(1, (p.loaded || 0) / p.total);
@@ -725,7 +755,7 @@ export async function boot(mounts) {
             const what = p.stage === 'model' ? 'Downloading the model' : 'Working';
             status.textContent = `${what}… ${Math.round(pct * 100)}%`;
           } else if (p.stage === 'transcribe') {
-            bar.removeAttribute('value'); // indeterminate: Whisper reports no per-chunk total
+            bar.removeAttribute('value'); // indeterminate until the first heartbeat
             status.textContent = 'Transcribing…';
           }
         },

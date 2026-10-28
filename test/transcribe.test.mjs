@@ -115,17 +115,69 @@ test('every language has a readable name', () => {
   }
 });
 
-test('the model sizes name their real download', () => {
-  // Measured 2026-10-26, quantised encoder+decoder. The numbers are in the labels because
-  // the dialog shows them and "Tiny/Base/Small" alone tells a user nothing about a 238 MB
-  // commitment on a phone.
-  const byId = Object.fromEntries(MODEL_SIZES.map((m) => [m.id, m.label]));
-  assert.match(byId.tiny, /39 MB/);
-  assert.match(byId.base, /73 MB/);
-  assert.match(byId.small, /238 MB/);
-  // And tiny says what it costs in accuracy, since it is the default.
-  assert.match(byId.tiny, /least accurate/);
-  assert.match(byId.base, /non-English/);
+test('the model sizes name their real download and their measured cost', () => {
+  // The numbers are in the labels because the dialog shows them, and "Base/Small" alone
+  // tells a user nothing about a 238 MB commitment on a phone or forty minutes of waiting.
+  const byId = Object.fromEntries(MODEL_SIZES.map((m) => [m.id, m]));
+  assert.match(byId.base.label, /73 MB/);
+  assert.match(byId.small.label, /238 MB/);
+  assert.match(byId.base.label, /per hour of audio/);
+  assert.match(byId.small.label, /per hour/);
+  for (const m of MODEL_SIZES) {
+    assert.ok(m.accuracy > 0 && m.accuracy < 1, `${m.id} carries a measured accuracy`);
+    assert.ok(m.realTime > 0, `${m.id} carries a measured speed`);
+  }
+});
+
+test('TINY IS NOT OFFERED, because it does not work', () => {
+  // Measured against the AMI human transcript over the full 17.7 minutes: 174.7% word
+  // error rate, 5189 words emitted where 2633 were spoken, unique-word ratio 0.063 against
+  // the human transcript's 0.237. It collapses into repetition loops, and the loop makes
+  // it SLOWER than base in wall-clock terms as well. There is no case for shipping it.
+  assert.equal(MODEL_SIZES.find((m) => m.id === 'tiny'), undefined);
+  // The reason lives in a comment beside the table, so read the file rather than the
+  // comment-stripped form `codeOf` produces.
+  assert.match(readFileSync('core/transcribe.js', 'utf8'), /repetition loops/i,
+    'and the reason is written down where it was removed');
+  const src = codeOf('core/transcribe.js');
+  // Nothing may quietly default back to it.
+  assert.doesNotMatch(src, /size = 'tiny'/, 'no default of tiny survives');
+  assert.doesNotMatch(src, /opts\.size \?\? 'tiny'/, 'nor in the service');
+  const worker = codeOf('core/transcribe-worker.js');
+  assert.doesNotMatch(worker, /size = 'tiny'/, 'nor in the worker');
+  assert.doesNotMatch(worker, /WHISPER\.tiny/, 'nor as a fallback for an unknown size');
+});
+
+test('what it CANNOT do is stated, not buried', async () => {
+  const { LIMITATIONS } = await import('../core/transcribe.js');
+  const fillers = LIMITATIONS.find((l) => l.id === 'disfluencies');
+  assert.ok(fillers, 'the filler loss is a named limitation');
+  // Measured: 17 of 168 filler tokens kept, and filler rate varies 1.9x between speakers.
+  // Somebody comparing disfluency across speakers would get a confident, false number.
+  assert.match(fillers.detail, /17 of 168/);
+  assert.match(fillers.detail, /import the transcript/i, 'and says what to do instead');
+  for (const l of LIMITATIONS) {
+    assert.ok(l.id && l.short && l.detail, `${l.id} needs a short form and a detail`);
+  }
+
+  // It must reach the two places a user or a caller can actually see it.
+  const app = codeOf('core/app.js');
+  assert.match(app, /LIMITATIONS/, 'the progress dialog shows it every run');
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /limitations: LIMITATIONS/, 'and the result carries it onward');
+});
+
+test('a long job shows a clock, so it cannot look like a hang', () => {
+  // transformers.js exposes no per-chunk callback, so between "model downloaded" and
+  // "done" there is one opaque await — twenty minutes on an hour of audio. Silence that
+  // long is indistinguishable from a crash.
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /setInterval/, 'a heartbeat exists');
+  assert.match(src, /type: 'elapsed'/);
+  assert.match(src, /clearInterval/, 'and it stops when the job does');
+  const app = codeOf('core/app.js');
+  assert.match(app, /p\.type === 'elapsed'/, 'and the host renders it');
+  assert.match(app, /longer than estimated/, 'including when the estimate is beaten');
 });
 
 // =============================================================================
@@ -156,7 +208,11 @@ test('options() reports the model’s own truth, so a plugin dialog cannot drift
   const o = svc.options();
   assert.equal(o.languages.length, 99);
   assert.ok(o.languages.every((l) => l.code && l.name));
-  assert.deepEqual(o.sizes.map((x) => x.id), ['tiny', 'base', 'small']);
+  assert.deepEqual(o.sizes.map((x) => x.id), ['base', 'small']);
+  // A caller building a dialog can show the caveats before someone spends twenty minutes
+  // discovering them.
+  assert.ok(Array.isArray(o.limitations) && o.limitations.length >= 1);
+  assert.ok(o.limitations.some((l) => l.id === 'disfluencies'));
   // Speakers-only must be offered, and must say why it is different — it is the mode
   // that works for the languages Whisper has never heard of.
   const speakers = o.modes.find((m) => m.id === 'speakers');

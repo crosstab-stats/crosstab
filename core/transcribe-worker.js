@@ -81,11 +81,11 @@ const progressFor = (stage) => (p) => {
   }
 };
 
-async function getAsr({ size = 'tiny', device = 'wasm', dtype = 'q8' }) {
+async function getAsr({ size = 'base', device = 'wasm', dtype = 'q8' }) {
   const key = `${size}:${device}:${dtype}`;
   if (asr && asrKey === key) return asr;
   const t = await loadLib();
-  asr = await t.pipeline('automatic-speech-recognition', WHISPER[size] ?? WHISPER.tiny, {
+  asr = await t.pipeline('automatic-speech-recognition', WHISPER[size] ?? WHISPER.base, {
     device,
     dtype,
     progress_callback: progressFor('model'),

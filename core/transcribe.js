@@ -30,7 +30,7 @@
  */
 
 import { getAssets } from './assets.js';
-import { createPool, deviceCapacity } from './transcribe-pool.js';
+import { createPool, workerCeiling } from './transcribe-pool.js';
 
 /** Whisper's own language set, read from the model's `generation_config.json` (99 codes).
  * Kept here so the dialog can SHOW the limit rather than letting someone discover it
@@ -71,10 +71,59 @@ export const WHISPER_LANGUAGES = Object.freeze([
  * recording realistically wants `base` or `small`, and the dialog says so rather than
  * letting someone conclude the feature is bad when they were using its smallest model.
  */
+/**
+ * Accuracy and speed are MEASURED, against the AMI human transcript — 17.7 minutes of four
+ * people talking over each other, which is the hardest freely licensed benchmark there is.
+ * Word error rate after normalising spelling and ignoring disfluencies; an interview, being
+ * one or two people taking turns, should do markedly better.
+ *
+ * `tiny` is not offered. On that benchmark it collapses into repetition loops — 174.7% word
+ * error rate, emitting 5189 words where 2633 were spoken, a unique-word ratio of 0.063
+ * against the human transcript's 0.237. It is not a fast option, it is a broken one, and
+ * the loop also makes it slower than `base` in wall-clock terms.
+ */
 export const MODEL_SIZES = Object.freeze([
-  { id: 'tiny', label: 'Tiny — 39 MB, fastest, least accurate' },
-  { id: 'base', label: 'Base — 73 MB, better on non-English' },
-  { id: 'small', label: 'Small — 238 MB, best available in a browser' },
+  { id: 'base', label: 'Base — 73 MB, about 16 min per hour of audio', accuracy: 0.66,
+    weightsMb: 73, realTime: 3.7 },
+  { id: 'small', label: 'Small — 238 MB, more accurate, about 40 min per hour', accuracy: 0.74,
+    weightsMb: 238, realTime: 1.5 },
+]);
+
+/**
+ * What this cannot do, in the caller's hands rather than in a commit message.
+ *
+ * Measured: the human transcript of that meeting is 6.4% filler tokens, and the rate varies
+ * 1.9x BETWEEN SPEAKERS (4.5% for one participant, 8.5% for another) — which is exactly the
+ * sort of thing a linguist or a cultural anthropologist publishes. Whisper's best available
+ * model emitted 17 of those 168 fillers. Roughly a tenth, and not uniformly.
+ *
+ * So a transcript from here can be filtered but never restored, and anyone comparing
+ * disfluency between speakers would be handed a confident number drawn from a tenth of the
+ * data. That is not a degraded finding, it is a false one — which is why this is stated
+ * rather than quietly handled.
+ */
+export const LIMITATIONS = Object.freeze([
+  Object.freeze({
+    id: 'disfluencies',
+    short: 'Filler words are mostly lost.',
+    detail: 'Whisper drops about nine out of ten disfluencies — "um", "uh", "mm-hmm". '
+      + 'Measured against a human transcript of the same audio it kept 17 of 168. If your '
+      + 'analysis counts or compares filler use, this is the wrong tool: transcribe '
+      + 'elsewhere and import the transcript instead.',
+  }),
+  Object.freeze({
+    id: 'overlap',
+    short: 'Overlapping speech is dropped, not guessed.',
+    detail: 'When people talk over each other the quieter speaker tends to vanish rather '
+      + 'than be mistranscribed. Most errors on meeting audio are missing words, not wrong '
+      + 'ones.',
+  }),
+  Object.freeze({
+    id: 'verbatim',
+    short: 'The transcript is readable, not verbatim.',
+    detail: '"gonna" becomes "going to", "twenty five" becomes "25", British spellings '
+      + 'become American. Fine for content analysis; not a record of how something was said.',
+  }),
 ]);
 
 /** 16 kHz mono — what Whisper and the speaker embedder both expect. */
@@ -155,7 +204,7 @@ export function toVtt({ chunks = [], turns = null } = {}) {
  */
 export function transcribe(audio, opts = {}) {
   const {
-    mode = 'both', language = 'en', size = 'tiny', threshold = 0.3, expected = 0,
+    mode = 'both', language = 'en', size = 'base', threshold = 0.3, expected = 0,
     onProgress = null,
   } = opts;
 
@@ -167,7 +216,9 @@ export function transcribe(audio, opts = {}) {
     const m = e.data ?? {};
     if (m.type === 'progress' || m.type === 'stage') { onProgress?.(m); return; }
     if (m.type === 'done') {
-      settle.resolve({ ...m, vtt: toVtt(m) });
+      // The caveats travel WITH the transcript. A result that outlives the dialog that
+      // produced it should still be able to say what it is not.
+      settle.resolve({ ...m, vtt: toVtt(m), limitations: LIMITATIONS });
       worker.terminate();
     } else if (m.type === 'cancelled') {
       settle.reject(Object.assign(new Error('Transcription cancelled.'), { cancelled: true }));
@@ -237,6 +288,9 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
       return {
         languages: WHISPER_LANGUAGES.map(([code, name]) => ({ code, name })),
         sizes: MODEL_SIZES.map((m) => ({ ...m })),
+        // Handed over rather than buried: a caller building a dialog should be able to
+        // show what this cannot do before someone spends twenty minutes finding out.
+        limitations: LIMITATIONS.map((l) => ({ ...l })),
         modes: [
           { id: 'both', label: 'Transcribe and identify speakers' },
           { id: 'text', label: 'Transcribe only' },
@@ -257,17 +311,21 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
      */
     async run(bytes, opts = {}) {
       const mode = opts.mode ?? 'both';
-      const size = opts.size ?? 'tiny';
-      if (!pool) pool = createPool({ concurrency, size, onChange: (i) => { lastChange = i; } });
+      const size = opts.size ?? 'base';
+      // One worker, always, until a second one demonstrably survives. `concurrency` is a
+      // caller's override, not a prediction.
+      if (!pool) pool = createPool({ start: concurrency ?? 1, onChange: (i) => { lastChange = i; } });
 
       // Decoded BEFORE queueing, so a job waiting its turn holds audio rather than an
       // undecoded file — and so a format the browser cannot read fails immediately
       // instead of after a queue wait.
       const audio = await decodeAudio(bytes);
 
+      const seconds = audio.length / SAMPLE_RATE;
+
       return pool.run(async () => {
         let ui = null;
-        const job = transcribe(audio, { ...opts, mode, onProgress: (p) => ui?.update(p) });
+        const job = transcribe(audio, { ...opts, mode, size, onProgress: (p) => ui?.update(p) });
         active += 1;
         ui = showProgress?.({
           title: mode === 'speakers' ? 'Identifying speakers' : 'Transcribing',
@@ -276,9 +334,31 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
           hint: 'The first run downloads the model. Everything stays on this device.',
           onCancel: () => job.cancel(),
         }) ?? null;
+
+        // A HEARTBEAT, because the model call reports nothing from inside.
+        //
+        // transformers.js offers no per-chunk callback, so between "model downloaded" and
+        // "done" there is one opaque await that can last twenty minutes on an hour of
+        // audio. Silence that long is indistinguishable from a crash, and the honest fix
+        // until there is real progress is to show the clock: elapsed, and an estimate from
+        // the measured rate for this model. The estimate is stated as an estimate and the
+        // display says so plainly once it is exceeded.
+        const rate = MODEL_SIZES.find((m) => m.id === size)?.realTime ?? 2;
+        const startedAt = Date.now();
+        const tick = setInterval(() => {
+          ui?.update({
+            type: 'elapsed',
+            stage: 'transcribe',
+            seconds,
+            elapsedMs: Date.now() - startedAt,
+            estimateMs: (seconds / rate) * 1000,
+          });
+        }, 1000);
+
         try {
           return await job;
         } finally {
+          clearInterval(tick);
           active -= 1;
           ui?.close();
         }
@@ -288,18 +368,20 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     /** How many run at once, why, and how to change it — so the UI can explain itself
      * rather than appearing to be slow for no reason. */
     get capacity() {
-      const cap = deviceCapacity({ size: 'tiny' });
       return {
-        limit: pool?.limit ?? cap.concurrency,
+        limit: pool?.limit ?? 1,
+        ceiling: pool?.ceiling ?? workerCeiling(),
         running: pool?.running ?? 0,
         pending: pool?.pending ?? 0,
-        basis: pool?.basis ?? cap.basis,
+        probing: pool?.probing ?? true,
+        reached: pool?.reached ?? 0,
+        basis: pool?.basis ?? 'one at a time until a second proves it fits',
         lastChange,
       };
     },
     setConcurrency(n) {
-      if (!pool) pool = createPool({ concurrency: n, onChange: (i) => { lastChange = i; } });
-      else pool.setLimit(n);
+      if (!pool) pool = createPool({ start: n, onChange: (i) => { lastChange = i; } });
+      pool.setLimit(n);
     },
 
     /** Whether anything is running. No longer a gate — just a fact. */
