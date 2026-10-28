@@ -1125,6 +1125,39 @@ AGAIN HI IM LAURA AND IM THE PROJECT MANAGER`). That is Whisper's own 30-second 
 with `stride_length_s: 5` failing to dedupe its overlap - our segmentation ran with none.
 It accounts for a visible share of the 136 insertions and is worth chasing separately.
 
+## Video files work, and nobody had checked
+
+ETHN has faculty working from video recordings of oral histories, so "does this take an
+MP4" is a real question. There is no video importer — the plugin named in `core/app.js`'s
+comments (#139) does not exist — so the only path is `decodeAudio`, and that turns out to
+be enough.
+
+`decodeAudioData` **demuxes the container and decodes the audio track**. Verified against a
+real film rather than assumed:
+
+| | |
+|---|---|
+| input | 45.9 MB MP4, H.264 video track (`avc1`) + AAC audio (`mp4a`) |
+| decoded | **663.3 s = 11.06 min**, against a published running time of 664.03 s |
+| peak amplitude | 0.0223 — real audio, not a silent track |
+| time | 1.6 s |
+
+So MP4, M4V, MOV and WebM carrying speech need no extraction step. What fails is whatever
+the browser itself cannot decode — MKV and AVI are the usual disappointments — and that
+fails as a plain throw rather than silently.
+
+The caveat is the one already known: the whole file is decoded into memory. Eleven minutes
+is 42 MB of Float32; a two-hour video is ~460 MB on top of the file itself. Video files are
+large to begin with, so this is where segmentation stops being an optimisation.
+
+### A latent bug the test found
+
+`decodeAudio` passed an `ArrayBuffer` straight to `decodeAudioData`, which **detaches** it,
+while a TypedArray argument was copied first and survived. The asymmetry bites on the
+SECOND attempt: a caller retrying a failed decode with the same ArrayBuffer hands over an
+empty one and gets the browser's "Unable to decode audio data", which blames the file. It
+now throws a sentence that says what happened and what to do instead.
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The

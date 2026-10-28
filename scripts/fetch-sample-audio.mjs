@@ -100,6 +100,21 @@ const FIXTURES = [
     default: false,
   },
   {
+    id: 'video',
+    file: 'test-video.mp4',
+    url: 'https://archive.org/download/AboutBan1935/AboutBan1935_512kb.mp4',
+    bytes: 45941165,
+    about: '11 min, H.264 video with an AAC audio track - a real video file, for checking '
+      + 'that transcription takes one. ETHN has faculty working from video recordings of '
+      + 'oral histories.',
+    licence: 'Public Domain Mark 1.0',
+    attribution: '"About Bananas" (1935), via the Internet Archive. '
+      + 'https://archive.org/details/AboutBan1935',
+    note: 'decodeAudioData demuxes the container and decodes only the audio track: '
+      + 'measured 663.3 s recovered against a published running time of 664 s.',
+    default: false,
+  },
+  {
     id: 'ami-annotations',
     file: 'ami_public_manual_1.6.2.zip',
     url: 'https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip',

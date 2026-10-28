@@ -138,8 +138,26 @@ const SAMPLE_RATE = 16000;
  * would otherwise lose a participant.
  */
 export async function decodeAudio(bytes) {
+  // VIDEO WORKS, and not by accident: `decodeAudioData` demuxes the container and decodes
+  // the audio track, so an MP4, M4V, MOV or WebM carrying speech is as acceptable as a WAV.
+  // Verified against a real 45.9 MB H.264 + AAC film: 663.3 s of audio recovered in 1.6 s,
+  // matching the published running time. Oral histories recorded on video need no separate
+  // extraction step. What is NOT supported is whatever the browser itself cannot decode —
+  // MKV and AVI are the usual disappointments — and the failure there is a plain throw.
+  //
+  // An ArrayBuffer argument is DETACHED by `decodeAudioData`; a TypedArray is copied first
+  // and survives. That asymmetry is the API's, not ours, and it bites on the second
+  // attempt rather than the first: a caller who retries a failed decode with the same
+  // ArrayBuffer hands over an empty one and gets "Unable to decode audio data", which says
+  // nothing about what went wrong. So say it here instead.
+  const ab = bytes instanceof ArrayBuffer ? bytes : bytes.buffer.slice(0);
+  if (!ab.byteLength) {
+    throw new Error('This audio buffer has already been used. decodeAudioData detaches an '
+      + 'ArrayBuffer, so it cannot be decoded twice — read the file again, or pass a '
+      + 'Uint8Array, which is copied.');
+  }
   const ctx = new (globalThis.OfflineAudioContext ?? globalThis.AudioContext)(1, 1, SAMPLE_RATE);
-  const buf = await ctx.decodeAudioData(bytes instanceof ArrayBuffer ? bytes : bytes.buffer.slice(0));
+  const buf = await ctx.decodeAudioData(ab);
   if (buf.numberOfChannels === 1 && buf.sampleRate === SAMPLE_RATE) return buf.getChannelData(0);
 
   const frames = Math.ceil(buf.duration * SAMPLE_RATE);

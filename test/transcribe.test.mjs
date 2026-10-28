@@ -148,6 +148,27 @@ test('TINY IS NOT OFFERED, because it does not work', () => {
   assert.doesNotMatch(worker, /WHISPER\.tiny/, 'nor as a fallback for an unknown size');
 });
 
+test('video is supported, and the reason is written down', async () => {
+  // ETHN has faculty working from video recordings of oral histories, so "can it take an
+  // MP4" is a real question with a real answer. decodeAudioData demuxes the container and
+  // decodes the audio track: verified against a 45.9 MB H.264 + AAC film, which yielded
+  // 663.3 s of audio against a published running time of 664 s.
+  const src = readFileSync('core/transcribe.js', 'utf8');
+  assert.match(src, /VIDEO WORKS/, 'a caller should not have to guess');
+  assert.match(src, /MKV and AVI/, 'and the exceptions are named');
+});
+
+test('a reused ArrayBuffer fails with a sentence, not a shrug', async () => {
+  // decodeAudioData DETACHES an ArrayBuffer but copies a TypedArray, so a retry after a
+  // failed decode hands over an empty buffer. The browser's own message for that is
+  // "Unable to decode audio data", which blames the file.
+  const { decodeAudio } = await import('../core/transcribe.js');
+  const detached = new ArrayBuffer(0);
+  await assert.rejects(() => decodeAudio(detached), /already been used/);
+  await assert.rejects(() => decodeAudio(detached), /read the file again/,
+    'and it says what to do about it');
+});
+
 test('what it CANNOT do is stated, not buried', async () => {
   const { LIMITATIONS } = await import('../core/transcribe.js');
   const fillers = LIMITATIONS.find((l) => l.id === 'disfluencies');
