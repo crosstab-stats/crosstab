@@ -6103,12 +6103,16 @@ async function mountTranscripts(app, root) {
       if (it.detail) o.title = it.detail;
       s.append(o);
     }
-    if (value) s.value = value;
+    // `value != null` rather than truthiness: the language default is the empty string
+    // (detect automatically), and `if (value)` would skip it and land on whatever happens
+    // to be first — which is the same entry here, but only by luck.
+    if (value != null) s.value = value;
     return s;
   };
   const sizeSel = select(options.sizes ?? [], 'base');
   const modeSel = select(options.modes ?? [], 'text');
-  const langSel = select(options.languages ?? [], 'en');
+  // Detect, rather than assume English — see core/transcribe.js `options()`.
+  const langSel = select(options.languages ?? [], '');
   const allBtn = css(mk('button', BTN, 'Transcribe all'), { fontWeight: '600' });
   const pauseBtn = mk('button', BTN, 'Pause');
   bar.append(mk('label', MUTED, 'Model'), sizeSel, mk('label', MUTED, 'Mode'), modeSel,
@@ -6187,7 +6191,8 @@ async function mountTranscripts(app, root) {
       name: row.label,
       mode: modeSel.value || 'text',
       size: sizeSel.value || 'base',
-      language: langSel.value || 'en',
+      // '' means detect; the worker treats any falsy language as "no language given".
+      language: langSel.value,
     });
     jobOf.set(row.rid, id);
   }

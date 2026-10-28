@@ -371,8 +371,24 @@ test('options() reports the model’s own truth, so a plugin dialog cannot drift
   const { createTranscribeService } = await import('../core/transcribe.js');
   const svc = createTranscribeService({});
   const o = svc.options();
-  assert.equal(o.languages.length, 99);
-  assert.ok(o.languages.every((l) => l.code && l.name));
+  // 99 languages plus "Detect automatically", which is first and is the default.
+  assert.equal(o.languages.length, 100);
+  assert.equal(o.languages[0].code, '', 'detect is the first entry');
+  assert.match(o.languages[0].name, /detect/i);
+  assert.ok(o.languages.slice(1).every((l) => l.code && l.name));
+
+  // ALPHABETICAL by name. The source list is in ISO-code order, which renders as
+  // Bengali, Tibetan, Breton, Bosnian, Catalan — indistinguishable from a bug.
+  const names = o.languages.slice(1).map((l) => l.name);
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'en')),
+    'languages are sorted by name, not by code');
+
+  // And detecting is what happens when nobody chooses: forcing English is a guess that
+  // is silently wrong for every recording that is not in English.
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /language = ''/, 'transcribe() detects by default');
+  assert.ok(o.limitations.some((l) => l.id === 'language'),
+    'and the risk of an unknown language is stated');
   assert.deepEqual(o.sizes.map((x) => x.id), ['base', 'small']);
   // A caller building a dialog can show the caveats before someone spends twenty minutes
   // discovering them.

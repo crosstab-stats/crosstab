@@ -111,6 +111,9 @@ export const MODEL_SIZES = Object.freeze([
  * data. That is not a degraded finding, it is a false one — which is why this is stated
  * rather than quietly handled.
  */
+/** Offered first and chosen by default — see the note in `options()`. */
+export const AUTO_LANGUAGE = Object.freeze({ code: '', name: 'Detect automatically' });
+
 export const LIMITATIONS = Object.freeze([
   Object.freeze({
     id: 'disfluencies',
@@ -126,6 +129,14 @@ export const LIMITATIONS = Object.freeze([
     detail: 'When people talk over each other the quieter speaker tends to vanish rather '
       + 'than be mistranscribed. Most errors on meeting audio are missing words, not wrong '
       + 'ones.',
+  }),
+  Object.freeze({
+    id: 'language',
+    short: 'A language Whisper does not know is transcribed as the nearest one it does.',
+    detail: 'Whisper covers 99 languages and fails silently outside them — not with an '
+      + 'error, but with fluent text in the closest language it recognises. If your '
+      + 'recording is in a language it has never heard, use "Identify speakers only", '
+      + 'which needs no language at all.',
   }),
   Object.freeze({
     id: 'verbatim',
@@ -231,7 +242,8 @@ export function toVtt({ chunks = [], turns = null } = {}) {
  */
 export function transcribe(audio, opts = {}) {
   const {
-    mode = 'both', language = 'en', size = 'base', threshold = 0.3, expected = 0,
+    // '' (or null) means detect — see `options()` for why that is the default.
+    mode = 'both', language = '', size = 'base', threshold = 0.3, expected = 0,
     onProgress = null,
   } = opts;
 
@@ -512,7 +524,23 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
      * truth rather than a copied list that will drift. */
     options() {
       return {
-        languages: WHISPER_LANGUAGES.map(([code, name]) => ({ code, name })),
+        // Auto-detect FIRST and by default. The previous default was English, which is
+        // not the neutral choice it looks like: it is a guess that is silently wrong for
+        // every recording that is not in English, and the departments most likely to use
+        // this — Ethnic Studies, Cultural Anthropology, Linguistics — are the ones least
+        // likely to be handing it English. Detection does not remove the risk of a
+        // language Whisper does not know (see LIMITATIONS), but forcing English makes
+        // that outcome certain rather than merely possible.
+        //
+        // Sorted BY NAME, because the source list is in ISO-code order and a menu that
+        // runs Bengali, Tibetan, Breton, Bosnian, Catalan looks broken to anyone who
+        // cannot see the codes behind it.
+        languages: [
+          { ...AUTO_LANGUAGE },
+          ...WHISPER_LANGUAGES
+            .map(([code, name]) => ({ code, name }))
+            .sort((a, b) => a.name.localeCompare(b.name, 'en')),
+        ],
         sizes: MODEL_SIZES.map((m) => ({ ...m })),
         // Handed over rather than buried: a caller building a dialog should be able to
         // show what this cannot do before someone spends twenty minutes finding out.
