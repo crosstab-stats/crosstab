@@ -186,11 +186,87 @@ function speakerAt(turns, time) {
   return best.speaker;
 }
 
+/**
+ * Which language is being spoken in one 30-second window, as `[code, probability]` pairs.
+ *
+ * ## Why this is hand-rolled
+ *
+ * transformers.js 4.3.1 DOES NOT DETECT. Omitting `language` does not ask the model to
+ * work it out; `_retrieve_init_tokens` in `models/whisper/modeling_whisper.js` reads:
+ *
+ *     if (!language) {
+ *         // TODO: Implement language detection
+ *         logger.warn('No language specified - defaulting to English (en).');
+ *         language = 'en';
+ *     }
+ *
+ * — so "auto" was English wearing a different label, and the failure is silent: French
+ * audio came back as fluent English prose ("even today, what crime did I commit?"), not
+ * as an error. Measured, both ways round, before this function existed.
+ *
+ * ## How it works
+ *
+ * Whisper's prefix is `<|startoftranscript|> <|lang|> <|task|>`. Normally the language
+ * token is FORCED into that prefix, which is why nothing is ever detected. Run the decoder
+ * for exactly one step from `<|startoftranscript|>` ALONE and the model's own first
+ * prediction is its guess — that is what the language tokens are for. One encoder pass
+ * plus one decoder step, so it costs a fraction of transcribing the same window.
+ *
+ * The softmax is taken over the 99 language tokens only, not the full 51865-token
+ * vocabulary: the question is "which language", and normalising over every word in the
+ * vocabulary would answer a different one.
+ */
+async function detectIn(pipe, pcm) {
+  const t = await loadLib();
+  const feats = await pipe.processor(pcm);
+  const gc = pipe.model.generation_config;
+  const out = await pipe.model({
+    input_features: feats.input_features,
+    decoder_input_ids: new t.Tensor('int64', [BigInt(gc.decoder_start_token_id)], [1, 1]),
+  });
+  const row = out.logits.tolist()[0].at(-1);
+
+  const entries = Object.entries(gc.lang_to_id ?? {});
+  if (!entries.length) return [];
+  let max = -Infinity;
+  for (const [, id] of entries) if (row[id] > max) max = row[id];
+  let sum = 0;
+  const exps = entries.map(([tok, id]) => {
+    const e = Math.exp(row[id] - max);
+    sum += e;
+    return [tok.replace(/[<|>]/g, ''), e];
+  });
+  return exps
+    .map(([code, e]) => [code, e / sum])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+}
+
 self.onmessage = async (e) => {
   const { type, id } = e.data ?? {};
 
   if (type === 'cancel') { cancelled = true; return; }
   if (type === 'config') { LIB_URL = e.data.libUrl || LIB_URL; return; }
+  // Scoring only. WHERE to sample is a product decision and lives in the service, which
+  // sends the windows it chose — so an hour of audio is not transferred to answer a
+  // question that thirty seconds of it can answer.
+  if (type === 'detect') {
+    cancelled = false;
+    try {
+      const { windows = [], size, device, dtype } = e.data;
+      const pipe = await getAsr({ size, device, dtype });
+      const scored = [];
+      for (const w of windows) {
+        if (cancelled) { post('cancelled', { id }); return; }
+        scored.push(await detectIn(pipe, w));
+      }
+      post('detected', { id, windows: scored });
+    } catch (err) {
+      post('error', { id, message: String(err?.message ?? err) });
+    }
+    return;
+  }
+
   if (type !== 'run') return;
 
   cancelled = false;
@@ -198,6 +274,7 @@ self.onmessage = async (e) => {
 
   try {
     let turns = null;
+    let detected = null;
     if (mode === 'speakers' || mode === 'both') {
       post('stage', { id, stage: 'speakers' });
       turns = await diarize(audio, { threshold, expected });
@@ -209,14 +286,29 @@ self.onmessage = async (e) => {
       post('stage', { id, stage: 'transcribe' });
       const pipe = await getAsr({ size, device, dtype });
       if (cancelled) { post('cancelled', { id }); return; }
-      // `language: null` means auto-detect, which the host only sends when the user asked
-      // for it: an unsupported language does not fail, it is silently transcribed as the
-      // nearest neighbour Whisper knows, and the result is fluent fabrication.
+
+      // DEFENCE IN DEPTH. The service resolves the language before it gets here, so
+      // normally `language` is already a concrete code. But a caller using `transcribe()`
+      // on its own must not fall into the library's silent English default, so detect
+      // from the middle of whatever we were handed rather than passing nothing through.
+      let used = language || null;
+      if (!used) {
+        const mid = Math.max(0, Math.floor((audio.length - 30 * SAMPLE_RATE) / 2));
+        const scored = await detectIn(pipe, audio.subarray(mid, mid + 30 * SAMPLE_RATE));
+        used = scored[0]?.[0] ?? 'en';
+        detected = { code: used, confidence: scored[0]?.[1] ?? 0, windows: [scored] };
+      }
+      if (cancelled) { post('cancelled', { id }); return; }
+
+      // An unsupported language still does not fail: it is transcribed as the nearest
+      // neighbour Whisper knows, and the result is fluent fabrication. Detection makes
+      // that visible (a low confidence is a real signal) but cannot prevent it.
       const out = await pipe(audio, {
         chunk_length_s: 30,
         stride_length_s: 5,
         return_timestamps: true,
-        ...(language ? { language, task: 'transcribe' } : {}),
+        language: used,
+        task: 'transcribe',
       });
       chunks = (out.chunks ?? []).map((c) => ({
         start: c.timestamp?.[0] ?? 0,
@@ -231,6 +323,8 @@ self.onmessage = async (e) => {
     if (cancelled) { post('cancelled', { id }); return; }
     post('done', {
       id,
+      language: language || detected?.code || null,
+      detected,
       chunks: chunks.map((c) => ({
         ...c,
         speaker: turns ? speakerAt(turns, (c.start + c.end) / 2) : null,

@@ -131,6 +131,17 @@ export const LIMITATIONS = Object.freeze([
       + 'ones.',
   }),
   Object.freeze({
+    id: 'detect',
+    short: 'Auto-detect samples the recording, and picks ONE language for all of it.',
+    detail: 'The language is identified from several 30-second windows spread across the '
+      + 'recording, and then used for the whole file. So an interview that opens with an '
+      + 'English introduction and continues in another language is still read correctly — '
+      + 'but a recording that genuinely switches language part-way through will be '
+      + 'transcribed as whichever language won, and the other stretch will come back as '
+      + 'confident nonsense. If the windows disagree you are told so. Set the language '
+      + 'yourself to override the guess, and transcribe a bilingual recording in passes.',
+  }),
+  Object.freeze({
     id: 'language',
     short: 'A language Whisper does not know is transcribed as the nearest one it does.',
     detail: 'Whisper covers 99 languages and fails silently outside them — not with an '
@@ -148,6 +159,139 @@ export const LIMITATIONS = Object.freeze([
 
 /** 16 kHz mono — what Whisper and the speaker embedder both expect. */
 const SAMPLE_RATE = 16000;
+
+/**
+ * How language detection samples a recording — and why it is not just the opening.
+ *
+ * Whisper reads 30 seconds at a time, so one detection call sees one 30-second window.
+ * Reading only the FIRST window is the obvious implementation and it is wrong for exactly
+ * the job this tool is for: an interviewer's English preamble in front of a Spanish
+ * interview would set the language for the whole file, and the interview itself would come
+ * back as fluent English fabrication. So the windows are spread across the recording and
+ * they vote.
+ *
+ * Five windows because each costs one encoder pass and one decoder step — a rounding error
+ * against transcribing the same audio — and because it is enough for an odd window to lose
+ * rather than decide.
+ */
+export const DETECT_WINDOWS = 5;
+export const DETECT_WINDOW_SECONDS = 30;
+
+/**
+ * Pick the windows to detect from, skipping the ones with nothing in them.
+ *
+ * A near-silent window scores confidently and arbitrarily — there is no speech in it to be
+ * in any language — so it is dropped rather than given a vote. The threshold is RMS, which
+ * is cheap and needs no model. If EVERY window is quiet the loudest is used anyway: a weak
+ * guess beats having nothing to guess from.
+ */
+export function sampleForDetection(audio, {
+  windows = DETECT_WINDOWS, seconds = DETECT_WINDOW_SECONDS, rms = 0.005,
+} = {}) {
+  const span = Math.floor(seconds * SAMPLE_RATE);
+  if (!audio?.length) return [];
+  if (audio.length <= span) return [{ at: 0, pcm: audio, rms: Infinity }];
+
+  const n = Math.max(1, Math.min(windows, Math.floor(audio.length / span)));
+  const picked = [];
+  for (let i = 0; i < n; i += 1) {
+    // Evenly spaced, and offset by half a step so the very first seconds are not one of
+    // the samples: that is where announcements, room noise and "is this recording?" live.
+    const at = Math.floor(((i + 0.5) / n) * (audio.length - span));
+    const pcm = audio.subarray(at, at + span);
+    let sum = 0;
+    let k = 0;
+    for (let j = 0; j < pcm.length; j += 16) { sum += pcm[j] * pcm[j]; k += 1; }
+    picked.push({ at: at / SAMPLE_RATE, pcm, rms: Math.sqrt(sum / Math.max(1, k)) });
+  }
+  const loud = picked.filter((w) => w.rms >= rms);
+  if (loud.length) return loud;
+  return [picked.reduce((a, b) => (b.rms > a.rms ? b : a))];
+}
+
+const languageName = (code) => WHISPER_LANGUAGES.find(([c]) => c === code)?.[1] ?? code;
+
+/**
+ * Turn per-window scores into one answer, plus an honest note about disagreement.
+ *
+ * Probabilities are SUMMED across windows rather than votes counted, so a window that is
+ * 99% sure outweighs three that are barely leaning — the behaviour you want when one
+ * window caught clear speech and the others caught cross-talk.
+ *
+ * `mixed` is the code-switching signal: a window that confidently disagrees with the
+ * winner is not noise, it is evidence of a second language, and the caller is told rather
+ * than left wondering why half the transcript is wrong.
+ */
+export function summariseDetection(perWindow = [], windows = []) {
+  const totals = new Map();
+  for (const scored of perWindow) {
+    for (const [code, p] of scored ?? []) totals.set(code, (totals.get(code) ?? 0) + p);
+  }
+  const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  const n = Math.max(1, perWindow.length);
+  const code = ranked[0]?.[0] ?? '';
+
+  const tops = perWindow.map((scored, i) => ({
+    at: windows[i]?.at ?? null,
+    code: scored?.[0]?.[0] ?? null,
+    confidence: scored?.[0]?.[1] ?? 0,
+  }));
+  const dissent = tops.filter((t) => t.code && t.code !== code && t.confidence >= 0.7);
+  const second = ranked[1]
+    ? { code: ranked[1][0], name: languageName(ranked[1][0]), confidence: ranked[1][1] / n }
+    : null;
+
+  return {
+    code,
+    name: code ? languageName(code) : '',
+    confidence: (ranked[0]?.[1] ?? 0) / n,
+    runnerUp: second,
+    mixed: dissent.length > 0,
+    dissenting: dissent.map((d) => ({ ...d, name: languageName(d.code) })),
+    windows: tops,
+  };
+}
+
+/**
+ * Identify the language of a recording. Resolves to what `summariseDetection` returns.
+ *
+ * Done ONCE per file, in the service, rather than per segment — otherwise a 40-minute
+ * interview split into twenty segments would detect twenty times, could disagree with
+ * itself, and hand back a transcript that changes language in the middle for no reason the
+ * user could see.
+ */
+export function detectLanguage(audio, opts = {}) {
+  const { size = 'base', onProgress = null } = opts;
+  const picked = sampleForDetection(audio, opts);
+  if (!picked.length) return Promise.resolve(summariseDetection([], []));
+
+  const worker = new Worker(new URL('./transcribe-worker.js', import.meta.url), { type: 'module' });
+  return new Promise((resolve, reject) => {
+    worker.onmessage = (e) => {
+      const m = e.data ?? {};
+      if (m.type === 'progress' || m.type === 'stage') { onProgress?.(m); return; }
+      if (m.type === 'detected') {
+        resolve(summariseDetection(m.windows ?? [], picked));
+        worker.terminate();
+      } else if (m.type === 'error') {
+        reject(new Error(m.message));
+        worker.terminate();
+      }
+    };
+    worker.onerror = (err) => {
+      reject(new Error(`Language detection failed: ${err.message || 'unknown error'}`));
+      worker.terminate();
+    };
+    const libUrl = getAssets()?.transformersUrl;
+    if (libUrl) worker.postMessage({ type: 'config', libUrl });
+    // COPIED, deliberately. These are 30-second views into the caller's audio; transferring
+    // them would detach the buffer we are about to transcribe.
+    worker.postMessage({
+      type: 'detect', id: 1, size,
+      windows: picked.map((w) => new Float32Array(w.pcm)),
+    });
+  });
+}
 
 /**
  * Decode any browser-readable audio file to the mono 16 kHz the models want.
@@ -417,6 +561,8 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     mode: j.mode,
     size: j.size,
     seconds: j.seconds,
+    language: j.language,
+    detection: j.detection ? { ...j.detection } : null,
     progress: j.progress ? { ...j.progress } : null,
     error: j.error,
     queuedAt: j.queuedAt,
@@ -450,6 +596,25 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     // as `transcribe()` does.
     const promise = (async () => {
 
+    // ---- what language is this? ----------------------------------------------------
+    //
+    // Resolved HERE, once, and then passed down as a concrete code. Two reasons it cannot
+    // be left to the layers below: transformers.js does not detect at all (it silently
+    // substitutes English), and our own segmentation would otherwise ask the question
+    // twenty times for one interview and could answer it differently each time.
+    let language = opts.language ?? '';
+    let detection = null;
+    if (wantsText && !language) {
+      report.update?.({ stage: 'detect' });
+      detection = await detectLanguage(audio, { size, onProgress: (x) => { if (!stopped) report.update?.(x); } });
+      if (stopped) throw Object.assign(new Error('Transcription cancelled.'), { cancelled: true });
+      language = detection.code || 'en';
+      // Told, not buried: which language, how sure, and whether the windows disagreed —
+      // because a transcript in the wrong language is fluent, not obviously broken.
+      report.update?.({ type: 'language', ...detection });
+    }
+    const resolved = { ...opts, language };
+
     // ---- long recordings are segmented --------------------------------------------
     //
     // A single call over 40 minutes crashed a phone, extra workers did nothing for a
@@ -458,7 +623,7 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     // in one call, and 8.9% faster on one worker.
     if (wantsText && seconds > SEGMENT_ABOVE_SECONDS) {
       const chunks = await transcribeSegments(audio, {
-        ...opts,
+        ...resolved,
         mode: 'text',
         size,
         schedule: (fn) => p.run(fn),
@@ -476,7 +641,7 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
       if (wantsSpeakers) {
         report.update?.({ stage: 'speakers' });
         const job = transcribe(new Float32Array(audio), {
-          ...opts, mode: 'speakers', size,
+          ...resolved, mode: 'speakers', size,
           onProgress: (x) => { if (!stopped) report.update?.(x); },
         });
         inFlight.add(job);
@@ -486,14 +651,16 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
       const withSpeakers = turns
         ? chunks.map((c) => ({ ...c, speaker: speakerAt(turns, (c.start + c.end) / 2) }))
         : chunks;
-      const out = { chunks: withSpeakers, turns, seconds, segmented: true };
+      const out = {
+        chunks: withSpeakers, turns, seconds, segmented: true, language, detection,
+      };
       return { ...out, vtt: toVtt(out), limitations: LIMITATIONS };
     }
 
     // ---- short enough for one call -------------------------------------------------
     return p.run(async () => {
       const job = transcribe(audio, {
-        ...opts, mode, size, onProgress: (x) => { if (!stopped) report.update?.(x); },
+        ...resolved, mode, size, onProgress: (x) => { if (!stopped) report.update?.(x); },
       });
       inFlight.add(job);
       // A HEARTBEAT, because the model call reports nothing from inside. transformers.js
@@ -508,7 +675,10 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         });
       }, 1000);
       try {
-        return await job;
+        // `detection` is null when the caller named a language; the field is still present
+        // so a reader of a saved transcript can tell "English because asked" from
+        // "English because detected", which are different claims.
+        return { ...(await job), language, detection };
       } finally {
         clearInterval(tick);
         inFlight.delete(job);
@@ -604,6 +774,8 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         mode: opts.mode ?? 'both',
         size: opts.size ?? 'base',
         seconds: null,
+        language: opts.language || null,
+        detection: null,
         progress: null,
         error: null,
         queuedAt: Date.now(),
@@ -627,6 +799,12 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
           active += 1;
           const report = {
             update: (p) => {
+              if (p.type === 'language') {
+                job.language = p.code;
+                job.detection = { name: p.name, confidence: p.confidence, mixed: p.mixed, dissenting: p.dissenting };
+                return;
+              }
+              if (p.stage === 'detect') { job.progress = { stage: 'detect' }; return; }
               if (p.type === 'segments') job.progress = { done: p.done, total: p.total };
               else if (p.stage === 'speakers') job.progress = { ...(job.progress ?? {}), stage: 'speakers' };
               else if (p.type === 'elapsed') {

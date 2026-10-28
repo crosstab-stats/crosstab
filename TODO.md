@@ -18,6 +18,47 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
+- [ ] **#193 — "transcribe 2:15 to 19:30": the range belongs to the ENGINE, not the
+      plugin (owner asked, 2026-10-28).** The owner's question was whether a plugin should
+      snip the audio and hand the engine bytes, or whether the engine should take the whole
+      recording plus "start here, end there". **Engine**, for three reasons that are about
+      correctness rather than tidiness.
+
+      **Timestamps.** If the plugin snips, every cue comes back starting at zero and the
+      plugin has to re-offset all of them to line up with the media it came from. That is
+      precisely the two-coordinate-systems-drifting bug `parseTranscript` exists to
+      prevent — it builds text and cue offsets together "so they cannot disagree", and
+      `transcriptToDocument` was already made to delegate to it rather than hand-roll the
+      same arithmetic (and reproduced a `Number(null) === 0` bug when it did). An engine
+      that owns the range emits cues in ORIGINAL media time, and the transcript lines up
+      with the player in the Coding tab with nobody adding anything to anything.
+
+      **Two decodes and a re-encode.** The engine already decodes bytes to PCM. A plugin
+      snipping bytes would have to decode the file itself, slice, re-encode a WAV, and hand
+      it back to be decoded again — one extra full copy of the audio, inside an
+      opaque-origin sandbox frame, which is the context with the least memory headroom.
+      Holding one needless copy of a long recording is what crashed a phone at 40 minutes
+      (1312 MB against a ~880 MB ceiling), and three of those five lines were avoidable
+      copies. In the engine the slice is a `subarray`: free, no copy at all.
+
+      **Compressed formats are not sample-addressable.** You cannot cut MP3 or AAC at
+      2:15 by byte offset without decoding first, and video needs demuxing on top. So the
+      plugin would be reimplementing `decodeAudio` to do a worse job of it.
+
+      Shape: `{ from, to }` seconds alongside `language`/`size`/`mode` — the same category
+      of thing, a parameter of the job rather than a product decision. Engine clamps to
+      the recording, slices the decoded PCM, and adds `from` to every emitted timestamp.
+      **Language detection must sample inside the range**, not across the whole file, or
+      asking for 2:15–19:30 of a bilingual recording would be detected from audio the user
+      explicitly excluded. `sampleForDetection` already takes the audio it is given, so
+      this falls out of slicing before detecting rather than needing its own logic.
+
+      What the plugin keeps: choosing the range, the UI for picking it, scrubbing to it,
+      and whether to offer it at all. Note the honest limit — neither design avoids
+      decoding the whole file, because `decodeAudioData` has no range API. Asking for two
+      minutes out of three hours still decodes three hours. That is a separate problem
+      (streaming demux) and not a reason to pick one side of this question.
+
 - **POLICY — no migration for old data formats (owner, 2026-10-17).** *"Lack of migration
   for old data formats (plugins, projects, whatever) is intentional. This is pre-release
   software and we aren't bothering with migrating old data yet."* So a format change may

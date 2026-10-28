@@ -23,7 +23,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { toVtt, speakerName, WHISPER_LANGUAGES, MODEL_SIZES } from '../core/transcribe.js';
+import {
+  toVtt,
+  speakerName,
+  WHISPER_LANGUAGES,
+  MODEL_SIZES,
+  sampleForDetection,
+  summariseDetection,
+  DETECT_WINDOWS,
+  DETECT_WINDOW_SECONDS,
+  LIMITATIONS,
+} from '../core/transcribe.js';
 
 // =============================================================================
 // WebVTT — the format the existing importer reads
@@ -501,4 +511,138 @@ test('the worker is told where its library lives', () => {
   const assets = readFileSync('core/assets.js', 'utf8');
   assert.match(assets, /transformersUrl: 'https:\/\/cdn\.jsdelivr\.net/, 'pinned CDN default');
   assert.match(assets, /transformersUrl: '\.\/vendor\//, 'and a local path for air-gap');
+});
+
+// ---------------------------------------------------------------------------------
+// Language detection.
+//
+// transformers.js 4.3.1 does NOT detect — `_retrieve_init_tokens` warns "No language
+// specified - defaulting to English (en)" and forces English. Measured consequence,
+// before any of this existed: 30 s of French LibriVox came back as "even today, what
+// crime did I commit?" — fluent English, no error, nothing for a user to notice. So
+// detection is ours, and these are the parts of it that are pure.
+// ---------------------------------------------------------------------------------
+
+test('detection samples across the recording, not just the opening', () => {
+  // The case that motivated it: an interviewer's English preamble in front of an
+  // interview in another language. If sampling read only the first window the whole file
+  // would be transcribed as the preamble's language.
+  const audio = new Float32Array(20 * 60 * 16000).fill(0.2);
+  const picked = sampleForDetection(audio);
+
+  assert.equal(picked.length, DETECT_WINDOWS);
+  assert.ok(picked[0].at > 0, 'the first window is not the very start of the file');
+  const ats = picked.map((w) => w.at);
+  assert.deepEqual(ats, [...ats].sort((a, b) => a - b), 'in order');
+  assert.ok(ats.at(-1) > 15 * 60, 'and the last window is late in the recording');
+  for (const w of picked) {
+    assert.equal(w.pcm.length, DETECT_WINDOW_SECONDS * 16000);
+  }
+});
+
+test('a recording shorter than one window is used whole', () => {
+  const audio = new Float32Array(10 * 16000).fill(0.2);
+  const picked = sampleForDetection(audio);
+  assert.equal(picked.length, 1);
+  assert.equal(picked[0].at, 0);
+  assert.equal(picked[0].pcm.length, audio.length);
+});
+
+test('empty audio gives nothing to detect from', () => {
+  assert.deepEqual(sampleForDetection(new Float32Array(0)), []);
+  assert.deepEqual(sampleForDetection(null), []);
+});
+
+test('silent windows are skipped — there is no speech in them to be in any language', () => {
+  // Twenty minutes of silence with speech only in the last quarter. A silent window
+  // scores confidently and arbitrarily, so a vote from one is worse than no vote.
+  const audio = new Float32Array(20 * 60 * 16000);
+  audio.fill(0.2, Math.floor(audio.length * 0.75));
+  const picked = sampleForDetection(audio);
+
+  assert.ok(picked.length >= 1);
+  assert.ok(picked.length < DETECT_WINDOWS, 'the quiet windows did not get a vote');
+  for (const w of picked) assert.ok(w.at > 10 * 60, 'only the windows with speech in them');
+});
+
+test('if the whole recording is quiet the loudest window is used anyway', () => {
+  // A weak guess beats having nothing to guess from: returning [] here would send the
+  // transcription down the library's silent-English path instead.
+  const audio = new Float32Array(20 * 60 * 16000).fill(0.0001);
+  const loudAt = Math.floor(audio.length * 0.5);
+  audio.fill(0.004, loudAt, loudAt + 16000);
+  const picked = sampleForDetection(audio);
+  assert.equal(picked.length, 1);
+});
+
+test('detection sums probabilities rather than counting votes', () => {
+  // One window certain, three barely leaning. Counting votes would answer "de" 3-1;
+  // summing answers "fr", which is what you want when one window caught clear speech
+  // and the others caught cross-talk.
+  const perWindow = [
+    [['fr', 0.99], ['en', 0.01]],
+    [['de', 0.34], ['fr', 0.33]],
+    [['de', 0.34], ['fr', 0.33]],
+    [['de', 0.34], ['fr', 0.33]],
+  ];
+  const out = summariseDetection(perWindow, perWindow.map((_, i) => ({ at: i * 60 })));
+  assert.equal(out.code, 'fr');
+  assert.equal(out.name, 'French');
+  assert.equal(out.runnerUp.code, 'de');
+  assert.ok(out.confidence > 0 && out.confidence <= 1, 'confidence is a mean, so a share');
+});
+
+test('a confidently disagreeing window is reported as mixed, not averaged away', () => {
+  // The code-switching signal. Half an interview in Spanish is not noise to be smoothed
+  // over — it is the reason that half of the transcript is about to be wrong.
+  const perWindow = [
+    [['en', 0.95]],
+    [['en', 0.93]],
+    [['es', 0.91]],
+    [['en', 0.90]],
+  ];
+  const windows = [{ at: 10 }, { at: 70 }, { at: 130 }, { at: 190 }];
+  const out = summariseDetection(perWindow, windows);
+
+  assert.equal(out.code, 'en');
+  assert.equal(out.mixed, true);
+  assert.equal(out.dissenting.length, 1);
+  assert.equal(out.dissenting[0].name, 'Spanish');
+  assert.equal(out.dissenting[0].at, 130, 'and WHERE it was heard, so it can be found');
+});
+
+test('a hesitant disagreement is not called mixed', () => {
+  // Every window leaning the same way with one wobble is ordinary model noise. Crying
+  // "mixed" at it would make the warning meaningless, which is worse than not warning.
+  const perWindow = [[['en', 0.95]], [['en', 0.80]], [['cy', 0.40], ['en', 0.39]]];
+  const out = summariseDetection(perWindow, [{ at: 0 }, { at: 60 }, { at: 120 }]);
+  assert.equal(out.code, 'en');
+  assert.equal(out.mixed, false);
+});
+
+test('no scores at all is an empty answer, not a confident English one', () => {
+  const out = summariseDetection([], []);
+  assert.equal(out.code, '');
+  assert.equal(out.confidence, 0);
+  assert.equal(out.mixed, false);
+});
+
+test('the detect caveat names the one-language-per-file behaviour', () => {
+  // The owner asked for this caveat specifically: an interviewer's introduction before
+  // the interview is the common case, and a file that genuinely switches language gets
+  // one language for all of it.
+  const caveat = LIMITATIONS.find((l) => l.id === 'detect');
+  assert.ok(caveat, 'there is a caveat about detection');
+  assert.match(caveat.detail, /whole file/i);
+  assert.match(caveat.detail, /introduction/i);
+  assert.match(caveat.short, /ONE language/);
+});
+
+test('the worker never passes a blank language to the library', () => {
+  // The regression that matters. transformers.js reads a missing language as English and
+  // says so only in a console warning, so a blank must never reach `pipe()`.
+  const worker = codeOf('core/transcribe-worker.js');
+  assert.match(worker, /language: used/, 'the pipeline is given a resolved code');
+  assert.doesNotMatch(worker, /\.\.\.\(language \? \{ language/, 'and not a conditional spread');
+  assert.match(worker, /detectIn\(pipe, audio\.subarray/, 'detecting instead when nobody resolved one');
 });

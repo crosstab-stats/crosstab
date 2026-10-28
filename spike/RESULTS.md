@@ -1241,3 +1241,116 @@ afterwards — which is what the worker already did internally, moved out one le
   download, which assumes the arena cost is mostly fixed. Worth checking before anyone
   runs four `small` workers.
 
+## Language detection: the library does not do it (2026-10-28)
+
+**"Auto-detect" was English wearing a different label.** Shipped that morning as the
+default, on the strength of this line in `core/transcribe-worker.js`:
+
+    ...(language ? { language, task: 'transcribe' } : {})
+
+which looks exactly like "no language means let the model decide". It does not.
+transformers.js 4.3.1, `src/models/whisper/modeling_whisper.js`, `_retrieve_init_tokens`:
+
+    if (!language) {
+        // TODO: Implement language detection
+        logger.warn('No language specified - defaulting to English (en).');
+        language = 'en';
+    }
+
+`detect_language` does not appear anywhere in the package. The warning string is present
+in the shipped `dist/transformers.web.js`, so this is the behaviour of the build we load,
+not of a source tree we do not use.
+
+### Measured, three ways
+
+On 30 s of the AMI recording, `base`, same audio for all three:
+
+| language option | first words of the transcript |
+|---|---|
+| omitted (our "detect") | `So there are three different stages to the design.` |
+| `'en'` | `So there are three different stages to the design.` |
+| `'fr'` | `On sort de trois différents pays, c'est pour le design.` |
+
+Omitted and `'en'` were **character-identical**. The third column is the other half of
+the lesson: forcing a wrong language does not fail, it fabricates fluently.
+
+Which is what the default did to non-English audio. 30 s from each LibriVox control,
+with no language given:
+
+| audio | came back as |
+|---|---|
+| French | `even today, what crime did I commit? It was, it was really, at the beginning of the French Revo…` |
+| Spanish | `walking between the stars in the flowers its ascension makes more good, more pacified, more pur…` |
+
+Grammatical, confident, plausible English. No error, no warning in the UI, nothing a
+researcher would notice until they read their own interview back and found it had been
+silently translated — or worse, did not read it back.
+
+**Every fixture here was English**, which is why the label survived a test run and a
+browser check. With only English audio, "detection works" and "always answers English"
+are the same observation. The two LibriVox recordings exist so that stops being true.
+
+### Detection, implemented
+
+Whisper's decoder prefix is `<|startoftranscript|> <|lang|> <|task|>`, and the language
+token is normally **forced** into it — which is why nothing is ever detected. Run the
+decoder for exactly one step from `<|startoftranscript|>` alone and the model's own first
+prediction over the 99 language tokens is its guess. Softmax over those 99 only, not the
+full 51865-token vocabulary.
+
+Accuracy on the controls, `base`, 30 s windows:
+
+| audio | top guess | runner-up |
+|---|---|---|
+| French | **fr 99%** | en 1% |
+| Spanish | **es 98%** | pt 1% |
+| English (AMI, 4 speakers) | **en 81%** | cy 17% |
+
+The English number is the lowest because that recording is four people on overlapping
+mics; Welsh at 17% is the model hedging on messy audio, not a real contender.
+
+### Why it samples, and does not just read the opening
+
+One detection call sees one 30-second window, so the obvious implementation reads the
+first one. That is wrong for this tool specifically: an interviewer's English
+introduction in front of a non-English interview would set the language for the entire
+file. So five windows are spread across the recording, offset half a step so the very
+first seconds are never a sample, near-silent windows are dropped (no speech in them to
+be in any language), and the rest vote by **summed probability** — one certain window
+should outweigh three that are barely leaning.
+
+Built the two cases and ran them:
+
+| constructed audio | detected | mixed? |
+|---|---|---|
+| 40 s English introduction + 200 s French | **fr 95%**, every window fr | no |
+| 120 s English + 120 s French | fr 72% | **yes — "English at 21s"** |
+
+The first is the case the owner raised, handled. The second is the honest limit: one
+language is used for the whole file, so the user is told which other language was heard
+and where, and told to run the other stretch as a separate pass. Reported in the dialog,
+on each queue row, and saved into the transcript and the exported dataset — a transcript
+read as the wrong language has no other symptom, so the language has to travel with it.
+
+### What it costs
+
+18 minutes of audio, warm cache, `base`:
+
+| | seconds |
+|---|---|
+| detection (5 windows) | **9.3**, then 8.7 on a second call |
+| transcribing the same audio | ~287 |
+
+About 3%, and most of the 9 s is the worker starting and initialising the model rather
+than the five forward passes. Detection runs **once per file** in the service, not per
+segment: a 40-minute interview splits into twenty segments, and twenty independent
+detections could disagree with each other and hand back a transcript that changes
+language in the middle for no visible reason. The detect worker is terminated before
+transcription starts, so there is never a second model instance resident.
+
+### The lesson
+
+A feature can be fully implemented, fully tested, verified in a browser, and still be a
+lie, if the verification only ever ran the case where the lie and the truth agree. The
+check that would have caught this on day one is not a better test of the code — it is one
+file of audio in a language I did not already have.

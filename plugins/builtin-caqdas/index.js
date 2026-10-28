@@ -4797,7 +4797,24 @@ export function timingValue({ cues, refs = [] }) {
 export function transcriptToDocument(result, mediaRef = null) {
   const parsed = parseTranscript(String(result?.vtt ?? ''), { kind: 'vtt' });
   const refs = typeof mediaRef === 'string' && mediaRef ? [mediaRef] : [];
-  return { text: parsed.text, timing: timingValue({ cues: parsed.cues, refs }) };
+  // The language is kept WITH the text, not just shown while the job runs. Which language
+  // a recording was read as is the difference between a transcript and a fabrication, and
+  // a reader coming back to this in a year cannot re-derive it from the words — a
+  // mis-detected file reads as perfectly fluent prose in the wrong language.
+  const detection = result?.detection
+    ? {
+      name: result.detection.name,
+      confidence: result.detection.confidence,
+      mixed: !!result.detection.mixed,
+      dissenting: (result.detection.dissenting ?? []).map((d) => ({ name: d.name, at: d.at })),
+    }
+    : null;
+  return {
+    text: parsed.text,
+    timing: timingValue({ cues: parsed.cues, refs }),
+    language: result?.language ?? null,
+    detection,
+  };
 }
 
 export function parseTiming(raw) {
@@ -6230,6 +6247,10 @@ async function mountTranscripts(app, root) {
         { name: 'media', type: 'text' },
         { name: 'transcript', type: 'text' },
         { name: 'transcript_timing', type: 'text' },
+        // Provenance in the data, not only in the UI that made it: a transcript read as
+        // the wrong language is fluent and confident, so the language has to survive into
+        // the dataset or the mistake becomes unfindable later.
+        { name: 'transcript_language', type: 'text' },
       ];
       const columns = {
         label: done.map((r) => r.label),
@@ -6239,6 +6260,12 @@ async function mountTranscripts(app, root) {
         // a quoted JSON blob that parseTiming rejects, and the transcript would land in
         // the dataset as plain text with no player and no gutter.
         transcript_timing: done.map((r) => saved[r.rid].timing),
+        transcript_language: done.map((r) => {
+          const t = saved[r.rid];
+          if (!t.language) return '';
+          const d = t.detection;
+          return d ? `${d.name} (detected, ${Math.round((d.confidence ?? 0) * 100)}%)` : t.language;
+        }),
       };
       await app.data.create({ name, variables, columns, activate: false });
       saveNote.textContent = `Saved ${done.length} transcript(s) as "${name}". `
@@ -6252,16 +6279,32 @@ async function mountTranscripts(app, root) {
 
   // ---- render ---------------------------------------------------------------------
   function describe(job, row) {
+    // Which language a recording was READ AS travels with every state, because a batch of
+    // seven interviews is exactly where a wrong guess hides: nobody is watching a dialog,
+    // and the wrong language produces fluent prose rather than an error. "(detected)"
+    // distinguishes a guess from a choice — they are different claims about the same text.
+    const heard = (j) => {
+      if (!j?.language) return '';
+      const d = j.detection;
+      if (!d) return ` · ${j.language}`;
+      const pct = Math.round((d.confidence ?? 0) * 100);
+      const alt = d.mixed ? `, also heard ${d.dissenting.map((x) => x.name).join(', ')}` : '';
+      return ` · ${d.name} detected ${pct}%${alt}`;
+    };
+
     if (saved[row.rid]) {
       const words = saved[row.rid].text.trim() ? saved[row.rid].text.trim().split(/\s+/).length : 0;
-      return { state: 'transcribed', detail: `${words} words` };
+      return { state: 'transcribed', detail: `${words} words${heard(saved[row.rid])}` };
     }
     if (!job) return { state: '—', detail: '' };
+    if (job.progress?.stage === 'detect') {
+      return { state: 'running', detail: 'working out the language…' };
+    }
     if (job.state === 'running' && job.progress?.total) {
-      return { state: 'running', detail: `part ${job.progress.done} of ${job.progress.total}` };
+      return { state: 'running', detail: `part ${job.progress.done} of ${job.progress.total}${heard(job)}` };
     }
     if (job.state === 'running' && job.progress?.elapsedMs != null) {
-      return { state: 'running', detail: `${Math.round(job.progress.elapsedMs / 1000)}s` };
+      return { state: 'running', detail: `${Math.round(job.progress.elapsedMs / 1000)}s${heard(job)}` };
     }
     return { state: job.state, detail: job.error ?? '' };
   }

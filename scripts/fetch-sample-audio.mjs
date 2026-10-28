@@ -30,6 +30,12 @@
  * audio instead of a clean lab recording. It is also long enough to test the sustained and
  * thermal behaviour that every burst measurement so far has had to extrapolate.
  *
+ * **The LibriVox pair** are the negative control. Everything above is English, and with
+ * only English fixtures "language detection works" is indistinguishable from "always
+ * answers English" — which is exactly what transformers.js does when asked to detect. One
+ * French and one Spanish recording turn that from an assumption into a measurement, and
+ * they are small (8.6 MB and 0.8 MB) because a control does not need to be long.
+ *
  * Usage:
  *   node scripts/fetch-sample-audio.mjs           the two defaults (~120 MB)
  *   node scripts/fetch-sample-audio.mjs --all     plus far-field AMI and the annotations
@@ -112,6 +118,39 @@ const FIXTURES = [
       + 'https://archive.org/details/AboutBan1935',
     note: 'decodeAudioData demuxes the container and decodes only the audio track: '
       + 'measured 663.3 s recovered against a published running time of 664 s.',
+    default: false,
+  },
+  {
+    id: 'librivox-fr',
+    file: 'librivox-fr-anciens-canadiens-20.mp3',
+    url: 'https://archive.org/download/les_anciens_canadiens_2203_librivox/'
+      + 'ancienscanadiens_20_gaspe_64kb.mp3',
+    bytes: 8634524,
+    bytesApprox: true,
+    about: '~18 min of continuous French speech, one reader, 64 kbps MP3.',
+    licence: 'Public domain (LibriVox)',
+    attribution: 'Philippe Aubert de Gaspe, "Les Anciens Canadiens", ch. 20, read for '
+      + 'LibriVox. https://archive.org/details/les_anciens_canadiens_2203_librivox',
+    note: 'THE NEGATIVE CONTROL FOR LANGUAGE DETECTION. Every other fixture here is '
+      + 'English, so until this one arrived "detection works" could not be distinguished '
+      + 'from "always answers English" — which is literally what transformers.js 4.3.1 '
+      + 'does when no language is given. Measured: detected fr at 99%, and with the '
+      + 'library default it came back as fluent English prose instead.',
+    default: false,
+  },
+  {
+    id: 'librivox-es',
+    file: 'librivox-es-platero.mp3',
+    url: 'https://archive.org/download/plateroyyo_1505_librivox/plateroyyo_07_jimenez_64kb.mp3',
+    bytes: 821248,
+    bytesApprox: true,
+    about: '~1.7 min of Spanish prose, one reader, 64 kbps MP3. Small on purpose.',
+    licence: 'CC0 1.0',
+    attribution: 'Juan Ramon Jimenez, "Platero y Yo", read for LibriVox. '
+      + 'https://archive.org/details/plateroyyo_1505_librivox',
+    note: 'A SECOND language, because one non-English control cannot tell "detects '
+      + 'French" from "detects not-English". Detected es at 98%; under the library '
+      + 'default the same audio was translated into English without an error.',
     default: false,
   },
   {

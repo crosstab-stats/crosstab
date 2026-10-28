@@ -703,6 +703,16 @@ export async function boot(mounts) {
     showProgress: ({ title, hint, onCancel }) => {
       const dlg = el('dialog', { class: 'ct-dialog ct-transcribe' });
       const status = el('p', { class: 'ct-transcribe__status', text: 'Starting…' });
+      // Its OWN line, not the status line: the status line is overwritten by the next
+      // progress tick a second later, and which language a transcript was read as is the
+      // one fact the user needs to keep seeing. A wrong language produces fluent,
+      // confident, entirely fictional text — there is no other symptom to notice.
+      const lang = el('p', { class: 'ct-hint ct-transcribe__lang', hidden: true });
+      // Detection loads the model first, so its loader progress arrives on the same
+      // channel. Without this the status sticks at "Downloading the model… 100%" for the
+      // seconds detection takes — a finished-looking bar that is still working, which is
+      // the exact appearance of a hang this dialog exists to avoid.
+      let detecting = false;
       const bar = el('progress', { class: 'ct-transcribe__bar' });
       bar.max = 1;
       const stop = el('button', { type: 'button', class: 'ct-btn', text: 'Stop' });
@@ -718,6 +728,7 @@ export async function boot(mounts) {
         el('p', { class: 'ct-hint', text: hint }),
         el('p', { class: 'ct-hint ct-transcribe__caveat', text: fillers ? fillers.detail : '' }),
         status,
+        lang,
         bar,
         // `children` goes in the OPTIONS object. Passed positionally it is silently
         // dropped, which is how this dialog shipped without a Stop button at all: the
@@ -732,6 +743,27 @@ export async function boot(mounts) {
           // has no per-chunk callback, so an hour of audio is one opaque await of twenty
           // minutes — silence long enough to read as a crash. An estimate shown AS an
           // estimate beats an indeterminate bar that never moves.
+          if (p.stage === 'detect') {
+            detecting = true;
+            bar.removeAttribute('value');
+            status.textContent = 'Working out the language…';
+            return;
+          }
+          if (p.type === 'language') {
+            detecting = false;
+            const pct = Math.round((p.confidence ?? 0) * 100);
+            lang.hidden = false;
+            lang.textContent = p.mixed
+              // Disagreement among the windows is the code-switching signal, and it is
+              // worth more than the headline guess: it tells the user WHY a stretch of
+              // their transcript is going to be wrong, and that they should run passes.
+              ? `Language: ${p.name} (${pct}%) — but ${p.dissenting.map((d) => d.name).join(', ')} `
+                + 'was heard elsewhere in the recording. Only one language is used for the '
+                + 'whole file, so transcribe the other stretches separately.'
+              : `Language: ${p.name} (${pct}% confident). Whisper reads the whole file as `
+                + 'this one language; set it yourself if that is wrong.';
+            return;
+          }
           if (p.type === 'elapsed') {
             const mins = (ms) => {
               const t = Math.max(0, Math.round(ms / 1000));
@@ -758,6 +790,11 @@ export async function boot(mounts) {
           if (p.total) {
             const pct = Math.min(1, (p.loaded || 0) / p.total);
             bar.value = pct;
+            if (detecting && pct >= 1) {
+              bar.removeAttribute('value');
+              status.textContent = 'Working out the language…';
+              return;
+            }
             const what = p.stage === 'model' ? 'Downloading the model' : 'Working';
             status.textContent = `${what}… ${Math.round(pct * 100)}%`;
           } else if (p.stage === 'transcribe') {
