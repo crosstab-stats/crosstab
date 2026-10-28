@@ -123,6 +123,22 @@ test('the model sizes name their real download and their measured cost', () => {
   assert.match(byId.small.label, /238 MB/);
   assert.match(byId.base.label, /per hour of audio/);
   assert.match(byId.small.label, /per hour/);
+
+  // The labels must NOT use Whisper's own size names. In a two-item menu "Base" and
+  // "Small" read as a bug, because the "small" one is the bigger download and the slower
+  // run — the owner spotted it immediately. A user is choosing between finishing sooner
+  // and reading fewer mistakes, so the label says that.
+  for (const m of MODEL_SIZES) {
+    assert.doesNotMatch(m.label, /(base|small|tiny|large)/i,
+      `"${m.label}" leaks an upstream model name into the menu`);
+  }
+  // But the upstream name is still recorded, because a transcript in a methods section
+  // has to say which model produced it.
+  assert.equal(byId.base.detail, 'Whisper base');
+  assert.equal(byId.small.detail, 'Whisper small');
+  // Faster first: the cheaper choice should be the one a user lands on by default.
+  assert.equal(MODEL_SIZES[0].id, 'base');
+  assert.ok(MODEL_SIZES[0].realTime > MODEL_SIZES[1].realTime);
   for (const m of MODEL_SIZES) {
     assert.ok(m.accuracy > 0 && m.accuracy < 1, `${m.id} carries a measured accuracy`);
     assert.ok(m.realTime > 0, `${m.id} carries a measured speed`);

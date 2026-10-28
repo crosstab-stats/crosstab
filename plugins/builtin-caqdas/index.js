@@ -6097,6 +6097,10 @@ async function mountTranscripts(app, root) {
       const o = document.createElement('option');
       o.value = it.id ?? it.code;
       o.textContent = it.label ?? it.name;
+      // The upstream model name on hover — not in the label, where "Small" being the
+      // bigger of two options just reads as a bug, but reachable for anyone writing up
+      // which model produced a transcript.
+      if (it.detail) o.title = it.detail;
       s.append(o);
     }
     if (value) s.value = value;

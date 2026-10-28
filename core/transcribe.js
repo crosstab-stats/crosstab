@@ -83,10 +83,19 @@ export const WHISPER_LANGUAGES = Object.freeze([
  * the loop also makes it slower than `base` in wall-clock terms.
  */
 export const MODEL_SIZES = Object.freeze([
-  { id: 'base', label: 'Base — 73 MB, about 16 min per hour of audio', accuracy: 0.66,
-    weightsMb: 73, realTime: 3.7 },
-  { id: 'small', label: 'Small — 238 MB, more accurate, about 40 min per hour', accuracy: 0.74,
-    weightsMb: 238, realTime: 1.5 },
+  // NAMED FOR THE CHOICE, not for Whisper's internals. Upstream calls these "base" and
+  // "small", which in a two-item menu reads as a bug: the "small" one is the BIGGER
+  // download and the slower run. A user picking a model is choosing between finishing
+  // sooner and reading fewer mistakes, so the label says that and leads with the cost
+  // that actually decides it — the wait.
+  //
+  // `id` stays `base`/`small` because it is the API contract the worker and every stored
+  // job carry, and `detail` keeps the upstream name: a transcript in a methods section
+  // needs to say which model produced it.
+  { id: 'base', label: 'Faster — 16 min per hour of audio (73 MB)',
+    detail: 'Whisper base', accuracy: 0.66, weightsMb: 73, realTime: 3.7 },
+  { id: 'small', label: 'More accurate — 40 min per hour of audio (238 MB)',
+    detail: 'Whisper small', accuracy: 0.74, weightsMb: 238, realTime: 1.5 },
 ]);
 
 /**
