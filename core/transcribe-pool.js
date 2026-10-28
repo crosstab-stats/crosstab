@@ -72,6 +72,7 @@ export function createPool({ max = MAX_WORKERS, start = 1, onChange = null } = {
   let probing = limit < ceiling;      // until the device refuses, or we reach the ceiling
   let reached = limit;                // the most that ever ran at once
   let running = 0;
+  let paused = false;
   const queue = [];
 
   const announce = (reason, adapted) => onChange?.({
@@ -79,6 +80,11 @@ export function createPool({ max = MAX_WORKERS, start = 1, onChange = null } = {
   });
 
   const pump = () => {
+    // A real pause, and only because the work is segmented. There is no cooperative yield
+    // inside a model call, so a running segment always finishes — but the NEXT one does not
+    // start, which for a queue of interviews means stopping within a couple of minutes
+    // rather than at the end of the batch.
+    if (paused) return;
     while (running < limit && queue.length) {
       const job = queue.shift();
       running += 1;
@@ -128,6 +134,20 @@ export function createPool({ max = MAX_WORKERS, start = 1, onChange = null } = {
       if (probing) return `${limit} at once, trying for more (${cores} cores, up to ${ceiling})`;
       if (limit < ceiling) return `${limit} at once — this device would not take more`;
       return `${limit} at once (${cores} cores)`;
+    },
+
+    get paused() { return paused; },
+    /** Stop starting new work. Anything already running finishes — see `pump`. */
+    pause() {
+      if (paused) return;
+      paused = true;
+      announce('paused', false);
+    },
+    resume() {
+      if (!paused) return;
+      paused = false;
+      announce('resumed', false);
+      pump();
     },
 
     /** The user's call beats ours; devices differ more than any rule about them. */

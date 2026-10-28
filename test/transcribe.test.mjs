@@ -148,6 +148,73 @@ test('TINY IS NOT OFFERED, because it does not work', () => {
   assert.doesNotMatch(worker, /WHISPER\.tiny/, 'nor as a fallback for an unknown size');
 });
 
+test('a batch is a QUEUE of inspectable records, not a callback', async () => {
+  // Seven interviews is an ordinary afternoon, and a modal is the wrong shape for it: it
+  // blocks the very checking the user wants to do while the rest churn. And a callback
+  // cannot cross the broker, so a plugin owning the UI has to be able to PULL.
+  const { createTranscribeService } = await import('../core/transcribe.js');
+  const svc = createTranscribeService({});
+  const empty = svc.status();
+  assert.deepEqual(empty.jobs, []);
+  assert.equal(empty.paused, false);
+  assert.ok(empty.capacity, 'a UI can explain why only one runs at a time');
+
+  for (const method of ['enqueue', 'status', 'result', 'cancel', 'pause', 'resume', 'forget']) {
+    assert.equal(typeof svc[method], 'function', `${method} is part of the queue API`);
+  }
+
+  // `status()` must be safe to poll: a transcript of an hour of speech has no business
+  // being copied on every tick, so it is fetched by id when a job finishes.
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /const summarise = /);
+  assert.doesNotMatch(src.slice(src.indexOf('const summarise'), src.indexOf('const summarise') + 400),
+    /result/, 'the summary carries no transcript');
+  assert.match(src, /result\(id\)/, 'which is fetched separately');
+});
+
+test('a queued job can be cancelled before it ever starts', async () => {
+  const { createTranscribeService } = await import('../core/transcribe.js');
+  const svc = createTranscribeService({});
+  // decodeAudio needs an AudioContext, which Node has not got — so this exercises the
+  // record-keeping, which is the part a UI depends on.
+  const { id } = svc.enqueue(new Uint8Array([1, 2, 3]), { name: 'interview 1' });
+  const before = svc.status().jobs.find((j) => j.id === id);
+  assert.equal(before.name, 'interview 1');
+  assert.equal(before.state, 'queued');
+  assert.equal(svc.cancel(id), true);
+  assert.equal(svc.status().jobs.find((j) => j.id === id).state, 'cancelled');
+  // And a cancelled job can be forgotten, so a long session does not accumulate.
+  assert.equal(svc.forget(id), true);
+  assert.equal(svc.status().jobs.length, 0);
+});
+
+test('pause stops the NEXT segment, not the current one', async () => {
+  // There is no cooperative yield inside a model call, so a running segment always
+  // finishes. Because the work is segmented, that means a pause lands within a couple of
+  // minutes rather than at the end of the batch — which is the difference between a
+  // usable button and a decorative one.
+  const { createPool } = await import('../core/transcribe-pool.js');
+  const pool = createPool();
+  let started = 0;
+  const gate = [];
+  const mk = () => pool.run(() => new Promise((res) => { started += 1; gate.push(res); }));
+  const a = mk();
+  const b = mk();
+  await new Promise((r) => { setTimeout(r, 0); });
+  assert.equal(started, 1, 'one running');
+  pool.pause();
+  assert.equal(pool.paused, true);
+  gate.shift()();                       // the running one finishes
+  await a;
+  await new Promise((r) => { setTimeout(r, 0); });
+  assert.equal(started, 1, 'and the next one does NOT start');
+  pool.resume();
+  await new Promise((r) => { setTimeout(r, 0); });
+  assert.equal(started, 2, 'until resumed');
+  gate.shift()();
+  await b;
+});
+
 test('long recordings are segmented, and the thresholds are measured not guessed', async () => {
   const { SEGMENT_SECONDS, SEGMENT_ABOVE_SECONDS } = await import('../core/transcribe.js');
   // 120 s because segmentation at that length measured free: 37.3% word error rate
@@ -307,7 +374,10 @@ test('a second job is QUEUED, not refused', async () => {
   assert.equal(svc.busy, false);
   const src = codeOf('core/transcribe.js');
   assert.doesNotMatch(src, /already running/, 'no blanket refusal');
-  assert.match(src, /pool\.run\(/, 'it goes through the pool');
+  // `p` is the pool inside execute(); what matters is that work is scheduled through it
+  // rather than started directly, which is what makes the limit mean anything.
+  assert.match(src, /p\.run\(/, 'it goes through the pool');
+  assert.match(src, /schedule: \(fn\) => p\.run\(fn\)/, 'segments too');
   // And the pool's limit is reportable, because "running 2 at a time" needs a because.
   const cap = svc.capacity;
   assert.ok(cap.limit >= 1);
@@ -315,13 +385,14 @@ test('a second job is QUEUED, not refused', async () => {
   assert.equal(typeof svc.setConcurrency, 'function', 'and the user can override it');
 });
 
-test('progress and cancel are HOST-rendered, because a callback cannot cross the broker', () => {
+test('progress and cancel are HOST-rendered for a single run', () => {
   // The same wall that made Layer 3b's `onRedraw` undeliverable: a function does not
-  // survive a structured clone. Rather than invent a callback channel for one caller,
-  // the host draws the dialog — as it already does for webr.installPackages.
+  // survive a structured clone. For ONE file the host draws the dialog, as it already
+  // does for webr.installPackages. For a BATCH the answer is different — see the queue
+  // test below, which is pull-based precisely because of this wall.
   const src = codeOf('core/transcribe.js');
   assert.match(src, /showProgress\?\.\(/);
-  assert.match(src, /onCancel: \(\) => job\.cancel\(\)/);
+  assert.match(src, /onCancel: \(\) => handle\.cancel\(\)/);
   const app = codeOf('core/app.js');
   assert.match(app, /showProgress: \(\{ title, hint, onCancel \}\)/);
   // And it says the data stays put, because a model download looks like an upload to

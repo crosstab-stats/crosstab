@@ -323,6 +323,12 @@ async function transcribeSegments(audio, opts) {
   const chunks = new Array(total).fill(null);
   let done = 0;
 
+  // Report the shape BEFORE any work starts. A job whose segments are all still waiting —
+  // because the queue is paused, or because another file is ahead of it — would otherwise
+  // show no progress at all and read as "working" when nothing is. "0 of 7" is honest;
+  // a blank is not.
+  onProgress?.({ type: 'segments', stage: 'transcribe', done: 0, total });
+
   await Promise.all(Array.from({ length: total }, (_, i) => schedule(async () => {
     const from = i * step;
     // Copied here rather than up front: only the segments actually in flight exist at
@@ -360,14 +366,137 @@ async function transcribeSegments(audio, opts) {
  *   `{update(state), close()}` and calls `onCancel` if the user stops it.
  */
 export function createTranscribeService({ showProgress, concurrency } = {}) {
-  // A QUEUE, not a refusal. The first version threw on a second job, justified by a claim
-  // about phone memory that had never been measured — and transcribing a set of interviews
-  // is an ordinary thing to want. What the measurement actually says is in
-  // `transcribe-pool.js`: 219 MB per worker, linear, fully reclaimed on terminate. So the
-  // answer is to run as many as this device can take and queue the rest.
   let pool = null;
   let active = 0;
   let lastChange = null;
+  const ensurePool = () => {
+    // One worker, always, until a second one demonstrably survives. `concurrency` is a
+    // caller's override, not a prediction.
+    if (!pool) pool = createPool({ start: concurrency ?? 1, onChange: (i) => { lastChange = i; } });
+    return pool;
+  };
+
+  // ---- the queue -----------------------------------------------------------------
+  //
+  // Seven interviews is an ordinary afternoon's work, and a modal dialog is the wrong
+  // shape for it: it blocks the very checking the user wants to do while the rest churn.
+  // So jobs are RECORDS that can be inspected, not callbacks that must be watched.
+  //
+  // Pull, not push, because a function cannot cross the plugin broker's structured clone.
+  // A workspace plugin owning the UI polls `status()`; nothing has to be handed a callback,
+  // and the same API works for the host, a plugin, or a test.
+  const jobs = new Map();
+  let nextId = 1;
+
+  /** Everything about a job EXCEPT its transcript, which is fetched on demand. */
+  const summarise = (j) => ({
+    id: j.id,
+    name: j.name,
+    state: j.state,
+    mode: j.mode,
+    size: j.size,
+    seconds: j.seconds,
+    progress: j.progress ? { ...j.progress } : null,
+    error: j.error,
+    queuedAt: j.queuedAt,
+    startedAt: j.startedAt,
+    finishedAt: j.finishedAt,
+  });
+
+  /**
+   * Run one job to completion, reporting progress wherever the caller wants it.
+   *
+   * The single execution path for both surfaces: the host's modal passes a dialog, the
+   * queue passes a recorder that writes into a job record. Two code paths would drift,
+   * and the segmented branch is too fiddly to maintain twice.
+   */
+  function execute(audio, opts, report) {
+    const mode = opts.mode ?? 'both';
+    const size = opts.size ?? 'base';
+    const seconds = audio.length / SAMPLE_RATE;
+    const wantsText = mode === 'text' || mode === 'both';
+    const wantsSpeakers = mode === 'speakers' || mode === 'both';
+    const p = ensurePool();
+    const inFlight = new Set();
+    let stopped = false;
+    const cancel = () => {
+      stopped = true;
+      for (const j of inFlight) j.cancel?.();
+    };
+
+    // An async function returns a bare Promise, and a caller needs somewhere to hang
+    // cancel() — so the body runs in an IIFE and the handle rides on the promise, exactly
+    // as `transcribe()` does.
+    const promise = (async () => {
+
+    // ---- long recordings are segmented --------------------------------------------
+    //
+    // A single call over 40 minutes crashed a phone, extra workers did nothing for a
+    // single file, and progress could only ever be a clock. Segments fix all three, and
+    // measurement says they cost nothing: 37.3% word error rate segmented against 37.6%
+    // in one call, and 8.9% faster on one worker.
+    if (wantsText && seconds > SEGMENT_ABOVE_SECONDS) {
+      const chunks = await transcribeSegments(audio, {
+        ...opts,
+        mode: 'text',
+        size,
+        schedule: (fn) => p.run(fn),
+        onJob: (j) => {
+          inFlight.add(j);
+          j.then(() => inFlight.delete(j), () => inFlight.delete(j));
+        },
+        onProgress: (x) => { if (!stopped) report.update?.(x); },
+      });
+      if (stopped) throw Object.assign(new Error('Transcription cancelled.'), { cancelled: true });
+
+      // Speakers are identified ONCE over the whole recording. Cluster each segment
+      // separately and "Speaker 1" means a different person in every one.
+      let turns = null;
+      if (wantsSpeakers) {
+        report.update?.({ stage: 'speakers' });
+        const job = transcribe(new Float32Array(audio), {
+          ...opts, mode: 'speakers', size,
+          onProgress: (x) => { if (!stopped) report.update?.(x); },
+        });
+        inFlight.add(job);
+        turns = (await job).turns ?? null;
+        inFlight.delete(job);
+      }
+      const withSpeakers = turns
+        ? chunks.map((c) => ({ ...c, speaker: speakerAt(turns, (c.start + c.end) / 2) }))
+        : chunks;
+      const out = { chunks: withSpeakers, turns, seconds, segmented: true };
+      return { ...out, vtt: toVtt(out), limitations: LIMITATIONS };
+    }
+
+    // ---- short enough for one call -------------------------------------------------
+    return p.run(async () => {
+      const job = transcribe(audio, {
+        ...opts, mode, size, onProgress: (x) => { if (!stopped) report.update?.(x); },
+      });
+      inFlight.add(job);
+      // A HEARTBEAT, because the model call reports nothing from inside. transformers.js
+      // offers no per-chunk callback, so a single call is one opaque await. Silence reads
+      // as a crash; a clock does not.
+      const rate = MODEL_SIZES.find((m) => m.id === size)?.realTime ?? 2;
+      const startedAt = Date.now();
+      const tick = setInterval(() => {
+        report.update?.({
+          type: 'elapsed', stage: 'transcribe', seconds,
+          elapsedMs: Date.now() - startedAt, estimateMs: (seconds / rate) * 1000,
+        });
+      }, 1000);
+      try {
+        return await job;
+      } finally {
+        clearInterval(tick);
+        inFlight.delete(job);
+      }
+    });
+    })();
+
+    return Object.assign(promise, { cancel });
+  }
 
   return {
     /** What a caller can ask for, so a plugin's dialog is built from the model's own
@@ -390,121 +519,147 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     },
 
     /**
-     * Transcribe and/or diarize `bytes` (any audio the browser can decode).
+     * Transcribe now, with the host's own progress dialog. One file, one wait.
      *
-     * @param {ArrayBuffer|Uint8Array} bytes
-     * @param {object} [opts] see {@link transcribe}; `language` must be an explicit code
-     *   unless the caller deliberately passes null to auto-detect.
-     * @returns {Promise<{vtt: string, chunks: object[], turns: object[]|null, seconds: number}>}
+     * Still here because a plugin that wants a single transcript should not have to build
+     * a queue UI to get one. For a batch, `enqueue` is the better shape.
      */
     async run(bytes, opts = {}) {
       const mode = opts.mode ?? 'both';
-      const size = opts.size ?? 'base';
-      // One worker, always, until a second one demonstrably survives. `concurrency` is a
-      // caller's override, not a prediction.
-      if (!pool) pool = createPool({ start: concurrency ?? 1, onChange: (i) => { lastChange = i; } });
-
-      // Decoded BEFORE queueing, so a job waiting its turn holds audio rather than an
-      // undecoded file — and so a format the browser cannot read fails immediately
-      // instead of after a queue wait.
       const audio = await decodeAudio(bytes);
-
-      const seconds = audio.length / SAMPLE_RATE;
-      const wantsText = mode === 'text' || mode === 'both';
-      const wantsSpeakers = mode === 'speakers' || mode === 'both';
-
-      // ---- long recordings are segmented ------------------------------------------
-      //
-      // A single call over 40 minutes crashed a phone, extra workers did nothing for a
-      // single file, and progress could only ever be a clock. Segments fix all three, and
-      // measurement says they cost nothing: 37.3% word error rate segmented against 37.6%
-      // in one call, and 8.9% faster on one worker.
-      if (wantsText && seconds > SEGMENT_ABOVE_SECONDS) {
-        let ui = null;
-        const inFlight = new Set();
-        let stopped = false;
-        active += 1;
-        ui = showProgress?.({
-          title: 'Transcribing',
-          hint: 'The first run downloads the model. Everything stays on this device.',
-          onCancel: () => {
-            stopped = true;
-            for (const j of inFlight) j.cancel?.();
-          },
-        }) ?? null;
-        try {
-          const chunks = await transcribeSegments(audio, {
-            ...opts,
-            mode: 'text',
-            schedule: (fn) => pool.run(fn),
-            onJob: (j) => { inFlight.add(j); j.catch(() => {}).finally?.(() => inFlight.delete(j)); },
-            onProgress: (p) => { if (!stopped) ui?.update(p); },
-          });
-          if (stopped) throw Object.assign(new Error('Transcription cancelled.'), { cancelled: true });
-
-          // Speakers are identified ONCE over the whole recording. Cluster each segment
-          // separately and "Speaker 1" means a different person in every one.
-          let turns = null;
-          if (wantsSpeakers) {
-            ui?.update({ stage: 'speakers' });
-            const whole = new Float32Array(audio);
-            const job = transcribe(whole, { ...opts, mode: 'speakers',
-              onProgress: (p) => { if (!stopped) ui?.update(p); } });
-            inFlight.add(job);
-            turns = (await job).turns ?? null;
-            inFlight.delete(job);
-          }
-          const withSpeakers = turns
-            ? chunks.map((c) => ({ ...c, speaker: speakerAt(turns, (c.start + c.end) / 2) }))
-            : chunks;
-          const result = { chunks: withSpeakers, turns, seconds, segmented: true };
-          return { ...result, vtt: toVtt(result), limitations: LIMITATIONS };
-        } finally {
-          active -= 1;
-          ui?.close();
-        }
+      let ui = null;
+      active += 1;
+      const report = { update: (x) => ui?.update(x) };
+      // A placeholder until `execute` hands back the real one, so a Stop pressed in the
+      // gap between showing the dialog and starting the work is not a crash.
+      const handle = { cancel: () => {} };
+      ui = showProgress?.({
+        title: mode === 'speakers' ? 'Identifying speakers' : 'Transcribing',
+        // Said up front because the first run is a download, and a silent 238 MB fetch
+        // reads as a hang.
+        hint: 'The first run downloads the model. Everything stays on this device.',
+        onCancel: () => handle.cancel(),
+      }) ?? null;
+      try {
+        const execution = execute(audio, opts, report);
+        handle.cancel = execution.cancel ?? handle.cancel;
+        return await execution;
+      } finally {
+        active -= 1;
+        ui?.close();
       }
+    },
 
-      return pool.run(async () => {
-        let ui = null;
-        const job = transcribe(audio, { ...opts, mode, size, onProgress: (p) => ui?.update(p) });
-        active += 1;
-        ui = showProgress?.({
-          title: mode === 'speakers' ? 'Identifying speakers' : 'Transcribing',
-          // Said up front because the first run is a download, and a silent 238 MB fetch
-          // reads as a hang.
-          hint: 'The first run downloads the model. Everything stays on this device.',
-          onCancel: () => job.cancel(),
-        }) ?? null;
+    /**
+     * Add a file to the queue and return its id. Does NOT wait, and shows no dialog.
+     *
+     * This is the batch shape: seven interviews go in, the caller watches `status()`, and
+     * each transcript becomes available through `result(id)` the moment its job finishes —
+     * so the first can be read while the seventh is still queued.
+     */
+    enqueue(bytes, opts = {}) {
+      ensurePool();
+      const id = `t${nextId++}`;
+      const job = {
+        id,
+        name: opts.name || `Recording ${id}`,
+        state: 'queued',
+        mode: opts.mode ?? 'both',
+        size: opts.size ?? 'base',
+        seconds: null,
+        progress: null,
+        error: null,
+        queuedAt: Date.now(),
+        startedAt: null,
+        finishedAt: null,
+        result: null,
+        cancel: null,
+      };
+      jobs.set(id, job);
 
-        // A HEARTBEAT, because the model call reports nothing from inside.
-        //
-        // transformers.js offers no per-chunk callback, so between "model downloaded" and
-        // "done" there is one opaque await that can last twenty minutes on an hour of
-        // audio. Silence that long is indistinguishable from a crash, and the honest fix
-        // until there is real progress is to show the clock: elapsed, and an estimate from
-        // the measured rate for this model. The estimate is stated as an estimate and the
-        // display says so plainly once it is exceeded.
-        const rate = MODEL_SIZES.find((m) => m.id === size)?.realTime ?? 2;
-        const startedAt = Date.now();
-        const tick = setInterval(() => {
-          ui?.update({
-            type: 'elapsed',
-            stage: 'transcribe',
-            seconds,
-            elapsedMs: Date.now() - startedAt,
-            estimateMs: (seconds / rate) * 1000,
-          });
-        }, 1000);
-
+      (async () => {
         try {
-          return await job;
+          // Decoded here rather than at enqueue time so a queue of seven files does not
+          // hold seven decoded recordings at once — which is the memory shape that
+          // crashed a phone on ONE of them.
+          const audio = await decodeAudio(bytes);
+          if (job.state === 'cancelled') return;
+          job.state = 'running';
+          job.startedAt = Date.now();
+          job.seconds = audio.length / SAMPLE_RATE;
+          active += 1;
+          const report = {
+            update: (p) => {
+              if (p.type === 'segments') job.progress = { done: p.done, total: p.total };
+              else if (p.stage === 'speakers') job.progress = { ...(job.progress ?? {}), stage: 'speakers' };
+              else if (p.type === 'elapsed') {
+                job.progress = { elapsedMs: p.elapsedMs, estimateMs: p.estimateMs };
+              }
+            },
+          };
+          const execution = execute(audio, opts, report);
+          job.cancel = execution.cancel ?? null;
+          job.result = await execution;
+          job.state = 'done';
+        } catch (err) {
+          job.state = err?.cancelled ? 'cancelled' : 'failed';
+          job.error = String(err?.message ?? err);
         } finally {
-          clearInterval(tick);
-          active -= 1;
-          ui?.close();
+          if (job.startedAt) active -= 1;
+          job.finishedAt = Date.now();
+          job.cancel = null;
         }
-      });
+      })();
+
+      return { id };
+    },
+
+    /** Everything a UI needs to draw itself, and nothing it does not. Safe to poll. */
+    status() {
+      return {
+        paused: pool?.paused ?? false,
+        capacity: this.capacity,
+        jobs: [...jobs.values()].map(summarise),
+      };
+    },
+
+    /** The transcript, once a job is done. Kept out of `status()` because an hour of
+     * speech is a lot to hand over on every poll. */
+    result(id) {
+      const job = jobs.get(id);
+      return job?.state === 'done' ? job.result : null;
+    },
+
+    /** Stop one job. A queued one never starts; a running one stops at its next segment
+     * boundary, or immediately if it is a single call. */
+    cancel(id) {
+      const job = jobs.get(id);
+      if (!job || job.state === 'done' || job.state === 'failed') return false;
+      if (job.state === 'queued') {
+        job.state = 'cancelled';
+        job.finishedAt = Date.now();
+        return true;
+      }
+      job.cancel?.();
+      return true;
+    },
+
+    /** Stop starting new work. Whatever is mid-segment finishes; nothing else begins. */
+    pause() { ensurePool().pause(); },
+    resume() { ensurePool().resume(); },
+
+    /** Forget finished jobs, so a long session does not accumulate transcripts in memory.
+     * Anything still queued or running is left alone. */
+    forget(id = null) {
+      const drop = (j) => ['done', 'failed', 'cancelled'].includes(j.state);
+      if (id) {
+        const job = jobs.get(id);
+        if (job && drop(job)) { jobs.delete(id); return true; }
+        return false;
+      }
+      let n = 0;
+      for (const [key, job] of jobs) if (drop(job)) { jobs.delete(key); n += 1; }
+      return n;
     },
 
     /** How many run at once, why, and how to change it — so the UI can explain itself
@@ -517,13 +672,13 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         pending: pool?.pending ?? 0,
         probing: pool?.probing ?? true,
         reached: pool?.reached ?? 0,
+        paused: pool?.paused ?? false,
         basis: pool?.basis ?? 'one at a time until a second proves it fits',
         lastChange,
       };
     },
     setConcurrency(n) {
-      if (!pool) pool = createPool({ start: n, onChange: (i) => { lastChange = i; } });
-      pool.setLimit(n);
+      ensurePool().setLimit(n);
     },
 
     /** Whether anything is running. No longer a gate — just a fact. */
