@@ -1158,6 +1158,62 @@ SECOND attempt: a caller retrying a failed decode with the same ArrayBuffer hand
 empty one and gets the browser's "Unable to decode audio data", which blames the file. It
 now throws a sentence that says what happened and what to do instead.
 
+## Stitching: the machinery we were about to build is not needed
+
+Segmenting an interview was already known to be free on time and necessary for memory. What
+had never been measured is what it costs at the SEAMS — a word cut mid-utterance is lost,
+and overlapping the segments to avoid that duplicates the shared seconds instead. Four
+rules, scored against the AMI human transcript on identical audio (base, 120 s segments,
+same five minutes):
+
+| strategy | WER | sub | del | ins |
+|---|---|---|---|---|
+| **plain cut, no overlap** | **37.3%** | 100 | 101 | **21** |
+| silence-snapped cut (±2 s to the quietest moment) | 37.8% | 93 | 110 | 22 |
+| 8 s overlap + timestamp trim + repeated-run drop | 38.2% | 102 | 99 | 26 |
+| 8 s overlap + timestamp trim | 38.3% | 108 | 95 | 25 |
+| 8 s overlap + repeated-run drop | 41.2% | 105 | 95 | 45 |
+| 8 s overlap, naive concatenation | 41.3% | 111 | 91 | 44 |
+
+**The deduplication works and still loses.** Timestamp trimming plus a word-level
+repeated-run drop takes insertions from 44 down to 26, against 21 for not overlapping at
+all — so it removes most of what overlap duplicates. It just never earns back the cost:
+the words rescued at a boundary (deletions 101 -> 99) are fewer than the errors overlap
+introduces. The same ordering held on the full file, more strongly (37.7% against 45.3%).
+
+Snapping the cut to the quietest moment nearby — the obvious way to avoid cutting mid-word
+without any overlap — also failed to help: substitutions fell (100 -> 93) but deletions rose
+(101 -> 110), for a net slightly worse and well inside noise.
+
+So the implementation is the one with nothing in it: **cut at a fixed interval, no overlap,
+no deduplication, no silence detection.**
+
+### Why timestamp trimming could not fully work
+
+Diagnosed rather than assumed. Whisper returns chunks, not words, and a chunk straddles the
+boundary: segment 0 of a 128-second slice had its last chunk START at 118.86 s, so trimming
+"chunks beginning after 120 s" kept it whole, and its text ran several seconds into
+territory the next segment also covered. Chunk granularity is simply coarser than the trim
+needs to be. Word-level timestamps would fix it, and Whisper does not give them.
+
+## Segmentation is now wired in
+
+`core/transcribe.js` splits anything over 180 seconds into 120-second segments and runs
+them through the pool. Measured end to end through the shipping service on the real AMI
+recording:
+
+- **283 chunks, 0 out of order** across 11 segment boundaries — the timestamp offsets are
+  right, which matters because WebVTT cues and speaker alignment both depend on them.
+- Covers 0 to 1275 s of a 1272.6 s recording.
+- **A single interview now uses the pool**: the probe climbed 1 -> 2 -> 3 while transcribing
+  one file, which was impossible before — segments are jobs, and a long file is a queue.
+- **Progress is real**: "Transcribing — part 7 of 11" instead of a clock and an estimate.
+
+Speakers are deliberately NOT segmented. Identity is global, so clustering each segment
+separately would make "Speaker 1" a different person in every one. The speakers pass runs
+once over the whole recording and the transcribed segments are matched to its turns
+afterwards — which is what the worker already did internally, moved out one level.
+
 ## Still unmeasured
 
 - **All of the above on a phone.** Every whole-interview number here is desktop. The

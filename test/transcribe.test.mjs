@@ -148,6 +148,61 @@ test('TINY IS NOT OFFERED, because it does not work', () => {
   assert.doesNotMatch(worker, /WHISPER\.tiny/, 'nor as a fallback for an unknown size');
 });
 
+test('long recordings are segmented, and the thresholds are measured not guessed', async () => {
+  const { SEGMENT_SECONDS, SEGMENT_ABOVE_SECONDS } = await import('../core/transcribe.js');
+  // 120 s because segmentation at that length measured free: 37.3% word error rate
+  // segmented against 37.6% in one call, and 8.9% FASTER on a single worker.
+  assert.equal(SEGMENT_SECONDS, 120);
+  assert.ok(SEGMENT_ABOVE_SECONDS > SEGMENT_SECONDS,
+    'a recording must be longer than one segment before splitting is worth the bookkeeping');
+
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /seconds > SEGMENT_ABOVE_SECONDS/, 'the service chooses by duration');
+  // Segments are copied as they are dispatched, not all up front: holding the whole
+  // interview is the thing that crashed a phone.
+  assert.match(src, /audio\.subarray\(from/, 'one segment at a time');
+});
+
+test('NO overlap and NO deduplication, because both were measured and neither helped', async () => {
+  // Four stitching rules scored against the AMI human transcript on identical audio:
+  //   plain cut, no overlap              37.3%   <- simplest, and best
+  //   silence-snapped cut                37.8%
+  //   8 s overlap + trim + word dedup    38.2%
+  //   8 s overlap + timestamp trim       38.3%
+  //   8 s overlap, naive concat          41.3%
+  // The dedup WORKS - it takes insertions from 44 to 26 against 21 for no overlap at all -
+  // it just never earns back what overlap costs. This test exists so the machinery is not
+  // reintroduced later on the reasonable-sounding theory that it must help.
+  const raw = readFileSync('core/transcribe.js', 'utf8');
+  assert.match(raw, /NO OVERLAP AND NO DEDUPLICATION/,
+    'the decision is recorded where someone would otherwise add overlap');
+  assert.match(raw, /37\.3%/, 'with the number that settled it');
+  // Narrowly: no overlap ARITHMETIC. The word itself appears legitimately in LIMITATIONS,
+  // which is about people talking over each other — a different thing entirely.
+  const src = codeOf('core/transcribe.js');
+  assert.doesNotMatch(src, /overlapSeconds|OVERLAP_SECONDS|\+\s*over/,
+    'no overlap term survives in the segment arithmetic');
+  assert.match(src, /from \+ step\)/, 'a segment is exactly one step long');
+});
+
+test('speakers are identified once over the whole recording, never per segment', async () => {
+  // Speaker identity is global. Cluster each segment separately and "Speaker 1" means a
+  // different person in every one, which is worse than no labels at all.
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /mode: 'speakers'/, 'a separate whole-file pass');
+  assert.match(src, /speakerAt\(turns/, 'and the segments are matched to its turns after');
+  const raw = readFileSync('core/transcribe.js', 'utf8');
+  assert.match(raw, /Speaker 1" means a different person/i, 'the reason is written down');
+});
+
+test('a segmented job reports real progress, not an estimate', () => {
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /type: 'segments'/, 'segments finished out of segments total');
+  const app = codeOf('core/app.js');
+  assert.match(app, /p\.type === 'segments'/, 'and the host renders it');
+  assert.match(app, /part \$\{p\.done\} of \$\{p\.total\}/);
+});
+
 test('video is supported, and the reason is written down', async () => {
   // ETHN has faculty working from video recordings of oral histories, so "can it take an
   // MP4" is a real question with a real answer. decodeAudioData demuxes the container and

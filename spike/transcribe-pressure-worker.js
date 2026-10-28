@@ -61,6 +61,13 @@ async function run(audio, maxTokens, longForm = true, timestamps = true, wantTex
     // The transcript itself, for scoring against a reference. Off by default because the
     // timing spikes do not need it and a 40-minute transcript is a lot to hand back.
     text: wantText ? text : undefined,
+    // Chunk timestamps too, because stitching segments together properly needs to know
+    // WHEN each piece of text was spoken — which is the whole reason return_timestamps is
+    // worth its 2.9x cost. Without them, dedup can only guess from the words.
+    chunks: wantText && Array.isArray(out?.chunks)
+      ? out.chunks.map((c) => ({ text: String(c.text ?? ''), t: c.timestamp?.[0] ?? null,
+        e: c.timestamp?.[1] ?? null }))
+      : undefined,
     chars: text.length,
     words: words.length,
     uniqueRatio: words.length ? +(uniq / words.length).toFixed(3) : null,

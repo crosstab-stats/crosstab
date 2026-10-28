@@ -131,6 +131,10 @@ const SPEAKER = (q.get('speaker') || '').toUpperCase();
 // one or two people taking turns. Keeping only the non-overlapping stretches of the SAME
 // recording isolates recognition from overlap, with no second download and no new variables.
 const SOLO = q.get('solo') === '1';
+// ?snap=2 moves each cut to the quietest moment within +/- N seconds of where it would
+// otherwise fall. Overlap plus deduplication measured WORSE than a blind cut; the reason a
+// cut hurts at all is that it can land mid-word, and the cheap fix is not to cut there.
+const SNAP = Math.max(0, Number(q.get('snap') || 0));
 const SOLO_MIN = Math.max(0.5, Number(q.get('soloMin') || 2));
 // ?model=base|small|large — the weights, which is the lever with a known price.
 const MODELS = {
@@ -399,6 +403,98 @@ const report = (name, s) => {
       s.wer < 0.35 ? 'ok' : (s.wer > 0.6 ? 'bad' : ''));
 };
 
+
+// =============================================================================
+// Stitching segments back into one transcript
+// =============================================================================
+
+/**
+ * Glue the pieces together and hope. The control, and what the spikes have done so far.
+ *
+ * With any overlap at all this duplicates the shared seconds, which scores as a run of
+ * insertions — and it is visibly what Whisper's OWN 30-second chunking does at its stride
+ * boundaries, where a whole clause reappears.
+ */
+const stitchConcat = (segs) => segs.map((s) => s.text).join(' ');
+
+/**
+ * Drop each segment's overlap tail by timestamp.
+ *
+ * A segment covers `step + overlap` seconds, but only the first `step` are ITS content —
+ * the rest is context for the words at the boundary, and the next segment covers it
+ * properly from the start. So keep chunks that begin before `step` and let the next segment
+ * take it from there. The last segment keeps everything, since nothing follows it.
+ *
+ * This is the principled one: `return_timestamps` costs 2.9x and this is the thing that
+ * cost buys.
+ */
+function stitchTrim(segs, stepSeconds) {
+  const out = [];
+  segs.forEach((seg, i) => {
+    const last = i === segs.length - 1;
+    if (last || !Array.isArray(seg.chunks) || !seg.chunks.length) {
+      out.push(last ? seg.text : seg.text);
+      return;
+    }
+    const kept = seg.chunks.filter((c) => (c.t ?? 0) < stepSeconds);
+    out.push(kept.map((c) => c.text).join(' ').trim() || seg.text);
+  });
+  return out.join(' ');
+}
+
+/**
+ * Remove a repeated run of words at the join.
+ *
+ * Looks for the longest suffix of what has been accumulated that also opens the next
+ * segment, and drops the repeat. Needs no timestamps, which matters because they are the
+ * single most expensive option in the pipeline and might one day be turned off.
+ *
+ * `maxRun` bounds the search: an overlap of a few seconds is a couple of dozen words, and
+ * searching further invites a false match on a phrase that genuinely recurs — people do
+ * repeat themselves, and this must not delete the second time they said something.
+ */
+function dropRepeatedRun(accWords, nextWords, maxRun = 40) {
+  const limit = Math.min(maxRun, accWords.length, nextWords.length);
+  for (let n = limit; n >= 3; n--) {
+    let same = true;
+    for (let k = 0; k < n; k++) {
+      if (accWords[accWords.length - n + k] !== nextWords[k]) { same = false; break; }
+    }
+    if (same) return n;
+  }
+  return 0;
+}
+
+function stitchWords(segs) {
+  const acc = [];
+  for (const seg of segs) {
+    const words = normalise(seg.text);
+    const raw = String(seg.text).trim().split(/\s+/).filter(Boolean);
+    const drop = acc.length ? dropRepeatedRun(acc.map((w) => w.norm), words) : 0;
+    for (let i = drop; i < raw.length; i++) {
+      acc.push({ raw: raw[i], norm: words[i] ?? normalise(raw[i])[0] ?? '' });
+    }
+  }
+  return acc.map((w) => w.raw).join(' ');
+}
+
+/** Timestamps first, then a word sweep for whatever a boundary timestamp got wrong. */
+function stitchTrimWords(segs, stepSeconds) {
+  const trimmed = segs.map((seg, i) => {
+    if (i === segs.length - 1 || !Array.isArray(seg.chunks) || !seg.chunks.length) return seg;
+    const kept = seg.chunks.filter((c) => (c.t ?? 0) < stepSeconds);
+    return { ...seg, text: kept.map((c) => c.text).join(' ').trim() || seg.text };
+  });
+  return stitchWords(trimmed);
+}
+
+const STITCHERS = {
+  concat: { label: 'concat (control)', fn: (segs) => stitchConcat(segs) },
+  trim: { label: 'timestamp trim', fn: (segs, step) => stitchTrim(segs, step) },
+  words: { label: 'repeated-run drop', fn: (segs) => stitchWords(segs) },
+  'trim+words': { label: 'trim then run-drop', fn: (segs, step) => stitchTrimWords(segs, step) },
+};
+
 // =============================================================================
 // Transcription
 // =============================================================================
@@ -495,11 +591,43 @@ const runOn = (w, audio, gen = null) => new Promise((resolve) => {
  * scrambled — which would show up as a catastrophic word error rate and look like a model
  * problem rather than a bookkeeping one.
  */
+/**
+ * Where to cut, given that a cut through the middle of a word costs a word.
+ *
+ * With `SNAP` seconds of slack, each boundary moves to the quietest 20 ms in its
+ * neighbourhood — a pause between words, or between speakers. Costs one pass over a few
+ * seconds of audio per boundary and needs no overlap, no timestamps and no deduplication,
+ * which is the appeal: measured, overlap plus dedup came out WORSE than a blind cut, so
+ * the thing to improve is the cut itself.
+ */
+function cutPoints(pcm, step, snapSeconds) {
+  const points = [0];
+  const slack = Math.round(snapSeconds * SR);
+  const win = Math.round(0.02 * SR);
+  for (let at = step; at < pcm.length; at += step) {
+    if (!slack) { points.push(at); continue; }
+    const from = Math.max(points[points.length - 1] + win, at - slack);
+    const to = Math.min(pcm.length - win, at + slack);
+    let best = at;
+    let bestEnergy = Infinity;
+    const probe = samples(pcm, from, to);
+    for (let i = 0; i + win <= probe.length; i += win) {
+      let e = 0;
+      for (let k = 0; k < win; k += 4) e += Math.abs(probe[i + k]);
+      if (e < bestEnergy) { bestEnergy = e; best = from + i + (win >> 1); }
+    }
+    points.push(best);
+  }
+  points.push(pcm.length);
+  return points;
+}
+
 async function transcribeSegments(pcm, ws, onProgress, gen = null) {
   const step = Math.round(SEGMENT * SR);
   const over = Math.round(OVERLAP * SR);
-  const count = Math.ceil(pcm.length / step);
-  const texts = new Array(count).fill('');
+  const cuts = cutPoints(pcm, step, SNAP);
+  const count = cuts.length - 1;
+  const pieces = new Array(count).fill(null);
   let next = 0;
   let done = 0;
   let err = null;
@@ -507,15 +635,16 @@ async function transcribeSegments(pcm, ws, onProgress, gen = null) {
     while (!err && next < count) {
       const i = next;
       next += 1;
-      const from = i * step;
-      const seg = samples(pcm, from, Math.min(pcm.length, from + step + over));
+      const from = cuts[i];
+      const seg = samples(pcm, from, Math.min(pcm.length, cuts[i + 1] + over));
       const r = await runOn(w, seg, gen);
       if (r.ms === null) { err = r.err; break; }
-      texts[i] = r.text ?? '';
+      pieces[i] = { text: r.text ?? '', chunks: r.chunks ?? null };
       onProgress?.(++done, count);
     }
   }));
-  return { text: texts.join(' '), err, count };
+  const segs = pieces.map((p) => p ?? { text: '', chunks: null });
+  return { text: segs.map((p) => p.text).join(' '), segs, err, count };
 }
 
 // =============================================================================
@@ -689,6 +818,13 @@ document.getElementById('run').addEventListener('click', async () => {
     log('');
     log(`--- ${WANT_MODELS.length} model(s) x ${WANT_GEN.length} setting(s) over `
       + `${(pcm.length / SR / 60).toFixed(1)} min, ${refN.length} reference words ---`);
+    if (OVERLAP > 0) {
+      log(`stitching: ${SEGMENT} s segments with ${OVERLAP} s overlap, compared under four`, 'dim');
+      log('rules. One transcription pass; they differ only in how the seams are joined.', 'dim');
+    } else {
+      log('stitching: no overlap, so there is nothing to deduplicate (?overlap=8 compares', 'dim');
+      log('the rules). Words spoken across a cut are simply lost here.', 'dim');
+    }
     log(`  ${pad('model/setting', 22)}${pad('WER', 8)}${pad('noFill', 8)}${pad('sub', 6)}`
       + `${pad('del', 6)}${pad('ins', 6)}${pad('hyp', 7)}${pad('uniq', 7)}${pad('recall', 8)}x real`);
 
@@ -722,22 +858,33 @@ document.getElementById('run').addEventListener('click', async () => {
           GEN_VARIANTS[genName]);
         const ms = performance.now() - t0;
         if (out.err) { log(`  ${pad(label, 22)}FAILED - ${out.err}`, 'bad'); continue; }
-        const hyp = normalise(out.text);
-        const s = score(refN, hyp);
-        const sNo = score(refNoFill, normalise(out.text, { dropFillers: true }));
-        const uniq = hyp.length ? new Set(hyp).size / hyp.length : 0;
-        const recall = bagRecall(refN, hyp);
-        // Also score the normalised forms, which is what standard ASR practice reports.
-        const sFix = score(normalise(refText, { fix: true }), normalise(out.text, { fix: true }));
-        const sFixNoFill = score(normalise(refText, { fix: true, dropFillers: true }),
-          normalise(out.text, { fix: true, dropFillers: true }));
-        const fill = fillerStats(hyp);
-        runs.push({ name: label, model: key, gen: genName, weightsMb, workers: ws.length,
-          s, sNo, sFix, sFixNoFill, uniq, recall, ms, fill, text: out.text });
-        log(`  ${pad(label, 22)}${pad(pct(s.wer), 8)}${pad(pct(sNo.wer), 8)}${pad(s.sub, 6)}`
-          + `${pad(s.del, 6)}${pad(s.ins, 6)}${pad(s.hypWords, 7)}${pad(uniq.toFixed(3), 7)}`
-          + `${pad(pct(recall), 8)}${(pcm.length / SR / (ms / 1000)).toFixed(1)}`,
-            uniq < refUniq * 0.5 ? 'bad' : (s.wer < 0.45 ? 'ok' : ''));
+        // ONE transcription, scored under every stitching rule. Transcribing is the
+        // expensive part and all four rules operate on the same segments, so comparing
+        // them costs nothing but arithmetic. With no overlap there is nothing to remove,
+        // so only the control runs.
+        // Keep the raw segments reachable: when a stitching rule underperforms, the
+        // question is always whether the rule is wrong or its inputs are.
+        window.__lastSegs = out.segs;
+        const rules = OVERLAP > 0 ? Object.entries(STITCHERS) : [['concat', STITCHERS.concat]];
+        for (const [sid, rule] of rules) {
+          const text = rule.fn(out.segs, SEGMENT);
+          const stLabel = rules.length > 1 ? `${label}/${sid}` : label;
+          const hyp = normalise(text);
+          const s = score(refN, hyp);
+          const sNo = score(refNoFill, normalise(text, { dropFillers: true }));
+          const sFix = score(normalise(refText, { fix: true }), normalise(text, { fix: true }));
+          const sFixNoFill = score(normalise(refText, { fix: true, dropFillers: true }),
+            normalise(text, { fix: true, dropFillers: true }));
+          const uniq = hyp.length ? new Set(hyp).size / hyp.length : 0;
+          const recall = bagRecall(refN, hyp);
+          const fill = fillerStats(hyp);
+          runs.push({ name: stLabel, model: key, gen: genName, stitch: sid, weightsMb,
+            workers: ws.length, s, sNo, sFix, sFixNoFill, uniq, recall, ms, fill, text });
+          log(`  ${pad(stLabel, 22)}${pad(pct(s.wer), 8)}${pad(pct(sNo.wer), 8)}${pad(s.sub, 6)}`
+            + `${pad(s.del, 6)}${pad(s.ins, 6)}${pad(s.hypWords, 7)}${pad(uniq.toFixed(3), 7)}`
+            + `${pad(pct(recall), 8)}${(pcm.length / SR / (ms / 1000)).toFixed(1)}`,
+              uniq < refUniq * 0.5 ? 'bad' : (s.wer < 0.45 ? 'ok' : ''));
+        }
       }
       for (const w of ws) w.terminate();      // free the weights before the next model
     }

@@ -748,6 +748,12 @@ export async function boot(mounts) {
                 + 'but still working';
             return;
           }
+          // Real progress for a segmented job: not an estimate, a count of work finished.
+          if (p.type === 'segments') {
+            bar.value = p.total ? p.done / p.total : 0;
+            status.textContent = `Transcribing — part ${p.done} of ${p.total}`;
+            return;
+          }
           if (p.stage === 'speakers' && !p.total) { status.textContent = 'Identifying speakers…'; return; }
           if (p.total) {
             const pct = Math.min(1, (p.loaded || 0) / p.total);
