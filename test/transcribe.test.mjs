@@ -33,6 +33,11 @@ import {
   DETECT_WINDOWS,
   DETECT_WINDOW_SECONDS,
   LIMITATIONS,
+  parseClock,
+  formatClock,
+  sliceRange,
+  shiftTiming,
+  normaliseRange,
 } from '../core/transcribe.js';
 
 // =============================================================================
@@ -645,4 +650,141 @@ test('the worker never passes a blank language to the library', () => {
   assert.match(worker, /language: used/, 'the pipeline is given a resolved code');
   assert.doesNotMatch(worker, /\.\.\.\(language \? \{ language/, 'and not a conditional spread');
   assert.match(worker, /detectIn\(pipe, audio\.subarray/, 'detecting instead when nobody resolved one');
+});
+
+// ---------------------------------------------------------------------------------
+// Transcribing part of a recording (#193).
+//
+// The range lives in the ENGINE rather than in a plugin that snips bytes, and the
+// reason is almost entirely these tests: cues have to come back in the ORIGINAL
+// recording's clock, or the transcript and the player disagree and nothing in the UI
+// says so.
+// ---------------------------------------------------------------------------------
+
+test('a time is read the way a person writes one down', () => {
+  assert.equal(parseClock('2:15'), 135);
+  assert.equal(parseClock('1:02:03'), 3723);
+  assert.equal(parseClock('135'), 135);
+  assert.equal(parseClock('2:15.5'), 135.5);
+  // Minutes beyond 59 in the LEADING field: "90:00" is how people write an hour and a
+  // half, and refusing it would be pedantry about an unambiguous value.
+  assert.equal(parseClock('90:00'), 5400);
+  assert.equal(parseClock(' 2:15 '), 135, 'trimmed');
+});
+
+test('a mistyped time is rejected, not reinterpreted', () => {
+  // `2:75` as 3m15s is the dangerous reading: it would silently transcribe a stretch the
+  // user did not ask for. Only the leading field is unbounded.
+  assert.equal(parseClock('2:75'), null);
+  assert.equal(parseClock('1:60:00'), null);
+  assert.equal(parseClock('abc'), null);
+  assert.equal(parseClock(':30'), null);
+  assert.equal(parseClock('1:2:3:4'), null);
+  assert.equal(parseClock(''), null);
+  assert.equal(parseClock(null), null);
+});
+
+test('formatClock round-trips what parseClock reads', () => {
+  for (const t of ['0:30', '2:15', '19:30', '1:02:03']) {
+    assert.equal(formatClock(parseClock(t)), t);
+  }
+});
+
+test('the engine accepts a range as text, so a sandboxed plugin needs no parser', () => {
+  // A plugin cannot import this module (opaque origin), so if the engine took only
+  // numbers every plugin would carry its own copy of the grammar and they would drift.
+  assert.deepEqual(normaliseRange({ from: '2:15', to: '19:30' }), { from: 135, to: 1170 });
+  assert.deepEqual(normaliseRange({ from: 135 }), { from: 135, to: null });
+  assert.deepEqual(normaliseRange({}), { from: null, to: null });
+  assert.deepEqual(normaliseRange({ from: '', to: '' }), { from: null, to: null });
+  assert.throws(() => normaliseRange({ from: '2:75' }), /not a time/);
+  // Ordering is rejected AT THE DOOR, not inside the job. Caught by testing `enqueue`
+  // rather than `sliceRange`: an inverted range returned a job id and then failed minutes
+  // later with a parse error in it, which is not what "parsed at the door" means.
+  assert.throws(() => normaliseRange({ from: '5:00', to: '2:00' }), /end must come after/);
+  assert.throws(() => normaliseRange({ from: '2:00', to: '2:00' }), /end must come after/);
+  assert.throws(() => normaliseRange({ to: 'abc' }), /not a time/);
+  assert.throws(() => normaliseRange({ from: -1 }), /not a time/);
+});
+
+test('slicing takes the stretch asked for, and nothing is copied', () => {
+  const audio = new Float32Array(600 * 16000);   // 10 minutes
+  const r = sliceRange(audio, { from: 135, to: 330 });
+  assert.equal(r.from, 135);
+  assert.equal(r.to, 330);
+  assert.equal(r.ranged, true);
+  assert.equal(r.audio.length, 195 * 16000);
+  // A subarray, not a copy: the engine already holds the PCM, and an extra copy of a long
+  // recording is what took a phone past its ceiling.
+  assert.equal(r.audio.buffer, audio.buffer, 'a view, not a copy');
+});
+
+test('no range means the whole recording, and says so', () => {
+  const audio = new Float32Array(600 * 16000);
+  const r = sliceRange(audio, {});
+  assert.equal(r.ranged, false);
+  assert.equal(r.audio.length, audio.length);
+  assert.equal(r.to, 600);
+});
+
+test('an end past the end of the recording is clamped, not refused', () => {
+  // "2:15 to 25:00" of a ten-minute interview means "to the end". Erroring would be
+  // punishing someone for not knowing the exact duration of their own file.
+  const audio = new Float32Array(600 * 16000);
+  const r = sliceRange(audio, { from: 135, to: 1500 });
+  assert.equal(r.to, 600);
+  assert.equal(r.audio.length, (600 - 135) * 16000);
+});
+
+test('an empty or impossible range is an error, not a silent whole-file run', () => {
+  // The invisible-default failure this codebase keeps refusing to ship: asking for five
+  // minutes and quietly getting ninety.
+  const audio = new Float32Array(600 * 16000);
+  assert.throws(() => sliceRange(audio, { from: 300, to: 120 }), /end must come after/);
+  assert.throws(() => sliceRange(audio, { from: 700 }), /only 10:00 long/);
+});
+
+test('timings come back in the ORIGINAL recording clock, not the slice clock', () => {
+  // The whole reason this is not a plugin's job. A cue 10 s into a slice that began at
+  // 2:15 is at 2:25 in the media, and every consumer — WebVTT, the CAQDAS cue offsets,
+  // the player gutter — reads these as media positions.
+  const moved = shiftTiming({
+    chunks: [{ start: 0, end: 4, text: 'first' }, { start: 10, end: 14, text: 'second' }],
+    turns: [{ speaker: 0, start: 0, end: 14 }],
+  }, 135);
+  assert.deepEqual(moved.chunks.map((c) => [c.start, c.end]), [[135, 139], [145, 149]]);
+  assert.deepEqual(moved.turns, [{ speaker: 0, start: 135, end: 149 }]);
+  assert.equal(moved.chunks[0].text, 'first', 'and the text is untouched');
+});
+
+test('a zero offset is left exactly alone', () => {
+  const input = { chunks: [{ start: 1, end: 2, text: 'x' }], turns: null };
+  const out = shiftTiming(input, 0);
+  assert.equal(out.chunks, input.chunks, 'the same array, not a rebuilt copy');
+});
+
+test('the shifted cues are what the WebVTT is built from', () => {
+  // The trap this closes: `transcribe()` already produced a VTT in SLICE time, and that
+  // is the copy a plugin turns into a document. Left alone it would put the text at
+  // 0:00 and the player at 2:15 and let them disagree in silence.
+  const shifted = shiftTiming({ chunks: [{ start: 0, end: 4, text: 'hello' }], turns: null }, 135);
+  const vtt = toVtt(shifted);
+  assert.match(vtt, /00:02:15\.000 --> 00:02:19\.000/);
+  assert.doesNotMatch(vtt, /00:00:00\.000 --> /);
+});
+
+test('the engine, not the plugin, owns the range — recorded in code', () => {
+  // Scoped to execute()'s body: `detectLanguage`'s own DEFINITION sits earlier in the
+  // file than execute() does, so searching the whole module compares a definition
+  // against a call site and proves nothing.
+  const src = codeOf('core/transcribe.js');
+  const body = src.slice(src.indexOf('function execute(full'));
+  assert.ok(body, 'execute() takes the full recording');
+  // Sliced before detection, so asking for 2:15-19:30 of a bilingual recording is not
+  // detected from audio the user explicitly excluded.
+  const sliceAt = body.indexOf('sliceRange(full');
+  const detectAt = body.indexOf('detectLanguage(audio');
+  assert.ok(sliceAt > -1, 'execute() slices');
+  assert.ok(detectAt > -1, 'execute() detects');
+  assert.ok(sliceAt < detectAt, 'the audio is sliced before the language is detected');
 });

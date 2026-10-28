@@ -41,8 +41,8 @@ export const manifest = {
   keywords: ['qualitative', 'coding', 'caqdas', 'transcript', 'codebook', 'content analysis', 'image', 'audio', 'video', 'media'],
   disciplines: ['Qualitative', 'Sociology', 'Education', 'Communication', 'Nursing', 'Anthropology'],
   howto:
-    'GUI: appears as a workspace tab (Coding) — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output.\n' +
-    'Used through its workspace tab, not a run command.',
+    'GUI: appears as TWO workspace tabs. Coding — pick a dataset column of documents (a text column, or a media column from an image/audio/video import), then tag passages/regions with codes and export code frequencies/segments to Output. Transcripts — transcribe the audio/video in the dataset on this device, optionally just one stretch of it, and keep the transcript beside the recording.\n' +
+    'Used through its workspace tabs, not a run command.',
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -53,7 +53,17 @@ export const manifest = {
       category: 'Qualitative',
       keywords: ['caqdas', 'qualitative', 'coding', 'codes', 'passages', 'transcripts', 'nvivo', 'atlas', 'workspace', 'segments', 'media'],
       needs: ['builtin-caqdas'],
-      seeAlso: ['agreement-codings', 'import-data'],
+      seeAlso: ['agreement-codings', 'import-data', 'caqdas-transcribe'],
+    },
+    {
+      id: 'caqdas-transcribe',
+      title: 'Transcribe interviews on this device',
+      category: 'Qualitative',
+      keywords: ['transcribe', 'transcription', 'whisper', 'speech to text', 'audio', 'video',
+        'interview', 'oral history', 'language', 'detect', 'speakers', 'diarization', 'clip',
+        'range', 'otter', 'rev', 'trint'],
+      needs: ['builtin-caqdas'],
+      seeAlso: ['caqdas-coding', 'import-data'],
     },
   ],
   imports: [
@@ -4814,6 +4824,9 @@ export function transcriptToDocument(result, mediaRef = null) {
     timing: timingValue({ cues: parsed.cues, refs }),
     language: result?.language ?? null,
     detection,
+    // Which stretch of the recording this covers, or null for all of it. Without it a
+    // partial transcript is indistinguishable from a complete one that lost its middle.
+    range: result?.range ? { from: result.range.from, to: result.range.to } : null,
   };
 }
 
@@ -6130,11 +6143,34 @@ async function mountTranscripts(app, root) {
   const modeSel = select(options.modes ?? [], 'text');
   // Detect, rather than assume English — see core/transcribe.js `options()`.
   const langSel = select(options.languages ?? [], '');
+  // ---- transcribe only part of a recording (#193) ---------------------------------
+  //
+  // Text inputs taking `2:15`, not number inputs taking seconds: nobody knows that the
+  // bit they care about starts at 8295 seconds, but `2:15` is what is in their notes and
+  // what the player is showing them. The ENGINE parses it — a plugin runs in an
+  // opaque-origin sandbox and cannot import `parseClock`, and a second copy of the
+  // grammar over here would eventually disagree with the first about something like
+  // `2:75` and transcribe the wrong stretch of an interview.
+  const timeBox = (ph) => css(mk('input', { font: 'inherit', padding: '3px', width: '72px' }), {});
+  const fromIn = timeBox();
+  const toIn = timeBox();
+  fromIn.placeholder = '0:00';
+  toIn.placeholder = 'end';
+  fromIn.setAttribute('aria-label', 'Transcribe from');
+  toIn.setAttribute('aria-label', 'Transcribe until');
+  const rangeNote = mk('span', MUTED, '');
   const allBtn = css(mk('button', BTN, 'Transcribe all'), { fontWeight: '600' });
   const pauseBtn = mk('button', BTN, 'Pause');
   bar.append(mk('label', MUTED, 'Model'), sizeSel, mk('label', MUTED, 'Mode'), modeSel,
-    mk('label', MUTED, 'Language'), langSel, allBtn, pauseBtn);
+    mk('label', MUTED, 'Language'), langSel,
+    mk('label', MUTED, 'From'), fromIn, mk('label', MUTED, 'to'), toIn,
+    allBtn, pauseBtn);
   root.append(bar);
+  root.append(css(mk('p', MUTED, 'Leave From and to empty to transcribe the whole '
+    + 'recording. A range applies to whichever recordings you start next, and the '
+    + 'transcript keeps the original times — so 2:15 in the audio is still 2:15 in the '
+    + 'transcript.'), { margin: '0 0 8px' }));
+  root.append(css(rangeNote, { display: 'block', margin: '0 0 8px', color: '#e06c75' }));
 
   const capacityLine = mk('p', { ...MUTED, margin: '0 0 8px' }, '');
   root.append(capacityLine);
@@ -6210,16 +6246,22 @@ async function mountTranscripts(app, root) {
       size: sizeSel.value || 'base',
       // '' means detect; the worker treats any falsy language as "no language given".
       language: langSel.value,
+      // Raw text, straight through. The engine parses and clamps, and throws if it is not
+      // a time — so the message the user sees is the engine's own and there is no second
+      // opinion about what `2:15` means.
+      from: fromIn.value.trim(),
+      to: toIn.value.trim(),
     });
     jobOf.set(row.rid, id);
   }
 
   allBtn.addEventListener('click', async () => {
     allBtn.disabled = true;
+    rangeNote.textContent = '';
     try {
       for (const row of rows) await startOne(row);
     } catch (e) {
-      saveNote.textContent = `Could not start: ${e.message}`;
+      rangeNote.textContent = e.message;
     } finally {
       allBtn.disabled = false;
     }
@@ -6251,6 +6293,7 @@ async function mountTranscripts(app, root) {
         // the wrong language is fluent and confident, so the language has to survive into
         // the dataset or the mistake becomes unfindable later.
         { name: 'transcript_language', type: 'text' },
+        { name: 'transcript_range', type: 'text' },
       ];
       const columns = {
         label: done.map((r) => r.label),
@@ -6260,6 +6303,16 @@ async function mountTranscripts(app, root) {
         // a quoted JSON blob that parseTiming rejects, and the transcript would land in
         // the dataset as plain text with no player and no gutter.
         transcript_timing: done.map((r) => saved[r.rid].timing),
+        transcript_range: done.map((r) => {
+          const rg = saved[r.rid].range;
+          if (!rg) return 'whole recording';
+          const c = (secs) => {
+            const t = Math.max(0, Math.round(Number(secs) || 0));
+            const m = Math.floor(t / 60);
+            return `${m}:${String(t % 60).padStart(2, '0')}`;
+          };
+          return `${c(rg.from)}-${c(rg.to)}`;
+        }),
         transcript_language: done.map((r) => {
           const t = saved[r.rid];
           if (!t.language) return '';
@@ -6283,6 +6336,17 @@ async function mountTranscripts(app, root) {
     // seven interviews is exactly where a wrong guess hides: nobody is watching a dialog,
     // and the wrong language produces fluent prose rather than an error. "(detected)"
     // distinguishes a guess from a choice — they are different claims about the same text.
+    // Same argument as the language: a transcript of the wrong five minutes reads like a
+    // perfectly good transcript, so which stretch it covers travels with it.
+    const clock = (secs) => {
+      const t = Math.max(0, Math.round(Number(secs) || 0));
+      const h = Math.floor(t / 3600);
+      const m = Math.floor((t % 3600) / 60);
+      const pad = (n) => String(n).padStart(2, '0');
+      return h ? `${h}:${pad(m)}:${pad(t % 60)}` : `${m}:${pad(t % 60)}`;
+    };
+    const span = (r) => (r ? ` · ${clock(r.from)}–${clock(r.to)}` : '');
+
     const heard = (j) => {
       if (!j?.language) return '';
       const d = j.detection;
@@ -6294,17 +6358,29 @@ async function mountTranscripts(app, root) {
 
     if (saved[row.rid]) {
       const words = saved[row.rid].text.trim() ? saved[row.rid].text.trim().split(/\s+/).length : 0;
-      return { state: 'transcribed', detail: `${words} words${heard(saved[row.rid])}` };
+      return {
+        state: 'transcribed',
+        detail: `${words} words${span(saved[row.rid].range)}${heard(saved[row.rid])}`,
+      };
     }
     if (!job) return { state: '—', detail: '' };
     if (job.progress?.stage === 'detect') {
       return { state: 'running', detail: 'working out the language…' };
     }
     if (job.state === 'running' && job.progress?.total) {
-      return { state: 'running', detail: `part ${job.progress.done} of ${job.progress.total}${heard(job)}` };
+      return {
+        state: 'running',
+        detail: `part ${job.progress.done} of ${job.progress.total}${span(job.range)}${heard(job)}`,
+      };
     }
     if (job.state === 'running' && job.progress?.elapsedMs != null) {
-      return { state: 'running', detail: `${Math.round(job.progress.elapsedMs / 1000)}s${heard(job)}` };
+      return {
+        state: 'running',
+        detail: `${Math.round(job.progress.elapsedMs / 1000)}s${span(job.range)}${heard(job)}`,
+      };
+    }
+    if (job.state === 'queued' && job.range) {
+      return { state: 'queued', detail: `${clock(job.range.from)}–${job.range.to ? clock(job.range.to) : 'end'}` };
     }
     return { state: job.state, detail: job.error ?? '' };
   }
@@ -6367,10 +6443,18 @@ async function mountTranscripts(app, root) {
       if (saved[row.rid]) {
         const again = mk('button', BTN, 'Redo');
         again.addEventListener('click', async () => {
-          delete saved[row.rid];
-          await persist();
-          await startOne(row);
-          await refresh();
+          try {
+            rangeNote.textContent = '';
+            delete saved[row.rid];
+            await persist();
+            await startOne(row);
+            await refresh();
+          } catch (e) {
+            // Redo had no handler at all: a mistyped range rejected into nothing, the
+            // transcript was already deleted, and the row just went blank.
+            rangeNote.textContent = e.message;
+            await refresh();
+          }
         });
         actions.append(again);
       } else if (job && (job.state === 'running' || job.state === 'queued')) {
@@ -6384,8 +6468,12 @@ async function mountTranscripts(app, root) {
       } else {
         const go = mk('button', BTN, 'Transcribe');
         go.addEventListener('click', async () => {
-          try { await startOne(row); await refresh(); } catch (e) {
-            saveNote.textContent = `Could not start: ${e.message}`;
+          try {
+            rangeNote.textContent = '';
+            await startOne(row);
+            await refresh();
+          } catch (e) {
+            rangeNote.textContent = e.message;
           }
         });
         actions.append(go);

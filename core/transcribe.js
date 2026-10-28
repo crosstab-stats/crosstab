@@ -209,6 +209,155 @@ export function sampleForDetection(audio, {
   return [picked.reduce((a, b) => (b.rms > a.rms ? b : a))];
 }
 
+/**
+ * Read a position in a recording the way a person writes one down: `2:15`, `1:02:03`,
+ * `135`, `2:15.5`. Returns seconds, or null if it is not a time at all.
+ *
+ * Deliberately NOT a number input. "Transcribe from 8295 seconds" is not a thing anybody
+ * knows about their own interview; `2:15` is what is written in their notes and what the
+ * player above the field is showing them. Minutes may exceed 59 (`90:00` is an hour and a
+ * half) because that is how people write long recordings down, and rejecting it would be
+ * pedantry about a value whose meaning is unambiguous.
+ */
+export function parseClock(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return null;
+  if (!/^\d+(:\d{1,2})*(\.\d+)?$/.test(raw)) return null;
+  const parts = raw.split(':');
+  if (parts.length > 3) return null;
+  // Seconds last, always — so `2:15` is 2m15s and never 2h15m. Walking from the right is
+  // what makes the same parser read all three lengths.
+  let seconds = 0;
+  let scale = 1;
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const n = Number(parts[i]);
+    if (!Number.isFinite(n) || n < 0) return null;
+    // Every field but the LEADING one is bounded: `2:75` is a typo, not 3m15s. The
+    // leading field stays free so `90:00` can mean an hour and a half.
+    if (i > 0 && n > 59) return null;
+    seconds += n * scale;
+    scale *= 60;
+  }
+  return seconds;
+}
+
+/** The inverse, for showing a range back to the user in the form they typed it. */
+export function formatClock(seconds) {
+  const t = Math.max(0, Math.round(Number(seconds) || 0));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = t % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+
+/**
+ * Accept a range as the caller most naturally has it — `'2:15'` or `135` — and return
+ * numbers, or throw with a message a user can act on.
+ *
+ * Strings are accepted on purpose. A plugin lives in an opaque-origin sandbox and cannot
+ * import this module, so if the engine took only numbers every plugin offering a range
+ * would need its own copy of `parseClock`, and the two grammars would drift: one would
+ * accept `2:75`, the other would not, and the disagreement would show up as a transcript
+ * of the wrong stretch of somebody's interview. One parser, on this side of the boundary,
+ * is the whole point.
+ */
+export function normaliseRange({ from = null, to = null } = {}) {
+  const read = (v, label) => {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'number') {
+      if (!Number.isFinite(v) || v < 0) throw new Error(`${label} is not a time: ${v}`);
+      return v;
+    }
+    const parsed = parseClock(v);
+    if (parsed === null) {
+      throw new Error(`"${v}" is not a time. Write it as 2:15, 1:02:03, or a number of `
+        + 'seconds.');
+    }
+    return parsed;
+  };
+  const a = read(from, 'Start');
+  const b = read(to, 'End');
+  // Ordering is checked HERE, not only in `sliceRange`. `sliceRange` runs inside the job,
+  // after the file has been decoded, so leaving it there meant `enqueue('5:00','2:00')`
+  // returned an id and then died minutes later as a failed job with a parse error in it —
+  // which is not "parsed at the door", whatever the comment above said. This check needs
+  // no duration, so there is no reason for it to wait. The two that DO need the recording
+  // (a start past the end, an end clamped to the end) stay in `sliceRange`.
+  if (a !== null && b !== null && b <= a) {
+    throw new Error(`"${formatClock(a)} to ${formatClock(b)}" is not a range to `
+      + 'transcribe — the end must come after the start.');
+  }
+  return { from: a, to: b };
+}
+
+/**
+ * Cut the stretch the caller asked for out of decoded audio (#193).
+ *
+ * ## Why this is the engine's job and not a plugin's
+ *
+ * A plugin could snip bytes and hand over a shorter file, and that was the alternative
+ * considered. Three things decided it:
+ *
+ *  - **Timestamps.** Snipped audio comes back with every cue starting at zero, and
+ *    somebody then has to add the offset back to all of them to line the transcript up
+ *    with the media. That is the two-coordinate-systems-drifting bug `parseTranscript`
+ *    exists to avoid, re-introduced one layer up. Done here, cues come out in ORIGINAL
+ *    media time and the transcript lines up with the player with nobody adding anything.
+ *  - **Copies.** The engine already holds decoded PCM, so a range is a `subarray` — free,
+ *    no copy. A plugin would decode, slice, re-encode a WAV and hand it back to be decoded
+ *    again: one extra full copy of a long recording, inside an opaque-origin sandbox frame,
+ *    which is the context with the least memory headroom. A needless copy is exactly what
+ *    took a phone to 1312 MB against a ~880 MB ceiling.
+ *  - **Compressed audio is not sample-addressable.** You cannot cut MP3 or AAC at 2:15 by
+ *    byte offset without decoding first, and video needs demuxing on top.
+ *
+ * Out-of-range ends are CLAMPED, not rejected: asking for 2:15–25:00 of a twenty-minute
+ * interview means "to the end", and erroring there would be punishing someone for not
+ * knowing the exact duration. An empty or inverted range IS an error, because silently
+ * transcribing the whole file when five minutes were asked for is the invisible-default
+ * failure this codebase keeps refusing to ship.
+ */
+export function sliceRange(audio, { from = null, to = null } = {}) {
+  const duration = (audio?.length ?? 0) / SAMPLE_RATE;
+  const hasFrom = Number.isFinite(from) && from > 0;
+  const hasTo = Number.isFinite(to) && to > 0;
+  if (!hasFrom && !hasTo) return { from: 0, to: duration, audio, ranged: false };
+
+  const start = hasFrom ? Math.min(from, duration) : 0;
+  const end = hasTo ? Math.min(to, duration) : duration;
+  if (hasFrom && from >= duration) {
+    throw new Error(`The recording is only ${formatClock(duration)} long, so there is `
+      + `nothing to transcribe from ${formatClock(from)}.`);
+  }
+  if (end <= start) {
+    throw new Error(`"${formatClock(start)} to ${formatClock(end)}" is not a range to `
+      + 'transcribe — the end must come after the start.');
+  }
+  return {
+    from: start,
+    to: end,
+    audio: audio.subarray(Math.floor(start * SAMPLE_RATE), Math.floor(end * SAMPLE_RATE)),
+    ranged: true,
+  };
+}
+
+/**
+ * Move a transcript's timings into the original recording's clock.
+ *
+ * Everything downstream — the WebVTT, the CAQDAS cue offsets, the player gutter — reads
+ * these numbers as positions in the MEDIA. Transcribing a slice produces positions in the
+ * slice, and the two are only the same when the slice starts at zero. So the shift happens
+ * once, here, at the point where slice-time stops being useful to anyone.
+ */
+export function shiftTiming({ chunks = [], turns = null } = {}, by = 0) {
+  if (!by) return { chunks, turns };
+  return {
+    chunks: chunks.map((c) => ({ ...c, start: c.start + by, end: c.end + by })),
+    turns: turns ? turns.map((t) => ({ ...t, start: t.start + by, end: t.end + by })) : null,
+  };
+}
+
 const languageName = (code) => WHISPER_LANGUAGES.find(([c]) => c === code)?.[1] ?? code;
 
 /**
@@ -561,6 +710,7 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     mode: j.mode,
     size: j.size,
     seconds: j.seconds,
+    range: j.range ? { ...j.range } : null,
     language: j.language,
     detection: j.detection ? { ...j.detection } : null,
     progress: j.progress ? { ...j.progress } : null,
@@ -577,10 +727,17 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
    * queue passes a recorder that writes into a job record. Two code paths would drift,
    * and the segmented branch is too fiddly to maintain twice.
    */
-  function execute(audio, opts, report) {
+  function execute(full, opts, report) {
     const mode = opts.mode ?? 'both';
     const size = opts.size ?? 'base';
+    // SLICED FIRST, before anything else looks at the audio. Everything downstream —
+    // detection, segmentation, the duration estimate, diarization — then sees only the
+    // stretch the user asked for, with no second place that has to remember the range.
+    // The one thing that must know is the final timestamp shift, at the very end.
+    const range = sliceRange(full, opts);
+    const audio = range.audio;
     const seconds = audio.length / SAMPLE_RATE;
+    if (range.ranged) report.update?.({ type: 'range', from: range.from, to: range.to, seconds });
     const wantsText = mode === 'text' || mode === 'both';
     const wantsSpeakers = mode === 'speakers' || mode === 'both';
     const p = ensurePool();
@@ -651,8 +808,17 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
       const withSpeakers = turns
         ? chunks.map((c) => ({ ...c, speaker: speakerAt(turns, (c.start + c.end) / 2) }))
         : chunks;
+      // Speakers are matched to chunks in SLICE time, while both still agree, and the
+      // whole lot is shifted together afterwards. Shifting first would mean matching a
+      // media-time chunk against a slice-time turn.
+      const shifted = shiftTiming({ chunks: withSpeakers, turns }, range.from);
       const out = {
-        chunks: withSpeakers, turns, seconds, segmented: true, language, detection,
+        ...shifted,
+        seconds,
+        segmented: true,
+        language,
+        detection,
+        range: range.ranged ? { from: range.from, to: range.to } : null,
       };
       return { ...out, vtt: toVtt(out), limitations: LIMITATIONS };
     }
@@ -678,7 +844,20 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         // `detection` is null when the caller named a language; the field is still present
         // so a reader of a saved transcript can tell "English because asked" from
         // "English because detected", which are different claims.
-        return { ...(await job), language, detection };
+        const r = await job;
+        const moved = shiftTiming(r, range.from);
+        const out = {
+          ...r,
+          ...moved,
+          seconds,
+          language,
+          detection,
+          range: range.ranged ? { from: range.from, to: range.to } : null,
+        };
+        // The VTT is rebuilt from the shifted cues: `transcribe()` made one in slice time,
+        // and that is the copy a plugin turns into a document. Leaving it would put the
+        // text at 0:00 and the player at 2:15 and let them disagree silently.
+        return { ...out, vtt: toVtt(out) };
       } finally {
         clearInterval(tick);
         inFlight.delete(job);
@@ -733,6 +912,9 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
      */
     async run(bytes, opts = {}) {
       const mode = opts.mode ?? 'both';
+      // Parsed at the door: a bad time should reject the call the user just made, not
+      // surface minutes later as a failed job with a parser error in it.
+      const range = normaliseRange(opts);
       const audio = await decodeAudio(bytes);
       let ui = null;
       active += 1;
@@ -748,7 +930,7 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         onCancel: () => handle.cancel(),
       }) ?? null;
       try {
-        const execution = execute(audio, opts, report);
+        const execution = execute(audio, { ...opts, ...range }, report);
         handle.cancel = execution.cancel ?? handle.cancel;
         return await execution;
       } finally {
@@ -766,6 +948,9 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
      */
     enqueue(bytes, opts = {}) {
       ensurePool();
+      // Throws synchronously, before a job exists — the caller's `await enqueue(...)`
+      // rejects and the field they typed in is still in front of them.
+      const range = normaliseRange(opts);
       const id = `t${nextId++}`;
       const job = {
         id,
@@ -774,6 +959,12 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         mode: opts.mode ?? 'both',
         size: opts.size ?? 'base',
         seconds: null,
+        // Echoed from the request so a queued job can say "2:15–19:30" before it starts.
+        // `execute` sends back the CLAMPED range once it has the audio, which is the one
+        // that matters — "to 25:00" of a 20-minute file is really "to the end".
+        range: range.from !== null || range.to !== null
+          ? { from: range.from ?? 0, to: range.to ?? null }
+          : null,
         language: opts.language || null,
         detection: null,
         progress: null,
@@ -795,10 +986,17 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
           if (job.state === 'cancelled') return;
           job.state = 'running';
           job.startedAt = Date.now();
+          // The FULL duration for now; `execute` corrects it to the slice length the
+          // moment it has sliced, so a ranged job never shows the whole file's length.
           job.seconds = audio.length / SAMPLE_RATE;
           active += 1;
           const report = {
             update: (p) => {
+              if (p.type === 'range') {
+                job.range = { from: p.from, to: p.to };
+                job.seconds = p.seconds;
+                return;
+              }
               if (p.type === 'language') {
                 job.language = p.code;
                 job.detection = { name: p.name, confidence: p.confidence, mixed: p.mixed, dissenting: p.dissenting };
@@ -812,7 +1010,7 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
               }
             },
           };
-          const execution = execute(audio, opts, report);
+          const execution = execute(audio, { ...opts, ...range }, report);
           job.cancel = execution.cancel ?? null;
           job.result = await execution;
           job.state = 'done';

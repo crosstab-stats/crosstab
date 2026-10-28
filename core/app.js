@@ -61,7 +61,11 @@ import {
 import { ProjectStore } from './project-store.js';
 import { ProjectSync, PROJECT_CHANGED } from './project-sync.js';
 import { renderProjectList } from './project-list.js';
-import { createTranscribeService, LIMITATIONS } from './transcribe.js';
+import {
+  createTranscribeService,
+  LIMITATIONS,
+  formatClock as clock,
+} from './transcribe.js';
 import { DataView, VariableView, HistoryPanel } from './data-views.js';
 import { RConsole } from './r-console.js';
 import { PluginLoader } from './loader.js';
@@ -713,6 +717,10 @@ export async function boot(mounts) {
       // seconds detection takes — a finished-looking bar that is still working, which is
       // the exact appearance of a hang this dialog exists to avoid.
       let detecting = false;
+      // Which stretch is being transcribed, kept on screen for the same reason the
+      // language is: a transcript of the wrong five minutes is not obviously wrong, it is
+      // just a transcript. Shown only when a range was actually asked for.
+      const span = el('p', { class: 'ct-hint ct-transcribe__range', hidden: true });
       const bar = el('progress', { class: 'ct-transcribe__bar' });
       bar.max = 1;
       const stop = el('button', { type: 'button', class: 'ct-btn', text: 'Stop' });
@@ -728,6 +736,7 @@ export async function boot(mounts) {
         el('p', { class: 'ct-hint', text: hint }),
         el('p', { class: 'ct-hint ct-transcribe__caveat', text: fillers ? fillers.detail : '' }),
         status,
+        span,
         lang,
         bar,
         // `children` goes in the OPTIONS object. Passed positionally it is silently
@@ -743,6 +752,12 @@ export async function boot(mounts) {
           // has no per-chunk callback, so an hour of audio is one opaque await of twenty
           // minutes — silence long enough to read as a crash. An estimate shown AS an
           // estimate beats an indeterminate bar that never moves.
+          if (p.type === 'range') {
+            span.hidden = false;
+            span.textContent = `Transcribing ${clock(p.from)}–${clock(p.to)} only `
+              + `(${(p.seconds / 60).toFixed(1)} min of a longer recording).`;
+            return;
+          }
           if (p.stage === 'detect') {
             detecting = true;
             bar.removeAttribute('value');
