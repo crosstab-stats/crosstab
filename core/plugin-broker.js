@@ -214,6 +214,17 @@ export class PluginBroker {
     if (services.transcribe) {
       this.#dispatch['transcribe.run'] = (bytes, opts) => services.transcribe.run(bytes, opts);
       this.#dispatch['transcribe.options'] = () => services.transcribe.options();
+      // The QUEUE, for a plugin that owns its own UI. `run` waits and shows the host's
+      // modal; a workspace tab transcribing seven interviews wants neither. Everything
+      // here is plain data in both directions, which is what lets it cross the broker at
+      // all — a progress callback could not.
+      this.#dispatch['transcribe.enqueue'] = (bytes, opts) => services.transcribe.enqueue(bytes, opts);
+      this.#dispatch['transcribe.status'] = () => services.transcribe.status();
+      this.#dispatch['transcribe.result'] = (id) => services.transcribe.result(id);
+      this.#dispatch['transcribe.cancel'] = (id) => services.transcribe.cancel(id);
+      this.#dispatch['transcribe.pause'] = () => services.transcribe.pause();
+      this.#dispatch['transcribe.resume'] = () => services.transcribe.resume();
+      this.#dispatch['transcribe.forget'] = (id) => services.transcribe.forget(id);
     }
     // Owner-scoped read of a workspace blob the plugin declares (#139, #146).
     if (services.stateRead) {

@@ -157,6 +157,13 @@ export const manifest = {
     },
   ],
   workspaces: [{
+    // A SECOND tab (#139). Transcription churns here while finished transcripts are read
+    // and checked in Coding beside it — a modal would block exactly that. Project-scoped
+    // rather than dataset-scoped would be wrong: the media it works on belongs to a
+    // dataset, and so does the transcript it produces.
+    id: 'caqdas-transcripts',
+    title: 'Transcripts',
+  }, {
     id: 'caqdas-coding',
     title: 'Coding',
     // Collaboration merge (#143): this workspace's blob is a *composite* (codebook
@@ -430,7 +437,13 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 `;
 
 export const workspace = {
-  async mount(app, root) {
+  /**
+   * One module, two tabs. The host passes `{id, title}` as the third argument, which is
+   * how a plugin declaring several workspaces knows which one is being mounted.
+   * @param {{id?: string}} [info]
+   */
+  async mount(app, root, info = {}) {
+    if (info.id === 'caqdas-transcripts') return mountTranscripts(app, root);
     // --- state ---------------------------------------------------------------
     const state = await loadState(app);
     // Who's coding (#148): stamp each code/segment THIS user creates with an identity
@@ -4759,6 +4772,34 @@ export function timingValue({ cues, refs = [] }) {
  * {@link parseTranscript} for why the workspace must not depend on a column NAME. Strict
  * about what it accepts, because every other string in the dataset is offered to it.
  */
+/**
+ * Turn a transcription result into a CAQDAS transcript document.
+ *
+ * The engine hands back DATA and says nothing about what a transcript IS — that decision
+ * belongs to whoever will use it, and another plugin filing the same result in its own
+ * dataset would be equally right. CAQDAS's answer is the shape it already codes.
+ *
+ * Which is why this DELEGATES rather than assembling anything. The result carries a
+ * WebVTT string, and `parseTranscript` is the same parser an imported `.vtt` goes
+ * through — it builds the text and the cue offsets together "so they cannot disagree",
+ * resolves speakers, and has fifty-odd tests behind it. A second implementation here
+ * would be a second place for the two coordinate systems to drift apart, and the first
+ * draft of this function duplicated that logic and promptly reproduced a bug the parser
+ * had already been taught to avoid.
+ *
+ * A transcribed interview and an imported transcript are therefore the same kind of
+ * document, byte for byte in shape.
+ *
+ * @param {{vtt?: string}} result  from `app.transcribe.result(id)`
+ * @param {string|null} mediaRef  the `asset:` ref this was transcribed FROM
+ * @returns {{text: string, timing: string}}  `timing` is the cell value, ready to store
+ */
+export function transcriptToDocument(result, mediaRef = null) {
+  const parsed = parseTranscript(String(result?.vtt ?? ''), { kind: 'vtt' });
+  const refs = typeof mediaRef === 'string' && mediaRef ? [mediaRef] : [];
+  return { text: parsed.text, timing: timingValue({ cues: parsed.cues, refs }) };
+}
+
 export function parseTiming(raw) {
   const s = String(raw ?? '').trim();
   if (s[0] !== '{') return null;
@@ -5991,4 +6032,322 @@ function importMediaRow({ name, ref, medium, size, dims }) {
     columns.height = [dims.height];
   }
   return { variables, columns, source: name };
+}
+
+/**
+ * The Transcripts workspace — the second tab (#139).
+ *
+ * Why a tab and not a dialog: seven interviews is an ordinary afternoon, and a modal
+ * blocks exactly the work it is covering. Here the queue churns in its own space while
+ * finished transcripts can be read and checked in the Coding tab beside it.
+ *
+ * Why CAQDAS owns this at all: the engine hands back DATA and says nothing about what a
+ * transcript IS. That decision belongs to whoever is going to use it, and CAQDAS's answer
+ * is the shape it already codes — a text document plus a sibling timing value, which gives
+ * it a player and a time gutter while leaving char spans, highlights, retrieve and export
+ * on the ordinary text path. Another plugin putting the same result in its own dataset
+ * would be equally right.
+ *
+ * Progress is PULLED, not pushed: a function cannot cross the broker's structured clone,
+ * so the host cannot hand this frame a callback. `app.transcribe.status()` returns plain
+ * data and this polls it.
+ */
+async function mountTranscripts(app, root) {
+  const css = (el, styles) => { Object.assign(el.style, styles); return el; };
+  const mk = (tag, styles, text) => {
+    const e = document.createElement(tag);
+    if (styles) css(e, styles);
+    if (text != null) e.textContent = String(text);
+    return e;
+  };
+  // CSSOM, never style attributes: the sandbox CSP is `default-src 'none'`, which blocks
+  // an inline style attribute but not a property set through the object model.
+  const BTN = { font: 'inherit', padding: '4px 10px', border: '1px solid #ccd2d8',
+    borderRadius: '6px', background: '#fff', cursor: 'pointer' };
+  const MUTED = { color: '#5b6672', fontSize: '12px' };
+
+  root.replaceChildren();
+  css(root, { font: '14px/1.5 system-ui, sans-serif', padding: '12px', color: '#1b2530' });
+
+  const h = mk('h2', { fontSize: '1.05rem', margin: '0 0 2px' }, 'Transcripts');
+  const sub = mk('p', { ...MUTED, margin: '0 0 10px' },
+    'Speech to text, on this device. Finished transcripts can be coded in the Coding tab.');
+  root.append(h, sub);
+
+  // ---- what the engine says it cannot do, before anyone spends an hour finding out ----
+  let options = { sizes: [], modes: [], languages: [], limitations: [] };
+  try { options = await app.transcribe.options(); } catch { /* capability absent */ }
+  if (!app.transcribe?.enqueue) {
+    root.append(mk('p', { color: '#b3261e' },
+      'Transcription is not available in this build.'));
+    return;
+  }
+  for (const lim of options.limitations ?? []) {
+    const p = mk('p', { ...MUTED, margin: '0 0 6px', borderLeft: '3px solid #e3b341',
+      paddingLeft: '8px' }, lim.detail);
+    root.append(p);
+  }
+
+  // ---- controls -----------------------------------------------------------------
+  const bar = mk('div', { display: 'flex', gap: '8px', alignItems: 'center',
+    flexWrap: 'wrap', margin: '10px 0' });
+  const select = (items, value) => {
+    const s = mk('select', { font: 'inherit', padding: '3px' });
+    for (const it of items) {
+      const o = document.createElement('option');
+      o.value = it.id ?? it.code;
+      o.textContent = it.label ?? it.name;
+      s.append(o);
+    }
+    if (value) s.value = value;
+    return s;
+  };
+  const sizeSel = select(options.sizes ?? [], 'base');
+  const modeSel = select(options.modes ?? [], 'text');
+  const langSel = select(options.languages ?? [], 'en');
+  const allBtn = css(mk('button', BTN, 'Transcribe all'), { fontWeight: '600' });
+  const pauseBtn = mk('button', BTN, 'Pause');
+  bar.append(mk('label', MUTED, 'Model'), sizeSel, mk('label', MUTED, 'Mode'), modeSel,
+    mk('label', MUTED, 'Language'), langSel, allBtn, pauseBtn);
+  root.append(bar);
+
+  const capacityLine = mk('p', { ...MUTED, margin: '0 0 8px' }, '');
+  root.append(capacityLine);
+
+  const tableWrap = mk('div', { overflowX: 'auto' });
+  const table = mk('table', { borderCollapse: 'collapse', width: '100%', fontSize: '13px' });
+  tableWrap.append(table);
+  root.append(tableWrap);
+
+  const footer = mk('div', { display: 'flex', gap: '8px', alignItems: 'center',
+    margin: '12px 0' });
+  const saveBtn = mk('button', BTN, 'Save transcripts to a new dataset');
+  const saveNote = mk('span', MUTED, '');
+  footer.append(saveBtn, saveNote);
+  root.append(footer);
+
+  // ---- the media in this dataset --------------------------------------------------
+  //
+  // Found by SHAPE, not by column name — the same rule the Coding tab uses to spot a
+  // media document, because a name breaks the moment someone renames a column or joins
+  // two datasets.
+  let rows = [];
+  let mediaColumn = null;
+  let labelColumn = null;
+
+  async function loadMedia() {
+    rows = [];
+    mediaColumn = null;
+    const meta = await app.data.getVariableMeta();
+    const names = meta.filter((m) => m.type !== 'numeric').map((m) => m.name);
+    if (!names.length) return;
+    const [probe] = await app.data.getRows({ variables: names, limit: 1 });
+    if (!probe) return;
+    mediaColumn = names.find((n) => parseMediaRefs(String(probe[n] ?? ''))) ?? null;
+    if (!mediaColumn) return;
+    labelColumn = names.find((n) => n !== mediaColumn) ?? null;
+    const want = labelColumn ? [mediaColumn, labelColumn] : [mediaColumn];
+    const got = await app.data.getRows({ variables: want, includeRowId: true, limit: 500 });
+    rows = got.map((r) => {
+      const refs = parseMediaRefs(String(r[mediaColumn] ?? ''));
+      return refs ? {
+        rid: String(r.__rid),
+        ref: refs[0],
+        label: labelColumn && r[labelColumn] != null ? String(r[labelColumn]) : `Row ${r.__rid}`,
+      } : null;
+    }).filter(Boolean);
+  }
+
+  // ---- transcripts we already have -------------------------------------------------
+  //
+  // Kept in workspace state so a finished transcript survives a tab switch, a reload and
+  // a reopened project — losing an hour of transcription to a navigation would be
+  // unforgivable, and the engine's queue is memory-only by design.
+  let saved = {};
+  try { saved = (await app.state.get())?.transcripts ?? {}; } catch { saved = {}; }
+  const persist = async () => {
+    try {
+      const cfg = (await app.state.get()) ?? {};
+      await app.state.set({ ...cfg, transcripts: saved });
+    } catch (e) { console.warn('[caqdas] could not persist transcripts', e); }
+  };
+
+  /** rid → the queue job id currently working on it. */
+  const jobOf = new Map();
+
+  async function startOne(row) {
+    if (jobOf.has(row.rid) || saved[row.rid]) return;
+    const blob = await app.assets.load(row.ref);
+    const bytes = await blob.arrayBuffer();
+    const { id } = await app.transcribe.enqueue(bytes, {
+      name: row.label,
+      mode: modeSel.value || 'text',
+      size: sizeSel.value || 'base',
+      language: langSel.value || 'en',
+    });
+    jobOf.set(row.rid, id);
+  }
+
+  allBtn.addEventListener('click', async () => {
+    allBtn.disabled = true;
+    try {
+      for (const row of rows) await startOne(row);
+    } catch (e) {
+      saveNote.textContent = `Could not start: ${e.message}`;
+    } finally {
+      allBtn.disabled = false;
+    }
+  });
+
+  pauseBtn.addEventListener('click', async () => {
+    const s = await app.transcribe.status();
+    if (s.paused) await app.transcribe.resume();
+    else await app.transcribe.pause();
+    await refresh();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const done = rows.filter((r) => saved[r.rid]);
+    if (!done.length) { saveNote.textContent = 'Nothing transcribed yet.'; return; }
+    saveBtn.disabled = true;
+    try {
+      // A NEW dataset, because the plugin API has no add-a-column-here: `data.create` is
+      // the only write. The media column travels with it so the transcript sits beside
+      // the recording it came from, and the timing column is what makes CAQDAS render it
+      // as a playable transcript rather than a wall of text.
+      const name = `${mediaColumn || 'media'} — transcripts`;
+      const variables = [
+        { name: 'label', type: 'text' },
+        { name: 'media', type: 'text' },
+        { name: 'transcript', type: 'text' },
+        { name: 'transcript_timing', type: 'text' },
+      ];
+      const columns = {
+        label: done.map((r) => r.label),
+        media: done.map((r) => JSON.stringify([r.ref])),
+        transcript: done.map((r) => saved[r.rid].text),
+        // Already a string — `timingValue` serialises it. Stringifying again would store
+        // a quoted JSON blob that parseTiming rejects, and the transcript would land in
+        // the dataset as plain text with no player and no gutter.
+        transcript_timing: done.map((r) => saved[r.rid].timing),
+      };
+      await app.data.create({ name, variables, columns, activate: false });
+      saveNote.textContent = `Saved ${done.length} transcript(s) as "${name}". `
+        + 'Switch the Coding tab to it to code them against the audio.';
+    } catch (e) {
+      saveNote.textContent = `Could not save: ${e.message}`;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  // ---- render ---------------------------------------------------------------------
+  function describe(job, row) {
+    if (saved[row.rid]) {
+      const words = saved[row.rid].text.trim() ? saved[row.rid].text.trim().split(/\s+/).length : 0;
+      return { state: 'transcribed', detail: `${words} words` };
+    }
+    if (!job) return { state: '—', detail: '' };
+    if (job.state === 'running' && job.progress?.total) {
+      return { state: 'running', detail: `part ${job.progress.done} of ${job.progress.total}` };
+    }
+    if (job.state === 'running' && job.progress?.elapsedMs != null) {
+      return { state: 'running', detail: `${Math.round(job.progress.elapsedMs / 1000)}s` };
+    }
+    return { state: job.state, detail: job.error ?? '' };
+  }
+
+  async function refresh() {
+    let status = { jobs: [], paused: false, capacity: {} };
+    try { status = await app.transcribe.status(); } catch { /* keep the last view */ }
+    const byId = new Map(status.jobs.map((j) => [j.id, j]));
+
+    // Harvest anything that finished since the last tick.
+    for (const [rid, id] of [...jobOf]) {
+      const job = byId.get(id);
+      if (!job) continue;
+      if (job.state === 'done' && !saved[rid]) {
+        const row = rows.find((r) => r.rid === rid);
+        const result = await app.transcribe.result(id);
+        if (result) {
+          saved[rid] = transcriptToDocument(result, row?.ref ?? null);
+          await persist();
+        }
+        jobOf.delete(rid);
+        await app.transcribe.forget(id);
+      } else if (job.state === 'failed' || job.state === 'cancelled') {
+        jobOf.delete(rid);
+      }
+    }
+
+    pauseBtn.textContent = status.paused ? 'Resume' : 'Pause';
+    const cap = status.capacity ?? {};
+    capacityLine.textContent = status.paused
+      ? 'Paused — the segment in progress will finish, then nothing else starts.'
+      : (cap.basis ? `Running ${cap.basis}.` : '');
+
+    table.replaceChildren();
+    const head = mk('tr');
+    for (const label of ['Recording', 'State', 'Progress', '']) {
+      head.append(css(mk('th', { textAlign: 'left', padding: '4px 8px',
+        borderBottom: '1px solid #d8dde2', ...MUTED }, label), {}));
+    }
+    table.append(head);
+    if (!rows.length) {
+      const tr = mk('tr');
+      const td = mk('td', { padding: '8px', ...MUTED },
+        mediaColumn
+          ? 'No media in this dataset.'
+          : 'No media column found. Import audio or video first, then come back.');
+      td.colSpan = 4;
+      tr.append(td);
+      table.append(tr);
+      return;
+    }
+    for (const row of rows) {
+      const job = byId.get(jobOf.get(row.rid));
+      const d = describe(job, row);
+      const tr = mk('tr');
+      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4' }, row.label));
+      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4' }, d.state));
+      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4', ...MUTED }, d.detail));
+      const actions = mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4' });
+      if (saved[row.rid]) {
+        const again = mk('button', BTN, 'Redo');
+        again.addEventListener('click', async () => {
+          delete saved[row.rid];
+          await persist();
+          await startOne(row);
+          await refresh();
+        });
+        actions.append(again);
+      } else if (job && (job.state === 'running' || job.state === 'queued')) {
+        const stop = mk('button', BTN, 'Stop');
+        stop.addEventListener('click', async () => {
+          await app.transcribe.cancel(job.id);
+          jobOf.delete(row.rid);
+          await refresh();
+        });
+        actions.append(stop);
+      } else {
+        const go = mk('button', BTN, 'Transcribe');
+        go.addEventListener('click', async () => {
+          try { await startOne(row); await refresh(); } catch (e) {
+            saveNote.textContent = `Could not start: ${e.message}`;
+          }
+        });
+        actions.append(go);
+      }
+      tr.append(actions);
+      table.append(tr);
+    }
+  }
+
+  await loadMedia();
+  await refresh();
+  // Polling, because progress cannot be pushed across the broker. Slow enough not to
+  // matter, fast enough that a finished transcript appears while the next is still
+  // running — which is the whole point of the tab.
+  const timer = setInterval(() => { void refresh(); }, 800);
+  root.addEventListener('ct-unmount', () => clearInterval(timer), { once: true });
 }

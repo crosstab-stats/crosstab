@@ -23,7 +23,7 @@ const SRC = await readFile(new URL('../plugins/builtin-caqdas/index.js', import.
 
 const {
   parseTranscript, sniffTranscript, parseTimestamp, timingValue, parseTiming,
-  cueAtChar, clockOf, textRuns, activeCueIndex,
+  cueAtChar, clockOf, textRuns, activeCueIndex, transcriptToDocument,
 } = await import('../plugins/builtin-caqdas/index.js');
 
 // =============================================================================
@@ -582,4 +582,85 @@ test('a time gutter is not selectable, which is a separate guard from the offset
   const css = SRC.slice(SRC.indexOf('.caqdas__cuetime {'), SRC.indexOf('.caqdas__cuetime:hover'));
   assert.match(css, /user-select: none/);
   assert.match(css, /-webkit-user-select: none/, 'iPad Safari needs the prefix');
+});
+
+// =============================================================================
+// From a transcription result to a codeable transcript (#139)
+// =============================================================================
+//
+// The engine hands back data and says nothing about what a transcript IS — that is the
+// plugin's decision, and another plugin putting the same result in its own dataset would
+// be equally right. CAQDAS's answer is the shape the tests above already describe: text
+// plus cues, two coordinate systems that must stay in step.
+
+// The engine's result carries a WebVTT string, which is what `transcriptToDocument`
+// feeds to the SAME parser an imported .vtt goes through. These build one the way core
+// does (`toVtt`), so the two halves are tested against each other rather than against a
+// hand-written fixture that could drift from what the engine actually emits.
+const vttTime = (s) => {
+  const h = String(Math.floor(s / 3600)).padStart(2, '0');
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const sec = String(Math.floor(s % 60)).padStart(2, '0');
+  const ms = String(Math.round((s - Math.floor(s)) * 1000)).padStart(3, '0');
+  return `${h}:${m}:${sec}.${ms}`;
+};
+const result = (chunks) => ({
+  chunks,
+  vtt: ['WEBVTT', ''].concat(chunks.flatMap((c) => [
+    `${vttTime(c.start)} --> ${vttTime(c.end ?? c.start)}`,
+    c.speaker === null || c.speaker === undefined
+      ? String(c.text ?? '')
+      : `<v Speaker ${c.speaker + 1}>${String(c.text ?? '')}`,
+    '',
+  ])).join('\n'),
+});
+
+test('a transcribed interview is the SAME shape as an imported .vtt', () => {
+  // The point of delegating: one parser, so the two can never drift. A second
+  // implementation here would be a second place for text offsets and cue times to
+  // disagree, which is the bug that puts a coded highlight on the wrong words.
+  const doc = transcriptToDocument(result([
+    { start: 0, end: 2.5, text: 'Hello there', speaker: 0 },
+    { start: 2.5, end: 5, text: 'and welcome', speaker: 1 },
+  ]), 'asset:xyz');
+  const parsed = parseTiming(doc.timing);
+  assert.ok(parsed, 'the timing cell is one parseTiming accepts');
+  assert.deepEqual(parsed.media, ['asset:xyz']);
+  assert.equal(parsed.cues.length, 2);
+  // Every cue must point at its own words in the assembled text.
+  for (const c of parsed.cues) {
+    const slice = doc.text.slice(c.start, c.end);
+    assert.ok(slice.trim().length, `cue ${c.tStart} covers text`);
+  }
+  assert.match(doc.text, /Hello there/);
+  assert.match(doc.text, /and welcome/);
+});
+
+test('the timing cell carries the version the rest of the code expects', () => {
+  // timingValue stamps `v: 1`; a hand-rolled JSON.stringify here omitted it, which is
+  // the sort of difference that goes unnoticed until a future reader needs it.
+  const doc = transcriptToDocument(result([{ start: 0, end: 1, text: 'hi' }]), 'asset:a');
+  assert.equal(JSON.parse(doc.timing).v, 1);
+});
+
+test('speakers survive the round trip as names', () => {
+  const doc = transcriptToDocument(result([
+    { start: 0, end: 1, text: 'first', speaker: 0 },
+    { start: 1, end: 2, text: 'second', speaker: 1 },
+  ]), null);
+  const parsed = parseTiming(doc.timing);
+  assert.deepEqual(parsed.cues.map((c) => c.speaker), ['Speaker 1', 'Speaker 2']);
+});
+
+test('a media ref is optional — without one it is a transcript with no player', () => {
+  const doc = transcriptToDocument(result([{ start: 0, end: 1, text: 'hi' }]), null);
+  assert.deepEqual(parseTiming(doc.timing).media, []);
+});
+
+test('nothing in, nothing out — and it does not throw', () => {
+  for (const bad of [null, undefined, {}, { vtt: '' }, { vtt: 'WEBVTT\n' }]) {
+    const doc = transcriptToDocument(bad);
+    assert.equal(typeof doc.text, 'string');
+    assert.equal(typeof doc.timing, 'string');
+  }
 });

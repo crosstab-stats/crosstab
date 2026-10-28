@@ -339,7 +339,13 @@ test('transcription is exposed to plugins, like zip and state.read', async () =>
   assert.match(broker, /'transcribe\.options'/);
 
   const host = readFileSync('plugin-host.html', 'utf8');
-  assert.match(host, /transcribe: makeNamespace\('transcribe', \['run', 'options'\]\)/);
+  // The queue is part of the capability too: a plugin owning a transcription tab needs
+  // enqueue/status/result/cancel/pause/resume, and every one of them is plain data in
+  // both directions — which is exactly why they can cross the broker at all.
+  assert.match(host, /transcribe: makeNamespace\('transcribe', \['run', 'options', 'enqueue',/);
+  for (const m of ['enqueue', 'status', 'result', 'cancel', 'pause', 'resume', 'forget']) {
+    assert.match(broker, new RegExp(`'transcribe\.${m}'`), `${m} is brokered`);
+  }
 
   const app = codeOf('core/app.js');
   assert.match(app, /services\.transcribe = createTranscribeService\(/);

@@ -297,7 +297,8 @@
             // cannot create a Worker, and every CSP tier here is `connect-src 'none'`,
             // so it could neither run the model nor fetch it. Progress and cancel are
             // host-rendered — a callback cannot cross this postMessage boundary.
-            transcribe: makeNamespace('transcribe', ['run', 'options']),
+            transcribe: makeNamespace('transcribe', ['run', 'options', 'enqueue',
+              'status', 'result', 'cancel', 'pause', 'resume', 'forget']),
             // Cross-plugin discovery + invocation (#147): list active plugins and
             // their analysis functions, run another plugin's analysis.
             plugins: Object.freeze({
