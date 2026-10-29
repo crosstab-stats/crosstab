@@ -703,3 +703,81 @@ test('a field can shrink instead of pushing the row off a phone screen', () => {
   assert.match(bar, /flexWrap: 'nowrap'/, 'but never break inside a field');
   assert.match(bar, /flexWrap: 'wrap'/, 'while the bar itself wraps between fields');
 });
+
+// =============================================================================
+// A transcription must survive the tab being re-created
+//
+// Reported from a phone: a 21-minute interview reached "part 2 of 11" and then the row
+// went back to idle as if nothing had been started. The row -> job mapping lived in a
+// plain Map rebuilt on every mount, and this tab is an iframe that gets re-created — by
+// a dataset switch, a project switch, the Restart button, or iOS discarding it under the
+// memory pressure transcription itself creates. Losing the map orphaned the job: the row
+// showed idle, and because harvesting only ever walks that map, the transcript the engine
+// went on to finish was never collected.
+//
+// Driven in a browser against a fake queue, before and after: the old code showed
+// "— Transcribe" after a remount with the job sitting in the queue done and unclaimed;
+// the new code still showed "running — part 2 of 11" and harvested it on completion.
+// These pin the parts of that which can be checked without a DOM.
+// =============================================================================
+
+test('the in-flight row to job mapping is persisted, not just the finished transcripts', () => {
+  // `transcripts` was always persisted — the comment above it even says losing an hour
+  // of transcription to a navigation would be unforgivable. The job still RUNNING was
+  // the half that was not kept.
+  assert.ok(SRC.includes('transcribing:'), 'state carries the in-flight mapping');
+  assert.ok(
+    SRC.includes('transcripts: saved, transcribing: pending'),
+    'both halves are written by the same persist()',
+  );
+  assert.ok(
+    SRC.includes('new Map(Object.entries(pending))'),
+    'and a fresh mount starts from what the last one left behind',
+  );
+});
+
+test('a job is recorded when it STARTS, not when it finishes', () => {
+  // Writing it on completion would be useless: the whole point is to survive something
+  // that happens while the job is still running.
+  const start = SRC.indexOf('async function startOne');
+  const body = SRC.slice(start, SRC.indexOf('allBtn.addEventListener', start));
+  assert.ok(body.includes('pending[row.rid] = id'), 'the mapping is written at enqueue time');
+  assert.ok(body.includes('await persist()'), 'and flushed immediately');
+});
+
+test('re-attaching by name requires an unambiguous pairing', () => {
+  // Row ids change when a dataset is reloaded, so the persisted map is not always enough
+  // and the job name (the row label) is the only other handle. Guessing wrong would file
+  // a transcript against the wrong recording, which is worse than leaving it unattached
+  // where it is at least visible — so it only adopts when there is exactly one candidate
+  // on each side.
+  const at = SRC.indexOf('And adopt a job that is plainly ours');
+  assert.ok(at > 0, 'the re-attach pass exists');
+  const body = SRC.slice(at, at + 1400);
+  assert.ok(body.includes('matches.length === 1'), 'one row with that label');
+  assert.ok(body.includes('sameName.length === 1'), 'and one job with that name');
+});
+
+test('work that cannot be matched to a row is reported, never silently dropped', () => {
+  assert.ok(SRC.includes('const orphans = status.jobs.filter'), 'unattached jobs are collected');
+  // The phrase wraps across a template-literal line, so match the contiguous part.
+  assert.ok(SRC.includes('not matched to a '), 'and said out loud');
+  assert.ok(SRC.includes('finished but unclaimed'), 'including the ones already done');
+  // Discarding must not be able to stop work in progress.
+  const at = SRC.indexOf('orphanDiscard.addEventListener');
+  const body = SRC.slice(at, at + 700);
+  assert.ok(body.includes('app.transcribe.forget()'), 'discard only forgets finished jobs');
+});
+
+test('every path that drops the mapping drops the persisted copy too', () => {
+  // A stale entry pointing at a job the engine no longer has would leave a row waiting
+  // forever on something that does not exist.
+  const refresh = SRC.slice(SRC.indexOf('async function refresh()'));
+  const harvest = refresh.slice(0, refresh.indexOf('table.replaceChildren'));
+  const deletes = (harvest.match(/delete pending\[/g) ?? []).length;
+  assert.ok(deletes >= 2, `harvest and failure both clear it (found ${deletes})`);
+  assert.ok(
+    harvest.includes('if (!byId.has(id))'),
+    'and a mapping naming a job the engine has lost is dropped on sight',
+  );
+});

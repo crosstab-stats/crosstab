@@ -18,6 +18,37 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
+- [ ] **#194 — a transcription worker that dies silently stalls its job forever.**
+      Found while diagnosing the "stopped at part 2" report (which turned out to be the
+      CAQDAS remount bug, fixed separately — this is the OTHER thing that came out of
+      reading the path). `transcribe()` settles only on a worker message or
+      `worker.onerror`, and there is no timeout anywhere in `core/transcribe.js` or
+      `core/transcribe-pool.js`. iOS kills workers under memory pressure without firing
+      `onerror`, and a worker killed that way leaves the promise unsettled: `running`
+      stays incremented in the pool, `pump()` never runs, so the job freezes AND nothing
+      else in the queue starts either. No error, no recovery, nothing in the UI.
+
+      The pool already handles this properly once it is told — `looksLikeDeviceLimit`
+      matches "worker failed|terminated|out of memory|…", backs off a worker and retries
+      the segment once. So the fix is only to turn silence into that rejection.
+
+      **A heartbeat from inside the worker does not work, and this is measured.** The
+      obvious design is a `setInterval` in the worker proving the process is alive. Ran
+      it against a real 120-second segment: during 26.6 s of inference a 250 ms timer
+      fired **once**. ORT's WASM inference blocks the worker's event loop almost
+      completely, so a heartbeat cannot tell "busy" from "dead" — it would either
+      false-positive constantly or need a threshold so loose it measures nothing.
+      transformers.js 4.3.1's `callback_function` is no better: passed through `pipe()`
+      it fired **zero** times across the same segment.
+
+      So it has to be a duration watchdog: expected segment time from `MODEL_SIZES`
+      (`base` = 16 min per hour, so a 120 s segment ≈ 32 s, measured 26.6 s on desktop)
+      times a generous factor, with a floor. Erring long costs a stalled user a few extra
+      minutes; erring short kills healthy work on a slow or thermally throttled phone,
+      which is worse. Not built yet because the threshold wants evidence from a phone
+      under real memory pressure rather than a number picked at a desk — and because the
+      remount fix removed the only case we have actually observed.
+
 - [~] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
       **BUILT 2026-10-14** (H1–H6). What remains is CONTENT, not mechanism — see #184 — plus
       screenshots, which the renderer supports and nothing yet uses.

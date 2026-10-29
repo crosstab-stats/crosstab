@@ -6229,6 +6229,15 @@ async function mountTranscripts(app, root) {
   const capacityLine = mk('p', { ...MUTED, margin: '0 0 8px' }, '');
   root.append(capacityLine);
 
+  // Work the tab cannot match to a row in front of the user — a job started against a
+  // dataset since switched away from, or one whose row id changed under it. It is shown
+  // rather than hidden: an invisible job is how an hour of transcription disappears with
+  // nobody told, which is exactly what happened on a phone.
+  const orphanLine = mk('p', { ...MUTED, margin: '0 0 8px' });
+  orphanLine.hidden = true;
+  const orphanDiscard = mk('button', BTN, 'Discard them');
+  root.append(orphanLine);
+
   const tableWrap = mk('div', { overflowX: 'auto' });
   const table = mk('table', { borderCollapse: 'collapse', width: '100%', fontSize: '13px' });
   tableWrap.append(table);
@@ -6279,16 +6288,29 @@ async function mountTranscripts(app, root) {
   // a reopened project — losing an hour of transcription to a navigation would be
   // unforgivable, and the engine's queue is memory-only by design.
   let saved = {};
-  try { saved = (await app.state.get())?.transcripts ?? {}; } catch { saved = {}; }
+  // rid → the queue job id working on it. PERSISTED, for the same reason the finished
+  // transcripts are: this tab is an iframe that gets re-created — by a dataset switch, a
+  // project switch, the Restart button, or iOS discarding it under the memory pressure
+  // that transcription itself creates. Every mount used to start with an empty Map, so a
+  // remount mid-run orphaned the job: the row fell back to idle as though nothing had
+  // been started, and because harvesting only ever walks this map, the transcript the
+  // engine went on to finish was never collected. Reported from a phone as a 21-minute
+  // interview that "stopped at part 2" and left no trace.
+  let pending = {};
+  try {
+    const st = (await app.state.get()) ?? {};
+    saved = st.transcripts ?? {};
+    pending = st.transcribing ?? {};
+  } catch { saved = {}; pending = {}; }
   const persist = async () => {
     try {
       const cfg = (await app.state.get()) ?? {};
-      await app.state.set({ ...cfg, transcripts: saved });
+      await app.state.set({ ...cfg, transcripts: saved, transcribing: pending });
     } catch (e) { console.warn('[caqdas] could not persist transcripts', e); }
   };
 
-  /** rid → the queue job id currently working on it. */
-  const jobOf = new Map();
+  /** rid → the queue job id currently working on it, restored from the last mount. */
+  const jobOf = new Map(Object.entries(pending));
 
   async function startOne(row) {
     if (jobOf.has(row.rid) || saved[row.rid]) return;
@@ -6307,6 +6329,10 @@ async function mountTranscripts(app, root) {
       to: toIn.value.trim(),
     });
     jobOf.set(row.rid, id);
+    // Written BEFORE the work is done, not after: the whole point is to survive the
+    // thing that happens while it is still running.
+    pending[row.rid] = id;
+    await persist();
   }
 
   allBtn.addEventListener('click', async () => {
@@ -6319,6 +6345,16 @@ async function mountTranscripts(app, root) {
     } finally {
       allBtn.disabled = false;
     }
+  });
+
+  orphanDiscard.addEventListener('click', async () => {
+    orphanDiscard.disabled = true;
+    try {
+      // `forget` only drops jobs that have finished, failed or been cancelled, so this
+      // cannot throw away work still in progress — it tidies, it does not stop anything.
+      await app.transcribe.forget();
+      await refresh();
+    } finally { orphanDiscard.disabled = false; }
   });
 
   pauseBtn.addEventListener('click', async () => {
@@ -6444,6 +6480,40 @@ async function mountTranscripts(app, root) {
     try { status = await app.transcribe.status(); } catch { /* keep the last view */ }
     const byId = new Map(status.jobs.map((j) => [j.id, j]));
 
+    // ---- re-attach work this tab has lost sight of ---------------------------------
+    //
+    // A restored mapping can name a job the engine no longer has (it was forgotten, or
+    // the page reloaded and took the queue with it). Drop those rather than show a row
+    // waiting forever on something that does not exist.
+    let changed = false;
+    for (const [rid, id] of [...jobOf]) {
+      if (!byId.has(id)) { jobOf.delete(rid); delete pending[rid]; changed = true; }
+    }
+
+    // And adopt a job that is plainly ours but whose mapping did not survive — the row
+    // ids themselves change when a dataset is reloaded, so the persisted map is not
+    // always enough. Jobs carry the row's label as their name, which is the only other
+    // handle we have. ONLY when the pairing is unambiguous: one row with that label, one
+    // unattached job with that name. A guess that attaches a transcript to the wrong
+    // recording would be worse than leaving it unattached, where it is at least visible.
+    const attached = new Set(jobOf.values());
+    const live = status.jobs.filter((j) => !attached.has(j.id));
+    for (const job of live) {
+      const matches = rows.filter((r) => r.label === job.name && !jobOf.has(r.rid) && !saved[r.rid]);
+      const sameName = live.filter((j) => j.name === job.name);
+      if (matches.length === 1 && sameName.length === 1) {
+        jobOf.set(matches[0].rid, job.id);
+        pending[matches[0].rid] = job.id;
+        attached.add(job.id);
+        changed = true;
+      }
+    }
+    if (changed) await persist();
+
+    // Whatever is still unattached is reported rather than hidden. An invisible job is
+    // how an hour of transcription disappears without anybody being told.
+    const orphans = status.jobs.filter((j) => !attached.has(j.id));
+
     // Harvest anything that finished since the last tick.
     for (const [rid, id] of [...jobOf]) {
       const job = byId.get(id);
@@ -6456,10 +6526,34 @@ async function mountTranscripts(app, root) {
           await persist();
         }
         jobOf.delete(rid);
+        delete pending[rid];
+        await persist();
         await app.transcribe.forget(id);
       } else if (job.state === 'failed' || job.state === 'cancelled') {
         jobOf.delete(rid);
+        delete pending[rid];
+        await persist();
       }
+    }
+
+    if (orphans.length) {
+      const running = orphans.filter((j) => j.state === 'running' || j.state === 'queued').length;
+      const finished = orphans.filter((j) => j.state === 'done').length;
+      const parts = [];
+      if (running) parts.push(`${running} still working`);
+      if (finished) parts.push(`${finished} finished but unclaimed`);
+      orphanLine.replaceChildren(
+        document.createTextNode(
+          `${orphans.length} transcription${orphans.length > 1 ? 's' : ''} not matched to a `
+          + `recording here (${parts.join(', ') || 'stopped'}): `
+          + `${orphans.map((j) => j.name).join(', ')}. `
+          + 'They belong to another dataset, or to rows that have since changed. ',
+        ),
+        orphanDiscard,
+      );
+      orphanLine.hidden = false;
+    } else {
+      orphanLine.hidden = true;
     }
 
     pauseBtn.textContent = status.paused ? 'Resume' : 'Pause';
@@ -6516,6 +6610,8 @@ async function mountTranscripts(app, root) {
         stop.addEventListener('click', async () => {
           await app.transcribe.cancel(job.id);
           jobOf.delete(row.rid);
+          delete pending[row.rid];
+          await persist();
           await refresh();
         });
         actions.append(stop);
