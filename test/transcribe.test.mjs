@@ -38,6 +38,10 @@ import {
   sliceRange,
   shiftTiming,
   normaliseRange,
+  watchdogFor,
+  WATCHDOG_COLD_MS,
+  WATCHDOG_MIN_MS,
+  WATCHDOG_FACTOR,
 } from '../core/transcribe.js';
 
 // =============================================================================
@@ -840,4 +844,110 @@ test('an empty worker error is explained rather than called unknown', () => {
   assert.match(src, /Faster model/, 'and gives the user something to try');
   // The pool classifies by message, so these words have to stay.
   assert.match(src, /Transcription worker failed: \$\{detail\}/, 'still matches the pool\'s test');
+});
+
+// ---------------------------------------------------------------------------------
+// The watchdog (#194)
+//
+// A worker killed by the OS for memory does not reliably fire `onerror` — on iOS it
+// frequently just stops — and nothing in this file had a timeout, so the promise stayed
+// unsettled forever: the job froze, and the pool's slot was never released so everything
+// queued behind it froze too.
+//
+// Built for a device nobody here owns: a six-year-old iPad recording in the field on its
+// own microphone. That is what rules out a fixed timeout — too tight kills healthy work
+// on the slow device this exists to protect, too loose is not a safety net — and it is
+// why the budget is learned from the machine rather than guessed at a desk.
+// ---------------------------------------------------------------------------------
+
+test('with nothing measured yet, the watchdog is deliberately enormous', () => {
+  // A dead worker is dead forever, so patience costs a stalled user one wait. Impatience
+  // costs a slow user their transcript. Those are not symmetrical.
+  assert.ok(watchdogFor([]) >= WATCHDOG_COLD_MS, 'at least the flat floor');
+  assert.ok(watchdogFor() >= WATCHDOG_COLD_MS, 'and the same with no argument at all');
+  assert.ok(WATCHDOG_COLD_MS >= 10 * 60 * 1000, 'at least ten minutes before presuming death');
+});
+
+test('the cold budget comes from the model the user actually chose', () => {
+  // A flat cold budget was not safe for the device this feature exists for. "More
+  // accurate" is 2.5x slower than "Faster" by its own published figures, so a healthy
+  // first segment takes correspondingly longer — and a six-year-old iPad is several
+  // times slower again. The slower model has to get the longer leash automatically,
+  // rather than the user discovering the difference as a transcript full of holes.
+  const faster = watchdogFor([], { size: 'base' });
+  const accurate = watchdogFor([], { size: 'small' });
+  assert.ok(accurate > faster, 'the slower model waits longer before presuming death');
+  assert.ok(accurate / faster > 2, 'and by roughly the ratio of their speeds');
+  // An unknown model name must not produce something tighter than the floor.
+  assert.ok(watchdogFor([], { size: 'nonsense' }) >= WATCHDOG_COLD_MS);
+});
+
+test('one finished segment turns the guess into a measurement', () => {
+  // A modern phone doing a 2-minute segment in 20s should not wait ten minutes to notice
+  // a stall; it should wait a couple of minutes.
+  const quick = watchdogFor([20_000]);
+  assert.ok(quick < WATCHDOG_COLD_MS, 'it tightens once the device has shown its speed');
+  assert.equal(quick, WATCHDOG_MIN_MS, 'but never below the floor');
+});
+
+test('a slow device gets a proportionally longer leash', () => {
+  // The six-year-old iPad: five minutes a segment is not a stall, it is Tuesday.
+  const slow = watchdogFor([5 * 60 * 1000]);
+  assert.equal(slow, 5 * 60 * 1000 * WATCHDOG_FACTOR);
+  assert.ok(slow > 25 * 60 * 1000, 'half an hour of silence before giving up on it');
+});
+
+test('the SLOWEST segment sets the pace, not the average', () => {
+  // Devices throttle as they heat up, so segment nine is routinely slower than segment
+  // one. Judging by the mean would start failing healthy work exactly when the device is
+  // struggling hardest — which is when the user most needs it to keep going.
+  const warming = [20_000, 25_000, 40_000, 90_000];
+  assert.equal(watchdogFor(warming), 90_000 * WATCHDOG_FACTOR);
+  const mean = warming.reduce((a, b) => a + b, 0) / warming.length;
+  assert.ok(watchdogFor(warming) > mean * WATCHDOG_FACTOR, 'and that is more generous than the mean');
+});
+
+test('nonsense measurements are ignored rather than trusted', () => {
+  // Nothing usable falls back to the cold budget rather than to a tiny number — the
+  // dangerous direction here is always "too tight".
+  assert.ok(watchdogFor([0, -5, NaN, Infinity]) >= WATCHDOG_COLD_MS, 'nothing usable = cold');
+  assert.equal(watchdogFor([NaN, 30_000]), Math.max(WATCHDOG_MIN_MS, 30_000 * WATCHDOG_FACTOR));
+});
+
+test('a stall is reported as a worker failure, so the pool treats it as one', () => {
+  // The pool already knows what to do with a dead worker: back off and retry. The
+  // watchdog's whole job is to turn silence into that, so the words have to match
+  // `looksLikeDeviceLimit`.
+  const src = codeOf('core/transcribe.js');
+  const at = src.indexOf('it stopped responding for');
+  assert.ok(at > 0, 'the stall has its own message');
+  assert.ok(src.slice(at - 300, at).includes('Transcription worker failed:'),
+    'and it is phrased as a worker failure, which is what the pool matches on');
+});
+
+test('only a SUCCESS teaches the watchdog anything', () => {
+  // A segment that died early would make the device look fast and tighten the budget on
+  // the strength of a failure — each stall making the next one likelier.
+  const src = codeOf('core/transcribe.js');
+  const at = src.indexOf('observed.push(');
+  assert.ok(at > 0, 'durations are recorded');
+  const before = src.slice(Math.max(0, at - 300), at);
+  assert.ok(before.includes('await job'), 'only after the segment resolved');
+});
+
+test('any word from the worker counts as proof of life', () => {
+  // Model download posts progress for as long as it takes, so the budget covers
+  // inference alone rather than inference plus a 73 MB download on field wifi.
+  const src = codeOf('core/transcribe.js');
+  // BOTH handlers — detection has its own worker, and it loads the full model at the
+  // tightest moment of the run. The first draft of this test only looked at one of them
+  // and found detection had no watchdog at all.
+  const handlers = [...src.matchAll(/worker\.onmessage/g)].map((m) => m.index);
+  assert.equal(handlers.length, 2, 'detection and transcription each have a worker');
+  for (const at of handlers) {
+    const body = src.slice(at, at + 400);
+    assert.ok(body.includes('lastSignal = Date.now()'), 'the clock resets on every message');
+    assert.ok(body.indexOf('lastSignal') < body.indexOf("m.type === 'progress'"),
+      'before any filtering by message type');
+  }
 });

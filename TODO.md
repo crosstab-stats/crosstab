@@ -18,37 +18,6 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [ ] **#194 — a transcription worker that dies silently stalls its job forever.**
-      Found while diagnosing the "stopped at part 2" report (which turned out to be the
-      CAQDAS remount bug, fixed separately — this is the OTHER thing that came out of
-      reading the path). `transcribe()` settles only on a worker message or
-      `worker.onerror`, and there is no timeout anywhere in `core/transcribe.js` or
-      `core/transcribe-pool.js`. iOS kills workers under memory pressure without firing
-      `onerror`, and a worker killed that way leaves the promise unsettled: `running`
-      stays incremented in the pool, `pump()` never runs, so the job freezes AND nothing
-      else in the queue starts either. No error, no recovery, nothing in the UI.
-
-      The pool already handles this properly once it is told — `looksLikeDeviceLimit`
-      matches "worker failed|terminated|out of memory|…", backs off a worker and retries
-      the segment once. So the fix is only to turn silence into that rejection.
-
-      **A heartbeat from inside the worker does not work, and this is measured.** The
-      obvious design is a `setInterval` in the worker proving the process is alive. Ran
-      it against a real 120-second segment: during 26.6 s of inference a 250 ms timer
-      fired **once**. ORT's WASM inference blocks the worker's event loop almost
-      completely, so a heartbeat cannot tell "busy" from "dead" — it would either
-      false-positive constantly or need a threshold so loose it measures nothing.
-      transformers.js 4.3.1's `callback_function` is no better: passed through `pipe()`
-      it fired **zero** times across the same segment.
-
-      So it has to be a duration watchdog: expected segment time from `MODEL_SIZES`
-      (`base` = 16 min per hour, so a 120 s segment ≈ 32 s, measured 26.6 s on desktop)
-      times a generous factor, with a floor. Erring long costs a stalled user a few extra
-      minutes; erring short kills healthy work on a slow or thermally throttled phone,
-      which is worse. Not built yet because the threshold wants evidence from a phone
-      under real memory pressure rather than a number picked at a desk — and because the
-      remount fix removed the only case we have actually observed.
-
 - [~] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
       **BUILT 2026-10-14** (H1–H6). What remains is CONTENT, not mechanism — see #184 — plus
       screenshots, which the renderer supports and nothing yet uses.
@@ -3241,6 +3210,40 @@ forecast is waiting on.
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#194 — a transcription worker that dies silently stalls its job forever. BUILT
+      2026-10-29**, at the owner's request: *"I can see some field worker trying this on a
+      crappy 6 year old ipad with recordings done in the field using that ipad's mic."*
+      That device is the whole design constraint — the danger is not failing to catch a
+      dead worker, it is killing a healthy slow one.
+
+      `watchdogFor(observed, {size})` in `core/transcribe.js`: silence longer than the
+      budget terminates the worker and rejects with a message containing "worker failed",
+      which is what the pool already matches to back off and retry. The budget is LEARNED.
+      With nothing measured it comes from the chosen model's own published speed times 20
+      — 10.8 min for "Faster", 26.7 min for "More accurate", so the slower model gets the
+      longer leash automatically. Once a segment completes, the budget is six times the
+      SLOWEST segment seen (floor two minutes): devices throttle as they heat up, so
+      segment nine is routinely slower than segment one, and judging it by the median
+      would start failing healthy work exactly when the device is struggling hardest. The
+      record is kept at service level, so the seventh interview in a batch is judged by
+      what the first six demonstrated.
+
+      **The worker now says "ready".** Model-download progress is emitted only on a COLD
+      cache; warm, init is completely silent and still takes seconds on a slow device. A
+      test with a deliberately short budget duly killed a perfectly healthy worker —
+      precisely the failure this must never produce in the field. With the ready signal
+      the only silent stretch left is one segment's inference.
+
+      Detection got a watchdog too, which the tests found rather than I did: it loads the
+      full model into a second worker moments before the first segment worker loads it
+      again — the tightest moment of the run, and the one a phone was observed to die at.
+
+      Verified in the browser with a worker that accepts the job and never speaks again:
+      caught at the budget, reported as a worker failure, retried three times by the pool,
+      and the pool's slots released (`running: 0`) so nothing queued behind it froze. Then
+      the pair together on a warm cache: healthy survived, dead detected, same budget.
+
 
 - [x] **#193 — "transcribe 2:15 to 19:30": the range belongs to the ENGINE, not the
       plugin (owner asked, 2026-10-28). BUILT AND EXPOSED 2026-10-28.** Engine:

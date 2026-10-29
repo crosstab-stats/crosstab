@@ -255,6 +255,7 @@ self.onmessage = async (e) => {
     try {
       const { windows = [], size, device, dtype } = e.data;
       const pipe = await getAsr({ size, device, dtype });
+      post('stage', { id, stage: 'ready' });
       const scored = [];
       for (const w of windows) {
         if (cancelled) { post('cancelled', { id }); return; }
@@ -285,6 +286,12 @@ self.onmessage = async (e) => {
     if (mode === 'text' || mode === 'both') {
       post('stage', { id, stage: 'transcribe' });
       const pipe = await getAsr({ size, device, dtype });
+      // PROOF OF LIFE, and it matters more than it looks. The host's watchdog treats
+      // silence as death, and model init emits download progress only on a COLD cache —
+      // warm, it is completely silent and can still take seconds on a slow device. Saying
+      // "ready" here splits that silence in two, so the watchdog's budget has to cover
+      // inference alone rather than inference plus an unknowable init.
+      post('stage', { id, stage: 'ready' });
       if (cancelled) { post('cancelled', { id }); return; }
 
       // DEFENCE IN DEPTH. The service resolves the language before it gets here, so

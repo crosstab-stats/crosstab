@@ -410,21 +410,42 @@ export function summariseDetection(perWindow = [], windows = []) {
  * user could see.
  */
 export function detectLanguage(audio, opts = {}) {
-  const { size = 'base', onProgress = null } = opts;
+  const { size = 'base', onProgress = null, watchdogMs = WATCHDOG_COLD_MS } = opts;
   const picked = sampleForDetection(audio, opts);
   if (!picked.length) return Promise.resolve(summariseDetection([], []));
 
   const worker = new Worker(new URL('./transcribe-worker.js', import.meta.url), { type: 'module' });
   return new Promise((resolve, reject) => {
+    // Detection needs a watchdog as much as transcription does, and arguably more: it
+    // loads the full model into a second worker moments before the first segment worker
+    // loads it again, which is the tightest moment of the whole run and the one a phone
+    // was observed to die at. Without this, a detect worker killed silently left the job
+    // waiting forever before a single segment had even been scheduled.
+    let lastSignal = Date.now();
+    let timer = null;
+    const stopWatch = () => { if (timer !== null) { clearInterval(timer); timer = null; } };
+    const close = () => { stopWatch(); worker.terminate(); };
+    timer = setInterval(() => {
+      if (Date.now() - lastSignal < watchdogMs) return;
+      stopWatch();
+      worker.terminate();
+      reject(new Error(
+        `Language detection failed: the worker stopped responding for `
+        + `${Math.round(watchdogMs / 1000)}s, so the browser almost certainly stopped it `
+        + '— choose the language yourself to skip detecting it',
+      ));
+    }, Math.min(5000, Math.max(1000, Math.floor(watchdogMs / 10))));
+
     worker.onmessage = (e) => {
+      lastSignal = Date.now();
       const m = e.data ?? {};
       if (m.type === 'progress' || m.type === 'stage') { onProgress?.(m); return; }
       if (m.type === 'detected') {
         resolve(summariseDetection(m.windows ?? [], picked));
-        worker.terminate();
+        close();
       } else if (m.type === 'error') {
         reject(new Error(m.message));
-        worker.terminate();
+        close();
       }
     };
     worker.onerror = (err) => {
@@ -435,7 +456,7 @@ export function detectLanguage(audio, opts = {}) {
       reject(new Error(`Language detection failed: ${err?.message
         || 'the browser stopped the worker without a reason, which usually means the '
           + 'device ran out of memory — choose the language yourself to skip detecting it'}`));
-      worker.terminate();
+      close();
     };
     const libUrl = getAssets()?.transformersUrl;
     if (libUrl) worker.postMessage({ type: 'config', libUrl });
@@ -539,31 +560,144 @@ export function toVtt({ chunks = [], turns = null } = {}) {
  *   null to let Whisper guess — which the caller should only pass when the user asked.
  * @param {(p: object) => void} [opts.onProgress]
  */
+/**
+ * How long a transcription worker may go silent before it is presumed dead (#194).
+ *
+ * ## Why a clock and not a heartbeat
+ *
+ * The obvious design is a `setInterval` inside the worker proving it is alive. It does
+ * not work, and that is measured rather than assumed: across 26.6 seconds of real
+ * inference a 250 ms timer in the worker fired ONCE. ORT's WASM inference blocks the
+ * worker's event loop almost completely, so a heartbeat cannot tell "busy" from "dead".
+ * transformers.js's own `callback_function` is no better — passed through the pipeline it
+ * fired zero times over the same segment.
+ *
+ * What the worker DOES send is a message at each stage — including "ready", the moment
+ * the model is loaded — plus download progress while fetching weights. The clock resets
+ * on any of them.
+ *
+ * The "ready" signal exists BECAUSE of this: download progress is emitted only on a cold
+ * cache, so on a warm one model init is completely silent and can still take seconds on a
+ * slow device. Without it the budget had to cover init plus inference, and a test with a
+ * deliberately short budget duly killed a perfectly healthy worker — which is exactly the
+ * failure this must never produce in the field. With it, the only silent stretch left is
+ * one segment's inference.
+ *
+ * ## Why it learns instead of guessing
+ *
+ * A fixed timeout cannot serve both a current phone and a six-year-old iPad recording in
+ * the field on its own microphone — the machine this feature is FOR. Too tight and it
+ * kills healthy work on the slow device; too loose and it is not a safety net.
+ *
+ * So the first segment to finish measures the device, and every later one is judged
+ * against what this machine has actually shown it can do. Before anything has finished
+ * there is nothing to measure, so the cold start is deliberately enormous: a dead worker
+ * is dead forever, and ten minutes of patience costs a stalled user ten minutes exactly
+ * once, where ten minutes of impatience costs a slow user their transcript.
+ *
+ * The SLOWEST observed segment sets the pace, not the median: devices throttle as they
+ * heat up, so segment nine is routinely slower than segment one, and judging it by the
+ * median would start failing healthy work precisely when the device is struggling.
+ */
+export const WATCHDOG_COLD_MS = 10 * 60 * 1000;
+
+/**
+ * How many times the model's own published speed a FIRST segment may take before the
+ * device is presumed dead rather than slow.
+ *
+ * The flat cold budget alone was not safe for the case this feature exists for. "More
+ * accurate" runs at 1.5x real time on the hardware it was measured on, so one 2-minute
+ * segment is already 80 seconds there — and a six-year-old iPad is several times slower
+ * again, which puts a perfectly healthy first segment uncomfortably close to a flat ten
+ * minutes. Deriving the cold budget from the chosen model means the slower model
+ * automatically gets the longer leash, instead of the user discovering the difference as
+ * a transcript with holes in it.
+ */
+export const WATCHDOG_COLD_FACTOR = 20;
+
+/** Multiple of the slowest segment yet seen. Generous — a false positive costs a retry
+ * and, in the worst case, a gap in somebody's interview. */
+export const WATCHDOG_FACTOR = 6;
+
+/** Never tighter than this, however fast the device looked a moment ago. */
+export const WATCHDOG_MIN_MS = 2 * 60 * 1000;
+
+/**
+ * The silence budget, given how long this device's segments have actually taken.
+ *
+ * @param {number[]} observedMs - Durations of segments that completed, this session.
+ * @returns {number} milliseconds of silence to tolerate.
+ */
+export function watchdogFor(observedMs = [], { size = 'base' } = {}) {
+  const seen = (observedMs ?? []).filter((n) => Number.isFinite(n) && n > 0);
+  if (seen.length) {
+    const slowest = Math.max(...seen);
+    return Math.max(WATCHDOG_MIN_MS, Math.round(slowest * WATCHDOG_FACTOR));
+  }
+  // Nothing measured yet: fall back to what the MODEL claims it can do, stretched far
+  // enough to cover a device much slower than the one those figures came from.
+  const rate = MODEL_SIZES.find((m) => m.id === size)?.realTime ?? 2;
+  const expectedMs = (SEGMENT_SECONDS / rate) * 1000;
+  return Math.max(WATCHDOG_COLD_MS, Math.round(expectedMs * WATCHDOG_COLD_FACTOR));
+}
+
 export function transcribe(audio, opts = {}) {
   const {
     // '' (or null) means detect — see `options()` for why that is the default.
     mode = 'both', language = '', size = 'base', threshold = 0.3, expected = 0,
-    onProgress = null,
+    onProgress = null, watchdogMs = WATCHDOG_COLD_MS,
   } = opts;
 
   const worker = new Worker(new URL('./transcribe-worker.js', import.meta.url), { type: 'module' });
   let settle = null;
   const done = new Promise((resolve, reject) => { settle = { resolve, reject }; });
 
+  // ---- the watchdog --------------------------------------------------------------
+  //
+  // A worker killed by the OS for memory does not always fire `onerror` — on iOS it
+  // frequently just stops — and nothing else in this file has a timeout, so that left the
+  // promise unsettled FOREVER: the job froze, and because the pool's slot was never
+  // released, everything queued behind it froze too.
+  let lastSignal = Date.now();
+  let timer = null;
+  const stopWatch = () => { if (timer !== null) { clearInterval(timer); timer = null; } };
+  const close = () => { stopWatch(); worker.terminate(); };
+  if (Number.isFinite(watchdogMs) && watchdogMs > 0) {
+    // Checked often enough to be timely, rarely enough to cost nothing.
+    const tick = Math.min(5000, Math.max(1000, Math.floor(watchdogMs / 10)));
+    timer = setInterval(() => {
+      if (Date.now() - lastSignal < watchdogMs) return;
+      stopWatch();
+      worker.terminate();
+      // "worker failed" is load-bearing: the pool matches on it (`looksLikeDeviceLimit`)
+      // to back off a worker and retry, which is exactly the right response to a device
+      // that could not keep this one alive.
+      settle.reject(new Error(
+        `Transcription worker failed: it stopped responding for `
+        + `${Math.round(watchdogMs / 1000)}s, so the browser almost certainly stopped it `
+        + '— usually running out of memory',
+      ));
+    }, tick);
+  }
+
   worker.onmessage = (e) => {
+    // ANY word from the worker is proof of life, including model-download progress —
+    // which is what lets the budget cover inference alone rather than inference plus a
+    // 73 MB download on a slow connection.
+    lastSignal = Date.now();
     const m = e.data ?? {};
     if (m.type === 'progress' || m.type === 'stage') { onProgress?.(m); return; }
     if (m.type === 'done') {
       // The caveats travel WITH the transcript. A result that outlives the dialog that
       // produced it should still be able to say what it is not.
       settle.resolve({ ...m, vtt: toVtt(m), limitations: LIMITATIONS });
-      worker.terminate();
+      close();
     } else if (m.type === 'cancelled') {
       settle.reject(Object.assign(new Error('Transcription cancelled.'), { cancelled: true }));
-      worker.terminate();
+      close();
     } else if (m.type === 'error') {
       settle.reject(new Error(m.message));
-      worker.terminate();
+      close();
     }
   };
   worker.onerror = (err) => {
@@ -578,7 +712,7 @@ export function transcribe(audio, opts = {}) {
       : 'the browser stopped it without a reason, which usually means the device ran out '
         + 'of memory — try the Faster model, or close other tabs and apps';
     settle.reject(new Error(`Transcription worker failed: ${detail}`));
-    worker.terminate();
+    close();
   };
 
   // A vendored build must not reach the CDN; the worker is told where its code lives
@@ -595,6 +729,7 @@ export function transcribe(audio, opts = {}) {
 
   return Object.assign(done, {
     cancel() {
+      stopWatch();
       worker.postMessage({ type: 'cancel' });
       // Terminate after a tick so a cancel mid-inference still stops: the worker only
       // sees the message between model calls.
@@ -647,7 +782,13 @@ function speakerAt(turns, t) {
  * @param {(fn: () => Promise<any>) => Promise<any>} opts.schedule  the pool's `run`
  */
 async function transcribeSegments(audio, opts) {
-  const { schedule, onProgress, mode = 'both', onJob = null, ...rest } = opts;
+  const {
+    schedule, onProgress, mode = 'both', onJob = null,
+    // Shared across the whole file (and across files in a queue): how long this device's
+    // segments have actually taken. The first one to finish is what turns the watchdog
+    // from a guess into a measurement.
+    observed = [], ...rest
+  } = opts;
   const step = Math.round(SEGMENT_SECONDS * SAMPLE_RATE);
   const total = Math.ceil(audio.length / step);
   /** Where a segment starts, in seconds, for messages a person has to act on. */
@@ -677,9 +818,15 @@ async function transcribeSegments(audio, opts) {
     // Copied here rather than up front: only the segments actually in flight exist at
     // once, which is the difference between holding one segment and holding the interview.
     const slice = new Float32Array(audio.subarray(from, Math.min(audio.length, from + step)));
-    const job = transcribe(slice, { ...rest, mode: 'text', onProgress: null });
+    const startedAt = Date.now();
+    const job = transcribe(slice, {
+      ...rest, mode: 'text', onProgress: null, watchdogMs: watchdogFor(observed, rest),
+    });
     onJob?.(job);
     const out = await job;
+    // Only a SUCCESS teaches us anything. A segment that died early would make the
+    // device look fast and tighten the budget on the strength of a failure.
+    observed.push(Date.now() - startedAt);
     const offset = from / SAMPLE_RATE;
     chunks[i] = (out.chunks ?? []).map((c) => ({
       ...c, start: (c.start ?? 0) + offset, end: (c.end ?? 0) + offset,
@@ -789,6 +936,14 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
    * queue passes a recorder that writes into a job record. Two code paths would drift,
    * and the segmented branch is too fiddly to maintain twice.
    */
+  /**
+   * How long segments have taken ON THIS DEVICE, this session.
+   *
+   * Kept at service level rather than per job, so the seventh interview in a batch is
+   * judged by what the first six demonstrated instead of starting cold every time.
+   */
+  const observed = [];
+
   function execute(full, opts, report) {
     const mode = opts.mode ?? 'both';
     const size = opts.size ?? 'base';
@@ -825,7 +980,11 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     let detection = null;
     if (wantsText && !language) {
       report.update?.({ stage: 'detect' });
-      detection = await detectLanguage(audio, { size, onProgress: (x) => { if (!stopped) report.update?.(x); } });
+      detection = await detectLanguage(audio, {
+        size,
+        watchdogMs: watchdogFor(observed, { size }),
+        onProgress: (x) => { if (!stopped) report.update?.(x); },
+      });
       if (stopped) throw Object.assign(new Error('Transcription cancelled.'), { cancelled: true });
       language = detection.code || 'en';
       // Told, not buried: which language, how sure, and whether the windows disagreed —
@@ -843,6 +1002,7 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     if (wantsText && seconds > SEGMENT_ABOVE_SECONDS) {
       const { chunks, missing } = await transcribeSegments(audio, {
         ...resolved,
+        observed,
         mode: 'text',
         size,
         schedule: (fn) => p.run(fn),
@@ -861,6 +1021,10 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         report.update?.({ stage: 'speakers' });
         const job = transcribe(new Float32Array(audio), {
           ...resolved, mode: 'speakers', size,
+          // Diarization walks the whole recording in 2-second windows and posts progress
+          // as it goes, so the clock is reset constantly here; the budget only has to
+          // cover the gap between two windows.
+          watchdogMs: watchdogFor(observed, { size }),
           onProgress: (x) => { if (!stopped) report.update?.(x); },
         });
         inFlight.add(job);
@@ -895,6 +1059,9 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     return p.run(async () => {
       const job = transcribe(audio, {
         ...resolved, mode, size, onProgress: (x) => { if (!stopped) report.update?.(x); },
+        // Not segmented, so there is nothing measured to go on and nothing to learn from
+        // afterwards — this is the cold budget by definition.
+        watchdogMs: watchdogFor(observed, { size }),
       });
       inFlight.add(job);
       // A HEARTBEAT, because the model call reports nothing from inside. transformers.js
