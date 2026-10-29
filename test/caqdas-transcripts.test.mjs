@@ -664,3 +664,42 @@ test('nothing in, nothing out — and it does not throw', () => {
     assert.equal(typeof doc.timing, 'string');
   }
 });
+
+// =============================================================================
+// The Transcripts toolbar on a phone
+//
+// There is no layout engine here, so this pins the STRUCTURE that the layout depends
+// on rather than the pixels. Measured in a real browser at 390 px and 320 px: the old
+// flat row split "Model" from its select and "to" from its input, because labels and
+// controls were siblings and the wrap could fall between them. Nesting the control
+// inside its label makes that impossible to express.
+
+test('every control in the transcribe toolbar is nested inside its own label', () => {
+  const bar = SRC.slice(SRC.indexOf('// ---- controls ---'), SRC.indexOf('root.append(bar)'));
+  assert.ok(bar, 'the toolbar is where we think it is');
+
+  // The shape that caused the bug: a label appended as a SIBLING of its control, so a
+  // wrap could fall between them. Substring checks rather than built regexes — the
+  // escaping is the part that goes wrong, and there is nothing here that needs it.
+  assert.ok(
+    !bar.includes("bar.append(mk('label'"),
+    'labels are not appended to the bar as bare siblings of their controls',
+  );
+  // And the shape that fixes it: each control is passed to field(), which nests it.
+  for (const name of ['Model', 'Mode', 'Language', 'From', 'to']) {
+    assert.ok(
+      bar.includes(`field('${name}'`),
+      `${name} is a field(), so its label contains its control`,
+    );
+  }
+});
+
+test('a field can shrink instead of pushing the row off a phone screen', () => {
+  // `min-width: auto` is a flex item's default and it REFUSES to go below its content,
+  // so one wide option ("Faster - 16 min per hour of audio (73 MB)") drags the whole row
+  // past the right edge rather than wrapping. This is the line that allows the shrink.
+  const bar = SRC.slice(SRC.indexOf('// ---- controls ---'), SRC.indexOf('root.append(bar)'));
+  assert.match(bar, /minWidth: '0'/, 'fields may shrink below their content width');
+  assert.match(bar, /flexWrap: 'nowrap'/, 'but never break inside a field');
+  assert.match(bar, /flexWrap: 'wrap'/, 'while the bar itself wraps between fields');
+});

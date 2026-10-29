@@ -6112,17 +6112,64 @@ async function mountTranscripts(app, root) {
       'Transcription is not available in this build.'));
     return;
   }
+  // Five caveats at full length is about fifteen lines, which on a phone pushed every
+  // control below the fold — the tab opened on a wall of warnings with nothing to do.
+  // The headline of each is still always visible and always said; only the explanation
+  // is behind a tap. `short` and `detail` already exist on each limitation for exactly
+  // this split, and summaries beat a single "show warnings" toggle because the one that
+  // matters to a given researcher is legible without opening anything.
   for (const lim of options.limitations ?? []) {
-    const p = mk('p', { ...MUTED, margin: '0 0 6px', borderLeft: '3px solid #e3b341',
-      paddingLeft: '8px' }, lim.detail);
-    root.append(p);
+    const d = mk('details', { ...MUTED, margin: '0 0 6px', borderLeft: '3px solid #e3b341',
+      paddingLeft: '8px' });
+    const sum = mk('summary', { cursor: 'pointer' }, lim.short || lim.detail);
+    // A summary is a legitimate tap target on a phone, so give it a real one.
+    css(sum, { padding: '2px 0', minHeight: '24px' });
+    d.append(sum, css(mk('p', {}, lim.detail), { margin: '4px 0 6px' }));
+    root.append(d);
   }
 
   // ---- controls -----------------------------------------------------------------
-  const bar = mk('div', { display: 'flex', gap: '8px', alignItems: 'center',
+  //
+  // One flat wrapping row put "Mode" at the end of the Model line on an iPhone: labels
+  // and controls were siblings, so the wrap could fall between a label and the thing it
+  // names. Each field is now its OWN flex item that cannot break internally, so wrapping
+  // happens between fields and a label always travels with its control.
+  const bar = mk('div', { display: 'flex', gap: '8px 14px', alignItems: 'center',
     flexWrap: 'wrap', margin: '10px 0' });
+
+  const UNBREAKABLE = {
+    display: 'flex', alignItems: 'center', gap: '6px',
+    // Never break inside a field...
+    flexWrap: 'nowrap',
+    // ...but a field may still shrink to fit a narrow screen rather than overflow it.
+    // `minWidth: 0` is the part that actually allows it: a flex item's default min-width
+    // is auto, which refuses to go below its content and pushes the row wider than the
+    // viewport instead of wrapping.
+    minWidth: '0', maxWidth: '100%',
+  };
+
+  /**
+   * A label and its control as one unwrappable unit — and the control goes INSIDE the
+   * label, so the two cannot be separated by a wrap and the label is a real association
+   * rather than a word that happens to sit nearby. Clicking "Model" focuses the select.
+   */
+  const field = (labelText, control) => {
+    const l = css(mk('label', { ...MUTED, ...UNBREAKABLE }), {});
+    l.append(css(mk('span', {}, labelText), { whiteSpace: 'nowrap' }), control);
+    return l;
+  };
+
+  /** Several controls that belong together but cannot share one label. */
+  const group = (...children) => {
+    const g = mk('div', UNBREAKABLE);
+    for (const c of children) g.append(c);
+    return g;
+  };
   const select = (items, value) => {
-    const s = mk('select', { font: 'inherit', padding: '3px' });
+    // `minWidth: 0` for the same reason as above — "Faster — 16 min per hour of audio
+    // (73 MB)" is a wide option, and without this the select refuses to shrink below it
+    // and drags the whole row past the edge of a phone screen.
+    const s = mk('select', { font: 'inherit', padding: '3px', minWidth: '0', maxWidth: '100%' });
     for (const it of items) {
       const o = document.createElement('option');
       o.value = it.id ?? it.code;
@@ -6151,7 +6198,9 @@ async function mountTranscripts(app, root) {
   // opaque-origin sandbox and cannot import `parseClock`, and a second copy of the
   // grammar over here would eventually disagree with the first about something like
   // `2:75` and transcribe the wrong stretch of an interview.
-  const timeBox = (ph) => css(mk('input', { font: 'inherit', padding: '3px', width: '72px' }), {});
+  const timeBox = () => mk('input', {
+    font: 'inherit', padding: '3px', width: '72px', minWidth: '0',
+  });
   const fromIn = timeBox();
   const toIn = timeBox();
   fromIn.placeholder = '0:00';
@@ -6161,10 +6210,15 @@ async function mountTranscripts(app, root) {
   const rangeNote = mk('span', MUTED, '');
   const allBtn = css(mk('button', BTN, 'Transcribe all'), { fontWeight: '600' });
   const pauseBtn = mk('button', BTN, 'Pause');
-  bar.append(mk('label', MUTED, 'Model'), sizeSel, mk('label', MUTED, 'Mode'), modeSel,
-    mk('label', MUTED, 'Language'), langSel,
-    mk('label', MUTED, 'From'), fromIn, mk('label', MUTED, 'to'), toIn,
-    allBtn, pauseBtn);
+  bar.append(
+    field('Model', sizeSel),
+    field('Mode', modeSel),
+    field('Language', langSel),
+    // From and to stay on ONE line: a range split across two reads as two settings
+    // rather than as two ends of the same one.
+    group(field('From', fromIn), field('to', toIn)),
+    group(allBtn, pauseBtn),
+  );
   root.append(bar);
   root.append(css(mk('p', MUTED, 'Leave From and to empty to transcribe the whole '
     + 'recording. A range applies to whichever recordings you start next, and the '
