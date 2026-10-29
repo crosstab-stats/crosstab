@@ -21,7 +21,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPool, workerCeiling, MAX_WORKERS } from '../core/transcribe-pool.js';
+import {
+  createPool,
+  workerCeiling,
+  MAX_WORKERS,
+  MAX_ATTEMPTS,
+} from '../core/transcribe-pool.js';
 
 /** A job that resolves when told, so concurrency is observable rather than timed. */
 function deferred() {
@@ -267,4 +272,65 @@ test('it reports the most it ever managed, which is what to remember', async () 
     jobs.slice(1).forEach((j) => j.resolve(1));
     await Promise.all(rs);
   });
+});
+
+// ---------------------------------------------------------------------------------
+// Retrying when the DEVICE is what refused
+//
+// From a phone, transcribing a 21-minute interview: part 1 succeeded, the pool grew to
+// two workers on the strength of it, and part 2 died with
+// "no available backend found. ERR: [wasm] RangeError: Out of memory".
+//
+// The pool backed off to one worker correctly. But the retry was written as
+// `attempts === 1 && backOff(...)`, and `backOff` returns false once there is nothing
+// left to give up — so a failure AT one worker got no second attempt at all. That is
+// the case most worth retrying: the memory that was not there while two workers were
+// competing usually is once the other has finished.
+// ---------------------------------------------------------------------------------
+
+test('a device-limit failure is retried even when already down to one worker', async () => {
+  const pool = createPool({ max: 1, start: 1, retryPauseMs: 5 });
+  let attempts = 0;
+  const value = await pool.run(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('no available backend found. ERR: [wasm] RangeError: Out of memory');
+    return 'second time lucky';
+  });
+  assert.equal(value, 'second time lucky');
+  assert.equal(attempts, 2, 'it tried again rather than giving up at one worker');
+});
+
+test('the retry waits, because an immediate one is the same attempt again', async () => {
+  // Whatever was holding the memory has not finished letting go of it yet.
+  const pool = createPool({ max: 1, start: 1, retryPauseMs: 120 });
+  let attempts = 0;
+  const t0 = Date.now();
+  await pool.run(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('out of memory');
+    return 'ok';
+  });
+  assert.ok(Date.now() - t0 >= 100, 'there was a pause before the second attempt');
+});
+
+test('retries are bounded, and a hopeless job still rejects', async () => {
+  const pool = createPool({ max: 1, start: 1, retryPauseMs: 5 });
+  let attempts = 0;
+  await assert.rejects(
+    pool.run(async () => { attempts += 1; throw new Error('out of memory'); }),
+    /out of memory/,
+  );
+  assert.equal(attempts, MAX_ATTEMPTS, `it stops after ${MAX_ATTEMPTS} attempts`);
+});
+
+test('a failure that is NOT the device is not retried at all', async () => {
+  // Audio that cannot be decoded will fail again identically; retrying only spends the
+  // user's battery to reach the same answer.
+  const pool = createPool({ max: 1, start: 1, retryPauseMs: 5 });
+  let attempts = 0;
+  await assert.rejects(
+    pool.run(async () => { attempts += 1; throw new Error('could not decode that file'); }),
+    /could not decode/,
+  );
+  assert.equal(attempts, 1, 'tried once, reported it, moved on');
 });

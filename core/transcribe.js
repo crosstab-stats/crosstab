@@ -661,6 +661,17 @@ async function transcribeSegments(audio, opts) {
   // a blank is not.
   onProgress?.({ type: 'segments', stage: 'transcribe', done: 0, total });
 
+  /** Parts that could not be transcribed, in order, with why. */
+  const missing = [];
+  const clock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
+  // `Promise.all` was wrong here, and a phone proved it: part 2 of 11 ran out of memory
+  // and the rejection discarded part 1, which had already SUCCEEDED, along with every
+  // part still in flight. Twenty-one minutes of work thrown away over two minutes of it.
+  //
+  // A failed part is now caught per part, so one bad stretch costs that stretch and
+  // nothing else. Catching per item also means every other part runs to completion
+  // rather than being abandoned mid-flight the moment a sibling rejects.
   await Promise.all(Array.from({ length: total }, (_, i) => schedule(async () => {
     const from = i * step;
     // Copied here rather than up front: only the segments actually in flight exist at
@@ -668,18 +679,7 @@ async function transcribeSegments(audio, opts) {
     const slice = new Float32Array(audio.subarray(from, Math.min(audio.length, from + step)));
     const job = transcribe(slice, { ...rest, mode: 'text', onProgress: null });
     onJob?.(job);
-    let out;
-    try {
-      out = await job;
-    } catch (err) {
-      // WHICH part, and how far in. One segment failing kills the whole transcription,
-      // and "it failed" with no position is almost no help to someone deciding whether
-      // the recording, the device or the model is the problem. The original message is
-      // kept intact at the end because the pool matches it (`looksLikeDeviceLimit`) to
-      // decide whether to back off a worker and retry.
-      const at = `${Math.floor(offsetOf(i) / 60)}:${String(Math.floor(offsetOf(i) % 60)).padStart(2, '0')}`;
-      throw new Error(`Part ${i + 1} of ${total} (from ${at}) failed — ${err?.message ?? err}`);
-    }
+    const out = await job;
     const offset = from / SAMPLE_RATE;
     chunks[i] = (out.chunks ?? []).map((c) => ({
       ...c, start: (c.start ?? 0) + offset, end: (c.end ?? 0) + offset,
@@ -688,9 +688,42 @@ async function transcribeSegments(audio, opts) {
     // REAL progress at last: segments finished out of segments total. Until now a long job
     // could only show a clock, because the model reports nothing from inside one call.
     onProgress?.({ type: 'segments', stage: 'transcribe', done, total });
+  }).catch((err) => {
+    // WHICH part, and how far in — "it failed" with no position is almost no help to
+    // someone deciding whether the problem is the recording, the device or the model.
+    const startAt = offsetOf(i);
+    const endAt = Math.min(audio.length / SAMPLE_RATE, startAt + SEGMENT_SECONDS);
+    missing.push({
+      index: i,
+      part: i + 1,
+      total,
+      from: startAt,
+      to: endAt,
+      message: `Part ${i + 1} of ${total} (from ${clock(startAt)}) failed — ${err?.message ?? err}`,
+    });
+    done += 1;
+    onProgress?.({ type: 'segments', stage: 'transcribe', done, total });
   })));
 
-  return chunks.flat().filter(Boolean);
+  missing.sort((a, b) => a.index - b.index);
+
+  // Everything failing is a failure — there is no transcript to hand back, and pretending
+  // otherwise would turn a broken run into an empty "success".
+  if (missing.length === total) throw new Error(missing[0].message);
+
+  // A gap is written INTO the transcript rather than left as silence, so a reader of the
+  // finished text can see that a stretch is absent instead of reading across the join and
+  // believing nobody spoke. It carries real timings, so it stays lined up with the audio.
+  for (const gap of missing) {
+    chunks[gap.index] = [{
+      start: gap.from,
+      end: gap.to,
+      text: `[${clock(gap.from)}–${clock(gap.to)} could not be transcribed]`,
+      missing: true,
+    }];
+  }
+
+  return { chunks: chunks.flat().filter(Boolean), missing };
 }
 
 /**
@@ -808,7 +841,7 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
     // measurement says they cost nothing: 37.3% word error rate segmented against 37.6%
     // in one call, and 8.9% faster on one worker.
     if (wantsText && seconds > SEGMENT_ABOVE_SECONDS) {
-      const chunks = await transcribeSegments(audio, {
+      const { chunks, missing } = await transcribeSegments(audio, {
         ...resolved,
         mode: 'text',
         size,
@@ -848,6 +881,12 @@ export function createTranscribeService({ showProgress, concurrency } = {}) {
         language,
         detection,
         range: range.ranged ? { from: range.from, to: range.to } : null,
+        // Carried with the transcript, not just logged: a transcript with holes in it
+        // must be able to say so wherever it ends up, including long after the run.
+        missing: missing.map((m) => ({
+          part: m.part, total: m.total, from: m.from + range.from, to: m.to + range.from,
+          message: m.message,
+        })),
       };
       return { ...out, vtt: toVtt(out), limitations: LIMITATIONS };
     }

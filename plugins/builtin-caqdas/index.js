@@ -4827,6 +4827,12 @@ export function transcriptToDocument(result, mediaRef = null) {
     // Which stretch of the recording this covers, or null for all of it. Without it a
     // partial transcript is indistinguishable from a complete one that lost its middle.
     range: result?.range ? { from: result.range.from, to: result.range.to } : null,
+    // Parts that could not be transcribed. A transcript with holes has to be able to say
+    // so wherever it ends up — the gap markers are visible in the text, but a reader
+    // skimming a dataset column should not have to notice them to know.
+    missing: Array.isArray(result?.missing) && result.missing.length
+      ? result.missing.map((m) => ({ part: m.part, total: m.total, from: m.from, to: m.to }))
+      : null,
   };
 }
 
@@ -6433,6 +6439,15 @@ async function mountTranscripts(app, root) {
     }
   });
 
+  /** mm:ss for messages, outside describe()'s scope. */
+  const clockOf = (secs) => {
+    const t = Math.max(0, Math.round(Number(secs) || 0));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const pad = (n) => String(n).padStart(2, '0');
+    return h ? `${h}:${pad(m)}:${pad(t % 60)}` : `${m}:${pad(t % 60)}`;
+  };
+
   // ---- render ---------------------------------------------------------------------
   function describe(job, row) {
     // Which language a recording was READ AS travels with every state, because a batch of
@@ -6461,9 +6476,14 @@ async function mountTranscripts(app, root) {
 
     if (saved[row.rid]) {
       const words = saved[row.rid].text.trim() ? saved[row.rid].text.trim().split(/\s+/).length : 0;
+      const gaps = saved[row.rid].missing;
+      const holes = gaps?.length
+        ? ` · ${gaps.length} of ${gaps[0].total} parts missing `
+          + `(${gaps.map((g) => `${clock(g.from)}–${clock(g.to)}`).join(', ')})`
+        : '';
       return {
-        state: 'transcribed',
-        detail: `${words} words${span(saved[row.rid].range)}${heard(saved[row.rid])}`,
+        state: gaps?.length ? 'partly transcribed' : 'transcribed',
+        detail: `${words} words${holes}${span(saved[row.rid].range)}${heard(saved[row.rid])}`,
       };
     }
     // A remembered failure outranks "idle": the row must not look untouched after an
@@ -6540,6 +6560,17 @@ async function mountTranscripts(app, root) {
         if (result) {
           saved[rid] = transcriptToDocument(result, row?.ref ?? null);
           await persist();
+          // A partial transcript is a SUCCESS with a caveat, and the caveat belongs in
+          // the record as well as on the row — a gap found months later, in a dataset,
+          // with no idea why, is how a quotation goes missing from an analysis.
+          const gaps = saved[rid].missing;
+          if (gaps?.length) {
+            app.results?.appendError?.(
+              `Transcribed "${row?.label ?? rid}" with ${gaps.length} of ${gaps[0].total} `
+              + `parts missing: ${gaps.map((g) => `${clockOf(g.from)}–${clockOf(g.to)}`).join(', ')}. `
+              + 'The gaps are marked in the transcript. "Try again" re-runs the whole recording.',
+            );
+          }
         }
         jobOf.delete(rid);
         delete pending[rid];

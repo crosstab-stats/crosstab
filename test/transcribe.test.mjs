@@ -790,14 +790,44 @@ test('the engine, not the plugin, owns the range — recorded in code', () => {
 });
 
 test('a failing segment says WHICH part, and where it starts', () => {
-  // One segment failing kills the whole transcription. "It failed" with no position is
+  // One part failing used to kill the whole transcription, and a bare "it failed" is
   // almost no help to someone deciding whether the problem is the recording, the device
-  // or the model.
+  // or the model. Reported from a phone as: "Part 2 of 11 (from 2:00) failed — no
+  // available backend found. ERR: [wasm] RangeError: Out of memory".
   const src = codeOf('core/transcribe.js');
-  assert.match(src, /Part \$\{i \+ 1\} of \$\{total\}/, 'the part number is in the message');
-  assert.match(src, /from \$\{at\}/, 'and the timestamp it starts at');
+  assert.ok(src.includes('Part ${i + 1} of ${total}'), 'the part number is in the message');
+  assert.ok(src.includes('(from ${clock(startAt)})'), 'and the timestamp it starts at');
   // The original text must survive: the pool matches on it to decide to back off.
-  assert.match(src, /failed — \$\{err\?\.message \?\? err\}/, "the engine's own reason is kept");
+  assert.ok(src.includes('failed — ${err?.message ?? err}'), "the engine's own reason is kept");
+});
+
+test('one failed part does not throw away the parts that worked', () => {
+  // THE BUG the phone found. `Promise.all` over the segments meant part 2 running out of
+  // memory discarded part 1 — which had already succeeded — and abandoned everything
+  // still in flight. Twenty-one minutes of work lost over two minutes of it.
+  const src = codeOf('core/transcribe.js');
+  const body = src.slice(src.indexOf('async function transcribeSegments'));
+  const seg = body.slice(0, body.indexOf('\nexport ') > 0 ? body.indexOf('\nexport ') : 4000);
+
+  assert.ok(seg.includes('.catch((err) =>'), 'each part is caught on its own');
+  assert.ok(seg.includes('missing.push('), 'and recorded rather than thrown');
+  assert.ok(
+    seg.includes('if (missing.length === total) throw'),
+    'only EVERY part failing is a failed transcription',
+  );
+});
+
+test('a gap is written into the transcript, not left as silence', () => {
+  // A reader of the finished text must be able to see that a stretch is absent. Left as
+  // silence they would read straight across the join and believe nobody spoke.
+  const src = codeOf('core/transcribe.js');
+  assert.ok(src.includes('could not be transcribed]'), 'the gap is visible in the text');
+  assert.ok(src.includes('missing: true'), 'and marked for anything reading the chunks');
+  // With real timings, so the transcript stays lined up with the audio.
+  const at = src.indexOf('could not be transcribed]');
+  const around = src.slice(at - 400, at + 100);
+  assert.ok(around.includes('start: gap.from'), 'the gap carries its real start');
+  assert.ok(around.includes('end: gap.to'), 'and its real end');
 });
 
 test('an empty worker error is explained rather than called unknown', () => {

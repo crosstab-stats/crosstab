@@ -37,6 +37,23 @@
 export const MAX_WORKERS = 4;
 
 /**
+ * How many times one piece of work may be attempted when the DEVICE is what refused.
+ *
+ * Only device-limit failures are retried — a job that threw because the audio is broken
+ * will throw again, and retrying it just wastes the user's battery.
+ */
+export const MAX_ATTEMPTS = 3;
+
+/**
+ * How long to wait before re-attempting after the device ran out.
+ *
+ * Immediately re-running is the same attempt with a different name: whatever was holding
+ * the memory has not finished letting go of it. Long enough to matter, short enough that
+ * a recoverable stumble does not look like a stall.
+ */
+export const RETRY_PAUSE_MS = 2000;
+
+/**
  * The most workers worth *attempting* on this device.
  *
  * Not a prediction of what will fit — the probe discovers that. This only avoids climbing
@@ -66,7 +83,9 @@ function looksLikeDeviceLimit(err) {
  * @param {(info: object) => void} [opts.onChange]  called whenever the limit moves, so the
  *   UI can say what happened rather than appearing to slow down for no reason
  */
-export function createPool({ max = MAX_WORKERS, start = 1, onChange = null } = {}) {
+export function createPool({
+  max = MAX_WORKERS, start = 1, onChange = null, retryPauseMs = RETRY_PAUSE_MS,
+} = {}) {
   const ceiling = Math.max(1, Math.min(workerCeiling({ max }), max));
   let limit = Math.max(1, Math.min(start, ceiling));
   let probing = limit < ceiling;      // until the device refuses, or we reach the ceiling
@@ -176,14 +195,22 @@ export function createPool({ max = MAX_WORKERS, start = 1, onChange = null } = {
               (err) => {
                 running -= 1;
                 // There is no portable out-of-memory exception in a browser: the signal is
-                // a worker dying. Retry once at the lower limit, because the job itself is
-                // probably fine — it was the company it was keeping.
-                if (looksLikeDeviceLimit(err) && attempts === 1 && backOff('a worker died')) {
-                  queue.unshift({ start: attempt });
+                // a worker dying. Step back whatever happens next — one refusal is enough
+                // to stop asking for more.
+                const deviceLimit = looksLikeDeviceLimit(err);
+                if (deviceLimit) backOff('a worker died');
+                // Retry EVEN WHEN ALREADY AT ONE. The old condition made the retry
+                // conditional on `backOff` having something left to give up, so a failure
+                // at one worker got no second attempt at all — and that is the case most
+                // worth retrying, because the memory that was not there a moment ago
+                // usually is once the worker competing for it has finished. The pause is
+                // what makes it a different attempt rather than the same one again: the
+                // browser needs a moment to actually release what it just reclaimed.
+                if (deviceLimit && attempts < MAX_ATTEMPTS) {
+                  queue.unshift({ start: () => { setTimeout(attempt, retryPauseMs); } });
                   pump();
                   return;
                 }
-                if (looksLikeDeviceLimit(err)) backOff('a worker died');
                 reject(err);
                 pump();
               },
