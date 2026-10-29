@@ -781,3 +781,53 @@ test('every path that drops the mapping drops the persisted copy too', () => {
     'and a mapping naming a job the engine has lost is dropped on sight',
   );
 });
+
+// =============================================================================
+// "Failed, no status"
+//
+// Reported from a phone, on a clean launch: language detected, "clip 0 of 11", and then
+// the row went straight back to idle. Nothing in Output, no status anywhere.
+//
+// The cause was one line in the harvest loop: a job reaching `failed` had its row->job
+// mapping DELETED, so `describe()` then found no job for the row and rendered it as
+// idle. The engine's `job.error` — which said exactly what went wrong — was thrown away
+// on the next poll, one tick after it arrived. A failure was indistinguishable from
+// never having pressed the button.
+//
+// Driven in a browser against a fake queue, before and after. Old: "running - part 0 of
+// 11" then "- Transcribe" with no Output entry. New: "failed - Transcription worker
+// failed: out of memory - Try again", still there after a remount, and the same text in
+// Output.
+// =============================================================================
+
+test('a failed transcription is remembered, not erased', () => {
+  assert.ok(SRC.includes('transcribeFailures'), 'failures are persisted like transcripts');
+  const at = SRC.indexOf("job.state === 'failed' || job.state === 'cancelled'");
+  assert.ok(at > 0, 'the failure branch exists');
+  const branch = SRC.slice(at, at + 1200);
+  assert.ok(branch.includes('failures[rid] = {'), 'the reason is kept');
+  assert.ok(branch.includes('job.error'), "and it is the engine's own reason");
+});
+
+test('a failure is reported in Output, where a user goes looking', () => {
+  const at = SRC.indexOf("job.state === 'failed' || job.state === 'cancelled'");
+  const branch = SRC.slice(at, at + 1200);
+  assert.ok(branch.includes('app.results?.appendError?.'), 'it reaches the Output tab');
+  assert.ok(branch.includes('failed:'), 'naming the recording and the reason');
+});
+
+test('a remembered failure outranks idle in the row', () => {
+  // The bug was precisely that `!job` fell through to "-", so the order of these two
+  // checks is the fix.
+  const at = SRC.indexOf('if (!job && failures[row.rid])');
+  assert.ok(at > 0, 'a remembered failure is checked BEFORE falling back to idle');
+  assert.ok(at < SRC.indexOf("if (!job) return { state: '\u2014', detail: '' };"),
+    'and it comes first');
+});
+
+test('trying again clears the old verdict', () => {
+  const start = SRC.indexOf('async function startOne');
+  const body = SRC.slice(start, SRC.indexOf('allBtn.addEventListener', start));
+  assert.ok(body.includes('delete failures[row.rid]'), 'a new attempt clears the failure');
+  assert.ok(SRC.includes("'Try again'"), 'and the button says the row has been tried');
+});

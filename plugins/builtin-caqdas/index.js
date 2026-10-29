@@ -6297,15 +6297,25 @@ async function mountTranscripts(app, root) {
   // engine went on to finish was never collected. Reported from a phone as a 21-minute
   // interview that "stopped at part 2" and left no trace.
   let pending = {};
+  // rid → why the last attempt failed. KEPT, because the old code deleted the row's job
+  // mapping the instant a job failed, which made `describe()` find no job and render the
+  // row as idle — so a failure looked exactly like never having pressed the button. The
+  // engine's `job.error` was discarded on the very next poll and never shown anywhere.
+  // Reported from a phone as "Failed, no status": language detected, "clip 0 of 11", and
+  // then straight back to idle with nothing in Output and nothing in the row.
+  let failures = {};
   try {
     const st = (await app.state.get()) ?? {};
     saved = st.transcripts ?? {};
     pending = st.transcribing ?? {};
-  } catch { saved = {}; pending = {}; }
+    failures = st.transcribeFailures ?? {};
+  } catch { saved = {}; pending = {}; failures = {}; }
   const persist = async () => {
     try {
       const cfg = (await app.state.get()) ?? {};
-      await app.state.set({ ...cfg, transcripts: saved, transcribing: pending });
+      await app.state.set({
+        ...cfg, transcripts: saved, transcribing: pending, transcribeFailures: failures,
+      });
     } catch (e) { console.warn('[caqdas] could not persist transcripts', e); }
   };
 
@@ -6314,6 +6324,9 @@ async function mountTranscripts(app, root) {
 
   async function startOne(row) {
     if (jobOf.has(row.rid) || saved[row.rid]) return;
+    // A new attempt clears the old verdict — otherwise the row would show a stale
+    // failure next to work that is running again.
+    if (failures[row.rid]) { delete failures[row.rid]; await persist(); }
     const blob = await app.assets.load(row.ref);
     const bytes = await blob.arrayBuffer();
     const { id } = await app.transcribe.enqueue(bytes, {
@@ -6453,6 +6466,9 @@ async function mountTranscripts(app, root) {
         detail: `${words} words${span(saved[row.rid].range)}${heard(saved[row.rid])}`,
       };
     }
+    // A remembered failure outranks "idle": the row must not look untouched after an
+    // attempt that went wrong.
+    if (!job && failures[row.rid]) return { state: 'failed', detail: failures[row.rid].message };
     if (!job) return { state: '—', detail: '' };
     if (job.progress?.stage === 'detect') {
       return { state: 'running', detail: 'working out the language…' };
@@ -6530,9 +6546,26 @@ async function mountTranscripts(app, root) {
         await persist();
         await app.transcribe.forget(id);
       } else if (job.state === 'failed' || job.state === 'cancelled') {
+        // The mapping still goes — the engine's job is finished with — but WHY is kept,
+        // so the row can say what happened instead of quietly returning to idle.
+        if (job.state === 'failed') {
+          failures[rid] = {
+            message: job.error || 'Transcription failed, and the engine gave no reason.',
+            at: Date.now(),
+          };
+          const row = rows.find((r) => r.rid === rid);
+          // Also into Output, which is where a user looks for a record of what the app
+          // did — and where this user looked and found nothing.
+          app.results?.appendError?.(
+            `Transcribing "${row?.label ?? rid}" failed: ${failures[rid].message}`,
+          );
+        }
         jobOf.delete(rid);
         delete pending[rid];
         await persist();
+        // Let the engine drop it: the reason is ours now, and leaving it in the queue
+        // would make it an unattached job and show up as orphaned work.
+        await app.transcribe.forget(id);
       }
     }
 
@@ -6616,7 +6649,9 @@ async function mountTranscripts(app, root) {
         });
         actions.append(stop);
       } else {
-        const go = mk('button', BTN, 'Transcribe');
+        // "Try again" rather than "Transcribe" after a failure: the same button doing
+        // the same thing, but it tells the user the row has been attempted before.
+        const go = mk('button', BTN, failures[row.rid] ? 'Try again' : 'Transcribe');
         go.addEventListener('click', async () => {
           try {
             rangeNote.textContent = '';

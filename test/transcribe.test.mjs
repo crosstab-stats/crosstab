@@ -788,3 +788,26 @@ test('the engine, not the plugin, owns the range — recorded in code', () => {
   assert.ok(detectAt > -1, 'execute() detects');
   assert.ok(sliceAt < detectAt, 'the audio is sliced before the language is detected');
 });
+
+test('a failing segment says WHICH part, and where it starts', () => {
+  // One segment failing kills the whole transcription. "It failed" with no position is
+  // almost no help to someone deciding whether the problem is the recording, the device
+  // or the model.
+  const src = codeOf('core/transcribe.js');
+  assert.match(src, /Part \$\{i \+ 1\} of \$\{total\}/, 'the part number is in the message');
+  assert.match(src, /from \$\{at\}/, 'and the timestamp it starts at');
+  // The original text must survive: the pool matches on it to decide to back off.
+  assert.match(src, /failed — \$\{err\?\.message \?\? err\}/, "the engine's own reason is kept");
+});
+
+test('an empty worker error is explained rather than called unknown', () => {
+  // On a phone this is the COMMON case: a worker killed by the OS for memory reports no
+  // reason at all, where a real scripting error always carries one. "unknown error"
+  // reads as a bug in the app and tells the user nothing to do.
+  const src = codeOf('core/transcribe.js');
+  assert.doesNotMatch(src, /unknown error/, 'no more "unknown error"');
+  assert.match(src, /ran out /, 'it names the likely cause');
+  assert.match(src, /Faster model/, 'and gives the user something to try');
+  // The pool classifies by message, so these words have to stay.
+  assert.match(src, /Transcription worker failed: \$\{detail\}/, 'still matches the pool\'s test');
+});

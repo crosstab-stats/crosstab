@@ -428,7 +428,13 @@ export function detectLanguage(audio, opts = {}) {
       }
     };
     worker.onerror = (err) => {
-      reject(new Error(`Language detection failed: ${err.message || 'unknown error'}`));
+      // Same reading as the transcription worker below: no message means the browser
+      // stopped it, not that the code threw. Detection loads the full model, so on a
+      // tight device this is a real place to run out — and the user has a way around it
+      // that costs them nothing, so say what it is.
+      reject(new Error(`Language detection failed: ${err?.message
+        || 'the browser stopped the worker without a reason, which usually means the '
+          + 'device ran out of memory — choose the language yourself to skip detecting it'}`));
       worker.terminate();
     };
     const libUrl = getAssets()?.transformersUrl;
@@ -561,7 +567,17 @@ export function transcribe(audio, opts = {}) {
     }
   };
   worker.onerror = (err) => {
-    settle.reject(new Error(`Transcription worker failed: ${err.message || 'unknown error'}`));
+    // An EMPTY message here is itself the diagnosis, and the common one on a phone: a
+    // worker killed by the OS for memory reports no reason at all, where a genuine
+    // scripting error always carries one. Saying "the browser stopped it, most likely
+    // memory" beats "unknown error", which reads as a bug in the app and tells the user
+    // nothing they can act on. The words "worker failed" stay in the string because the
+    // pool matches on them to decide to back off and retry with fewer at once.
+    const detail = err?.message
+      ? err.message
+      : 'the browser stopped it without a reason, which usually means the device ran out '
+        + 'of memory — try the Faster model, or close other tabs and apps';
+    settle.reject(new Error(`Transcription worker failed: ${detail}`));
     worker.terminate();
   };
 
@@ -634,6 +650,8 @@ async function transcribeSegments(audio, opts) {
   const { schedule, onProgress, mode = 'both', onJob = null, ...rest } = opts;
   const step = Math.round(SEGMENT_SECONDS * SAMPLE_RATE);
   const total = Math.ceil(audio.length / step);
+  /** Where a segment starts, in seconds, for messages a person has to act on. */
+  const offsetOf = (i) => (i * step) / SAMPLE_RATE;
   const chunks = new Array(total).fill(null);
   let done = 0;
 
@@ -650,7 +668,18 @@ async function transcribeSegments(audio, opts) {
     const slice = new Float32Array(audio.subarray(from, Math.min(audio.length, from + step)));
     const job = transcribe(slice, { ...rest, mode: 'text', onProgress: null });
     onJob?.(job);
-    const out = await job;
+    let out;
+    try {
+      out = await job;
+    } catch (err) {
+      // WHICH part, and how far in. One segment failing kills the whole transcription,
+      // and "it failed" with no position is almost no help to someone deciding whether
+      // the recording, the device or the model is the problem. The original message is
+      // kept intact at the end because the pool matches it (`looksLikeDeviceLimit`) to
+      // decide whether to back off a worker and retry.
+      const at = `${Math.floor(offsetOf(i) / 60)}:${String(Math.floor(offsetOf(i) % 60)).padStart(2, '0')}`;
+      throw new Error(`Part ${i + 1} of ${total} (from ${at}) failed — ${err?.message ?? err}`);
+    }
     const offset = from / SAMPLE_RATE;
     chunks[i] = (out.chunks ?? []).map((c) => ({
       ...c, start: (c.start ?? 0) + offset, end: (c.end ?? 0) + offset,
