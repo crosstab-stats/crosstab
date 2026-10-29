@@ -29,10 +29,44 @@
  * pick, so the fallback waits long enough for `change` to land first. Every path goes
  * through one `settled` latch, so a double fire cannot resolve twice — which is what
  * makes it safe to arm all three.
+ *
+ * ## Why it then WAITS instead of answering
+ *
+ * The first version read the input once, 400 ms after the refocus, and treated an empty
+ * one as a dismissal. On an iPhone that silently threw away real picks: importing a
+ * 40 MB WAV did nothing at all — no dataset, no error, not even the "how should I
+ * combine this" dialog — because iOS returns focus when the picker sheet dismisses,
+ * which for a large file out of Files/iCloud is well before `input.files` is populated.
+ * The empty read won, the latch closed, and the `change` that arrived a moment later was
+ * ignored. `import-service` reads no files as "the user cancelled" and returns without a
+ * word, so there was nothing on screen to even suggest a failure.
+ *
+ * So an empty input on refocus is treated as what it actually is — AMBIGUOUS — and the
+ * fallback keeps looking until either the file turns up or it has waited long enough to
+ * be sure. Nothing is waiting on the slow path: a genuine cancellation resolves instantly
+ * through the `cancel` event on every browser that has one, and on the ones that do not,
+ * "the user cancelled" resolving a few seconds later is invisible, because the answer is
+ * to do nothing either way.
+ *
+ * Feature-detecting `cancel` and skipping the fallback would be the obvious shortcut and
+ * it is not safe: `oncancel` is a GlobalEventHandlers property that exists for `<dialog>`
+ * on browsers whose file inputs never fire it, so the detection would claim support on
+ * exactly the old Safari this fallback is for and bring the original hang back.
  */
 
-/** How long to let `change` arrive before treating a refocus as a dismissal. */
+/** How long to let `change` arrive before a refocus is worth investigating. */
 const REFOCUS_GRACE_MS = 400;
+
+/**
+ * How long to keep watching an empty input after a refocus before calling it a
+ * dismissal. Generous on purpose: the cost of waiting too long is nothing (a cancel
+ * does nothing, slowly), and the cost of giving up too early is a silently discarded
+ * import of a file the user did choose.
+ */
+const SLOW_CHANGE_MS = 8000;
+
+/** How often to re-read the input while waiting for a slow `change`. */
+const POLL_MS = 150;
 
 /**
  * Open a native file picker and resolve with what the user chose.
@@ -58,6 +92,8 @@ const REFOCUS_GRACE_MS = 400;
  * @param {string} [opts.hint] a `title` for the input.
  * @param {Document} [opts.doc] injectable for tests.
  * @param {Window} [opts.win] injectable for tests.
+ * @param {number} [opts.patienceMs] how long to wait for a slow `change` after a
+ *   refocus; injectable so tests need not sit through the real one.
  * @returns {Promise<File|null>} null if cancelled.
  */
 export function pickFile(opts = {}) {
@@ -79,7 +115,7 @@ export function pickFiles(accept, multiple = true, opts = {}) {
 /** The shared machinery. Always resolves an array; the exports shape it. */
 function pickAll({
   accept = '', multiple = false, hint = '',
-  doc = globalThis.document, win = globalThis,
+  doc = globalThis.document, win = globalThis, patienceMs = SLOW_CHANGE_MS,
 } = {}) {
   return new Promise((resolve) => {
     const input = doc.createElement('input');
@@ -106,7 +142,21 @@ function pickAll({
     // returns the file the user picked.
     win.addEventListener(
       'focus',
-      () => setTimeout(() => finish(chosen()), REFOCUS_GRACE_MS),
+      () => setTimeout(() => {
+        if (settled) return;
+        const picked = chosen();
+        // A file is already there: the refocus followed a successful pick.
+        if (picked.length) { finish(picked); return; }
+        // Empty is ambiguous — either a dismissal, or a `change` still on its way for a
+        // file big enough that iOS has not finished handing it over. Keep looking.
+        const deadline = Date.now() + patienceMs;
+        const poll = setInterval(() => {
+          if (settled) { clearInterval(poll); return; }
+          const late = chosen();
+          if (late.length) { clearInterval(poll); finish(late); return; }
+          if (Date.now() >= deadline) { clearInterval(poll); finish([]); }
+        }, POLL_MS);
+      }, REFOCUS_GRACE_MS),
       { once: true },
     );
 

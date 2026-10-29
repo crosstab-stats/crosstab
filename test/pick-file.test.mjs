@@ -63,11 +63,16 @@ test('a `cancel` event resolves null', async () => {
 test('WITHOUT a cancel event, a refocus still settles it', async () => {
   // The bug. On Safari before 16.4 there is no `cancel`, so this is the only thing that
   // ends the wait — and four of the five pickers did not have it.
+  //
+  // It settles LATER than it used to, deliberately: an empty input on refocus is now
+  // watched for a while first, because answering "cancelled" immediately is what threw
+  // away real picks on iOS. Nothing waits on this — a cancellation does nothing, and
+  // doing nothing a few seconds later looks identical.
   const { el, win, doc, fire } = fakeDom();
-  const p = pickFile({ doc, win });
+  const p = pickFile({ doc, win, patienceMs: 300 });
   assert.ok((win.listeners.focus ?? []).length === 1, 'the fallback must be armed');
   fire(win, 'focus');
-  const settled = await Promise.race([p, new Promise((r) => setTimeout(() => r('HUNG'), 900))]);
+  const settled = await Promise.race([p, new Promise((r) => setTimeout(() => r('HUNG'), 2000))]);
   assert.equal(settled, null, 'cancelling must not hang the flow');
 });
 
@@ -79,6 +84,34 @@ test('the refocus fallback returns the file when `change` was merely slow', asyn
   el.files = ['PICKED'];
   fire(win, 'focus');
   assert.equal(await p, 'PICKED');
+});
+
+// =============================================================================
+// The iPhone bug: a refocus that beats a slow `change`
+//
+// Reported from an iPhone — import a 40 MB WAV into a project with data already
+// loaded and NOTHING happens. No dataset, no error, no "how should I combine this"
+// dialog, and the app still responsive.
+//
+// The window regains focus when the picker sheet dismisses, which on iOS can be well
+// before `input.files` is populated for a large file coming out of Files/iCloud. The
+// fallback then read an EMPTY input, resolved "no files", and latched — so the real
+// `change` that arrived a moment later was ignored. `#runImport` reads no files as
+// "user cancelled" and returns without a word, which is why there was nothing to see.
+// =============================================================================
+
+test('a refocus that beats a slow `change` must not discard the picked file', async () => {
+  const { el, win, doc, fire } = fakeDom();
+  const p = pickFile({ doc, win, patienceMs: 2000 });
+
+  // The sheet closes and the page regains focus with the file not yet attached.
+  fire(win, 'focus');
+  await new Promise((r) => setTimeout(r, 700));
+  // iOS finishes materialising the file and fires `change` — late, but it fired.
+  el.files = ['ES2002a.wav'];
+  fire(el, 'change');
+
+  assert.equal(await p, 'ES2002a.wav', 'a late change must still be honoured');
 });
 
 test('nothing resolves twice', async () => {
