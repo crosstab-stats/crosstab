@@ -203,6 +203,20 @@ const MAX_DOCS = 10000; // v1 cap; virtualise for larger corpora later.
 
 const STYLES = `
 :host, body { margin: 0; }
+/* THE HEIGHT CHAIN. Every column below already declares "overflow: auto", and none of it
+   did anything: ".caqdas" asks for "height: 100%", which resolves against a body of AUTO
+   height, so the container simply grew with the transcript and the whole iframe scrolled
+   as one piece. Scrolling a long transcript therefore scrolled the codebook away with it
+   — reported while coding a 21-minute interview, where picking the next code meant
+   scrolling back up through the text you were reading.
+   Giving html and body a real height is what makes the three panes separate scrollers,
+   because a flex child can only overflow inside a parent whose height is known. */
+html, body { height: 100%; }
+/* EXCEPT in small-screen mode, which is a deliberately different layout: the rails stop
+   being rails and stack into one column bounded by vh, and that wants the document to
+   scroll as a whole. Pinning it to the viewport there would nest three scrollers inside
+   a screen the size of one of them. */
+html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas { display: flex; flex-direction: column; height: 100%; min-height: 460px; font: 14px system-ui, sans-serif; color: var(--ct-text); }
 /* Drift reporting (#166): a coding whose anchor no longer lands cleanly. Amber, not
    red — nothing is broken and nothing was lost, but the user has to know before they
@@ -386,6 +400,18 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__tracktb .caqdas__btn { font-size: 12px; padding: 3px 8px; }
 .caqdas__lanebar.is-track { box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); border-radius: 5px; }
 .caqdas__mediactrl { display: flex; align-items: center; gap: 6px; padding: 8px 20px 0; }
+/* PINNED. Reviewing a transcript means scrolling a long way down it, and the thing you
+   need constantly — play, pause, the position you are at — was the first thing to leave
+   the screen. Sticky rather than a fixed header outside the scroller: the text still
+   starts directly under it, and nothing has to be told the header's height.
+   An opaque background is not decoration — without it the transcript scrolls visibly
+   THROUGH the controls. */
+.caqdas__nowplaying { position: sticky; top: 0; z-index: 3; background: var(--ct-surface);
+  border-bottom: 1px solid var(--ct-line-soft); padding-bottom: 8px; margin: -16px -20px 0;
+  padding-left: 20px; padding-right: 20px; padding-top: 8px; }
+/* In small-screen mode the pane is not its own scroller (see the height chain above), so
+   there is nothing for sticky to stick to and it would just occupy space. */
+[data-screen="small"] .caqdas__nowplaying { position: static; margin: 0; padding-left: 0; padding-right: 0; }
 .caqdas__speedlabel { font-size: 12px; color: var(--ct-muted); margin-right: 2px; }
 .caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); cursor: pointer; }
 .caqdas__speedbtn.is-on { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
@@ -1304,8 +1330,20 @@ export const workspace = {
 
       // Video: player, hint, track toolbar, then the transport strip RIGHT above the
       // ruler (controls off the frame). Audio: player (native controls) + speed row.
-      if (isVideo) textPane.append(playerNode, hint, trackToolbar, ctrl, timeline);
-      else textPane.append(playerNode, ctrl, hint, timeline);
+      if (isVideo) {
+        // Video is left alone deliberately. The frame IS the thing being watched, and a
+        // pinned frame would take a third of the pane before a word of transcript showed;
+        // pinning the transport without it would strand the buttons away from the picture
+        // they drive. The ask came from transcripts, so that is what this changes.
+        textPane.append(playerNode, hint, trackToolbar, ctrl, timeline);
+      } else {
+        // Audio: the player and its transport ride along at the top while the transcript
+        // scrolls under them. The hint and the timeline scroll — the hint is read once,
+        // and the timeline grows a lane per code, so pinning it would eat the pane.
+        const nowPlaying = el('div', { class: 'caqdas__nowplaying' });
+        nowPlaying.append(playerNode, ctrl);
+        textPane.append(nowPlaying, hint, timeline);
+      }
       if (mediaEl.readyState >= 1) drawLanes(lanes, doc, mediaEl.duration || 1); // metadata already cached
     }
 

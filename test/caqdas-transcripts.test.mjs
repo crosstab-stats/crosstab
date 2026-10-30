@@ -831,3 +831,56 @@ test('trying again clears the old verdict', () => {
   assert.ok(body.includes('delete failures[row.rid]'), 'a new attempt clears the failure');
   assert.ok(SRC.includes("'Try again'"), 'and the button says the row has been tried');
 });
+
+// =============================================================================
+// Scrolling a long transcript
+//
+// Reported while coding a 21-minute interview: scrolling the text scrolled the CODEBOOK
+// away with it, so picking the next code meant scrolling back up through the passage you
+// were reading. And the player left the top of the screen, so pausing meant scrolling
+// back too.
+//
+// Every column already declared "overflow: auto" and none of it did anything: .caqdas
+// asks for height 100%, which resolves against a body of AUTO height, so the container
+// grew with the transcript and the whole iframe scrolled as one piece. A flex child can
+// only overflow inside a parent whose height is known.
+//
+// Measured in a browser with the real stylesheet, before and after: scrolling the text
+// 2000px used to drag the codebook up by exactly 2000px; now it moves by zero, and the
+// player stays put at the top of the text column.
+// =============================================================================
+
+test('html and body have a real height, or no column can scroll on its own', () => {
+  assert.ok(/html,\s*body\s*\{[^}]*height:\s*100%/.test(SRC), 'the height chain is closed');
+  // Small-screen mode is a different layout on purpose: the rails stop being rails and
+  // stack, and that wants the document to scroll as a whole rather than nesting three
+  // scrollers inside a screen the size of one of them.
+  assert.ok(
+    /html\[data-screen="small"\][^{]*\{[^}]*height:\s*auto/.test(SRC),
+    'and it is released again in small-screen mode',
+  );
+});
+
+test('the audio player is pinned to the top of the text it belongs to', () => {
+  assert.ok(/\.caqdas__nowplaying\s*\{[^}]*position:\s*sticky/.test(SRC), 'sticky, not fixed');
+  // Without an opaque background the transcript scrolls visibly through the controls.
+  assert.ok(/\.caqdas__nowplaying\s*\{[^}]*background:/.test(SRC), 'and opaque');
+  assert.ok(
+    /\[data-screen="small"\]\s*\.caqdas__nowplaying\s*\{[^}]*position:\s*static/.test(SRC),
+    'and not sticky where there is no scroller to stick to',
+  );
+});
+
+test('only the audio path pins its player; video is left alone', () => {
+  // The frame IS the thing being watched, and a pinned frame would take a third of the
+  // pane before a word of transcript showed.
+  // Anchored on the append itself: there are four `if (isVideo)` branches in this file
+  // and indexOf found the first one, which failed on code that was perfectly correct.
+  const at = SRC.indexOf('textPane.append(playerNode, hint, trackToolbar, ctrl, timeline)');
+  assert.ok(at > 0, 'the video append is where we think it is');
+  const branch = SRC.slice(at, at + 900);
+  const videoHalf = branch.slice(0, branch.indexOf('} else {'));
+  assert.ok(!videoHalf.includes('caqdas__nowplaying'), 'video appends its player unwrapped');
+  assert.ok(videoHalf.includes('playerNode'), 'and it really is the video append');
+  assert.ok(branch.includes("el('div', { class: 'caqdas__nowplaying' })"), 'audio wraps it');
+});
