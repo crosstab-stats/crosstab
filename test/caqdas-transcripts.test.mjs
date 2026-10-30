@@ -861,6 +861,25 @@ test('html and body have a real height, or no column can scroll on its own', () 
   );
 });
 
+test('the TRANSCRIPT player is pinned — the renderer a transcript actually uses', () => {
+  // The miss that shipped: there are TWO player renderers. `.caqdas__nowplaying` is the
+  // audio-DOCUMENT path; a transcript is a TEXT document with a media sidecar and goes
+  // through `attachTranscriptPlayer`, which builds `.caqdas__tplayer`. Pinning only the
+  // first was verified against a DOM I had assembled myself from the class names I had
+  // just written — so it passed, and the thing the user actually looks at still scrolled
+  // away. Driving the real Coding tab afterwards put the player at -2984px.
+  assert.ok(/\.caqdas__tplayer\.is-audio\s*\{[^}]*position:\s*sticky/.test(SRC),
+    'the transcript player sticks');
+  assert.ok(
+    /\[data-screen="small"\]\s*\.caqdas__tplayer\.is-audio\s*\{[^}]*position:\s*static/.test(SRC),
+    'except where there is no scroller to stick to',
+  );
+  // The class is applied only once the blob's type is known, because the host is put on
+  // screen before the media loads so the "Loading the recording…" note has a home.
+  assert.ok(SRC.includes("host.classList.toggle('is-audio', !isVideo)"),
+    'and only audio gets it — a 40vh video frame would take most of the pane');
+});
+
 test('the audio player is pinned to the top of the text it belongs to', () => {
   assert.ok(/\.caqdas__nowplaying\s*\{[^}]*position:\s*sticky/.test(SRC), 'sticky, not fixed');
   // Without an opaque background the transcript scrolls visibly through the controls.

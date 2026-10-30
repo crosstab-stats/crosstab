@@ -233,6 +233,15 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__driftrow .why { color: #8a6d3b; font-size: 12px; }
 /* --- transcript pane (time-aligned text) ----------------------------------- */
 .caqdas__tplayer { padding: 6px 8px; border-bottom: 1px solid var(--ct-border, #d8dee4); background: var(--ct-surface-2, #f6f8fa); }
+/* PINNED, for a transcript with a recording. Reviewing one means scrolling a long way
+   down it, and the controls you need constantly were the first thing off the screen.
+   This is the element the TRANSCRIPT path builds; .caqdas__nowplaying below is the
+   audio-DOCUMENT path. They are different renderers and both needed saying.
+   Audio only (hence .is-audio): a video here is capped at 40vh, and pinning that would
+   take most of the pane before a word of transcript showed. */
+.caqdas__tplayer.is-audio { position: sticky; top: 0; z-index: 3; }
+/* No scroller to stick to in small-screen mode — see the height chain above. */
+[data-screen="small"] .caqdas__tplayer.is-audio { position: static; }
 .caqdas__taudio { width: 100%; }
 .caqdas__tvideo { width: 100%; max-height: 40vh; background: #000; }
 .caqdas__tloading { font-size: 12px; color: #646e77; padding: 4px 2px; }
@@ -1085,6 +1094,9 @@ export const workspace = {
         return;
       }
       const isVideo = String(blob.type || '').startsWith('video');
+      // Only now is the medium known — the host was put on screen before the blob
+      // loaded so the "Loading the recording…" note had somewhere to live.
+      host.classList.toggle('is-audio', !isVideo);
       transcriptUrl = URL.createObjectURL(blob);
       const player = document.createElement(isVideo ? 'video' : 'audio');
       player.controls = true;
