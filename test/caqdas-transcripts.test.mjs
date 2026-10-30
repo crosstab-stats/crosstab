@@ -903,3 +903,53 @@ test('only the audio path pins its player; video is left alone', () => {
   assert.ok(videoHalf.includes('playerNode'), 'and it really is the video append');
   assert.ok(branch.includes("el('div', { class: 'caqdas__nowplaying' })"), 'audio wraps it');
 });
+
+// =============================================================================
+// Following the active dataset
+//
+// Reported: import a second recording into a NEW dataset and the Transcripts tab keeps
+// showing the first one's media, with nothing in the UI to change it.
+//
+// `workspace._onDsChanged` was a single SLOT, and only mountCoding ever filled it. The
+// Transcripts tab had no handler — and because `onDatasetChanged` then returned without
+// throwing, the host counted the hook as HANDLED and skipped the remount it would
+// otherwise have done. Doing nothing successfully is the worst possible answer to that
+// hook, and the shape of the slot is what made it expressible.
+//
+// Driven against the real tab, before and after: old code still listed
+// "ES2002a.Mix-Headset.wav" after the switch with the hook reporting success; new code
+// lists "second-interview.wav".
+// =============================================================================
+
+test('every tab registers its own reload; there is no single slot to lose', () => {
+  assert.ok(SRC.includes('const reloaders = new Set()'), 'a registry, not a slot');
+  assert.ok(!SRC.includes('workspace._onDsChanged ='), 'nothing assigns the old slot');
+  assert.ok(!SRC.includes('if (workspace._onDsChanged)'), 'and nothing reads it');
+  const hook = SRC.slice(SRC.indexOf('async onDatasetChanged'), SRC.indexOf('async onDatasetChanged') + 400);
+  assert.ok(hook.includes('for (const reload of [...reloaders]) await reload()'),
+    'the hook runs every registered tab');
+});
+
+test('the refresh hook runs them all too', () => {
+  // onRefresh is how a collaborator's merged coding and a data edit arrive; it went
+  // through the same single slot.
+  const at = SRC.indexOf('async onRefresh');
+  const hook = SRC.slice(at, at + 300);
+  assert.ok(hook.includes('for (const reload of [...reloaders]) await reload()'));
+});
+
+test('the transcripts tab re-reads PER-DATASET state, not just the media list', () => {
+  // Transcripts, in-flight jobs and failures are all per-dataset. Reloading the row list
+  // without them would show the new dataset's recordings alongside the old one's
+  // transcripts.
+  const at = SRC.indexOf('// --- dataset-change reload ---');
+  assert.ok(at > 0, 'the transcripts tab has a reload handler');
+  const body = SRC.slice(at, at + 1600);
+  assert.ok(body.includes('reloaders.add('), 'and registers it');
+  for (const key of ['st.transcripts', 'st.transcribing', 'st.transcribeFailures']) {
+    assert.ok(body.includes(key), `${key} is re-read`);
+  }
+  assert.ok(body.includes('jobOf.clear()'), 'the row-to-job map is rebuilt');
+  assert.ok(body.includes('await loadMedia()'), 'the media list is re-read');
+  assert.ok(body.includes('await refresh()'), 'and the table redrawn');
+});

@@ -481,6 +481,22 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 [data-screen="small"] .caqdas__lanelabel { flex-basis: 84px; }
 `;
 
+/**
+ * Every mounted tab's "re-read everything" callback (#195).
+ *
+ * This was a single slot, `workspace._onDsChanged`, and only `mountCoding` ever filled
+ * it. The Transcripts tab therefore had no handler — and because `onDatasetChanged`
+ * returned without throwing, the host counted the hook as HANDLED and skipped the
+ * remount it would otherwise have done. The tab sat on the dataset it first mounted
+ * with, showing the first import's recording with no way to reach the second.
+ *
+ * Each tab is its own iframe today, so this set holds exactly one handler per instance
+ * and needs no deregistration: it dies with the frame. It is a set rather than a slot
+ * because a slot is what made "the other tab silently has no handler" expressible in the
+ * first place.
+ */
+const reloaders = new Set();
+
 export const workspace = {
   /**
    * One module, two tabs. The host passes `{id, title}` as the third argument, which is
@@ -3374,7 +3390,7 @@ export const workspace = {
     // --- dataset-change refresh ------------------------------------------------
     // Stash a callback so onDatasetChanged (outside mount's closure) can trigger
     // a full state reload without tearing down the iframe.
-    workspace._onDsChanged = async () => {
+    reloaders.add(async () => {
       if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
       // Which document the user was reading. A reload now happens on every data change,
       // not only on a dataset switch, so dropping this would throw the reader back to the
@@ -3402,7 +3418,7 @@ export const workspace = {
       if (wasReading && docs.some((d) => d.rid === wasReading)) activeRid = wasReading;
       if (state.pendingImport) await resolvePendingImport();
       renderAll();
-    };
+    });
 
     // --- go ------------------------------------------------------------------
     await loadDocs();
@@ -3412,7 +3428,8 @@ export const workspace = {
 
   async onDatasetChanged(app) {
     if (app.debug) console.debug('[caqdas] onDatasetChanged');
-    if (workspace._onDsChanged) await workspace._onDsChanged();
+    // EVERY tab in this frame, not whichever one happened to register last.
+    for (const reload of [...reloaders]) await reload();
     if (app.debug) console.debug('[caqdas] onDatasetChanged OK');
   },
 
@@ -3423,7 +3440,7 @@ export const workspace = {
   // two-window bug). Reuses the dataset-change reload (re-reads app.state.get()).
   async onRefresh(app) {
     if (app.debug) console.debug('[caqdas] onRefresh');
-    if (workspace._onDsChanged) await workspace._onDsChanged();
+    for (const reload of [...reloaders]) await reload();
   },
 };
 
@@ -6751,6 +6768,29 @@ async function mountTranscripts(app, root) {
 
   await loadMedia();
   await refresh();
+  // --- dataset-change reload ---------------------------------------------------
+  //
+  // Importing a second recording into a NEW dataset left this tab showing the first
+  // one's media, with nothing in the UI to change it. The host rebinds this workspace to
+  // the now-active dataset BEFORE sending the hook, so `app.state.get()` here already
+  // returns the new dataset's blob — the tab just has to ask again.
+  //
+  // Transcripts, in-flight jobs and failures are all per-dataset state, so all three are
+  // re-read. Jobs still running for the previous dataset's rows do not stop; they simply
+  // no longer match a row here, which is exactly the case the orphan line reports.
+  reloaders.add(async () => {
+    try {
+      const st = (await app.state.get()) ?? {};
+      saved = st.transcripts ?? {};
+      pending = st.transcribing ?? {};
+      failures = st.transcribeFailures ?? {};
+    } catch { saved = {}; pending = {}; failures = {}; }
+    jobOf.clear();
+    for (const [rid, id] of Object.entries(pending)) jobOf.set(rid, id);
+    await loadMedia();
+    await refresh();
+  });
+
   // Polling, because progress cannot be pushed across the broker. Slow enough not to
   // matter, fast enough that a finished transcript appears while the next is still
   // running — which is the whole point of the tab.
