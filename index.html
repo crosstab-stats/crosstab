@@ -19,13 +19,48 @@
     <script src="sw.js"></script>
 
     <style>
+      /* ONE PALETTE, under one set of names.
+         =====================================================================
+         The host and the plugin standard had grown two vocabularies for the
+         same colours. Mostly they agreed — `--accent` and `--ct-accent` are
+         both #2572a5, `--line` and `--ct-line` both #d8dde2 — which is worse
+         than disagreeing, because it reads as deliberate while nothing keeps
+         them in step. One pair had already drifted (`--bg` #f7f8fa against
+         `--ct-panel` #f7f9fb), and one name meant OPPOSITE things: the host's
+         `--panel` is white, the standard's `--ct-panel` is the grey behind a
+         panel. A theme written against one would have got the other backwards.
+
+         So the `--ct-*` names are canonical here too, with the values from
+         `TOKENS` in core/plugin-stdlib.js — a test asserts the two agree, so
+         they cannot drift again. The host's own names stay as ALIASES: 98
+         declarations use them, rewriting all of those would be churn with no
+         reader benefit, and an alias costs nothing and keeps one source.
+         ===================================================================== */
       :root {
+        --ct-accent: #2572a5;
+        --ct-accent-wash: #eef5fb;
+        --ct-on-accent: #ffffff;
+        --ct-line: #d8dde2;
+        --ct-line-soft: #e6eaee;
+        --ct-panel: #f7f9fb;
+        --ct-surface: #ffffff;
+        --ct-text: #1a1a1a;
+        --ct-muted: #646e77;
+        --ct-danger: #b03030;
+        --ct-radius: 6px;
+
+        /* Host chrome with no equivalent in a pane: the application bar is the
+           one surface a plugin never draws. */
         --bar: #2c3e50;
         --bar-fg: #ecf0f1;
-        --accent: #2572a5;
-        --line: #d8dde2;
-        --bg: #f7f8fa;
-        --panel: #ffffff;
+
+        /* Aliases. `--bg` was #f7f8fa and is now the token's #f7f9fb — a
+           one-step difference nobody can see, taken deliberately so there is a
+           single grey rather than two that are nearly the same. */
+        --accent: var(--ct-accent);
+        --line: var(--ct-line);
+        --bg: var(--ct-panel);
+        --panel: var(--ct-surface);
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; }
@@ -38,7 +73,7 @@
       html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
       body {
         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-        color: #1a1a1a;
+        color: var(--ct-text);
         background: var(--bg);
         display: flex;
         flex-direction: column;
@@ -86,7 +121,7 @@
       .menu__button:hover, .menu__button[aria-expanded="true"] { background: rgba(255,255,255,.15); }
       .menu__panel {
         position: absolute; top: 100%; left: 0; z-index: 50;
-        background: var(--panel); color: #1a1a1a; min-width: 240px;
+        background: var(--panel); color: var(--ct-text); min-width: 240px;
         border: 1px solid var(--line); border-radius: 6px;
         box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px;
         /* A long menu (e.g. Regression) scrolls within itself instead of growing
@@ -97,7 +132,7 @@
         display: block; width: 100%; text-align: left; background: transparent;
         border: 0; font: inherit; padding: 9px 12px; border-radius: 4px; cursor: pointer;
       }
-      .menu__item:hover { background: #eef5fb; }
+      .menu__item:hover { background: var(--ct-accent-wash); }
       /* An item whose action is unavailable right now (a computed `enabled`, #191).
          Greyed rather than hidden: a missing Undo reads as a broken menu, where a
          greyed one reads as "nothing to undo", which is the true statement. */
@@ -106,7 +141,7 @@
       .menu__group { padding: 4px 0; }
       .menu__group-label {
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-        color: #646e77; padding: 6px 12px 2px;
+        color: var(--ct-muted); padding: 6px 12px 2px;
       }
 
       /* The one-line note shown when the VIEWPORT turned small-screen mode on. Said once,
@@ -137,8 +172,8 @@
       /* sidebar = project manager: active project + its datasets, other projects,
          building blocks */
       .proj__head { display: flex; align-items: center; gap: 4px; margin: 0 0 10px; }
-      .proj__name { flex: 1; min-width: 0; font-weight: 700; font-size: 14px; color: #1a1a1a; word-break: break-word; }
-      .proj__sub { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #646e77; margin: 0 0 6px; }
+      .proj__name { flex: 1; min-width: 0; font-weight: 700; font-size: 14px; color: var(--ct-text); word-break: break-word; }
+      .proj__sub { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 0 0 6px; }
       .proj__sub--zone { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); }
       .proj__empty { font-size: 12px; color: #6c7882; padding: 4px 8px; }
       .proj__datasets { list-style: none; margin: 0 0 10px; padding: 0; }
@@ -160,7 +195,7 @@
         font: inherit; font-weight: 600; text-align: left; background: none;
         border: 0; padding: 0; color: inherit; cursor: pointer;
       }
-      .proj__ds-rows { font: 12px ui-monospace, Menlo, monospace; color: #646e77; }
+      .proj__ds-rows { font: 12px ui-monospace, Menlo, monospace; color: var(--ct-muted); }
       /* A row that carries a second line (the Recent projects list). The dataset rows above
          share `.proj__ds` and must stay on one line, so this is a modifier. */
       .proj__ds--stacked { flex-direction: column; align-items: stretch; gap: 2px; }
@@ -172,12 +207,12 @@
          show. `white-space: normal` is explicit because `.proj__ds-name` beside it sets
          nowrap and these rules sit close enough to be read as a pair. */
       .proj__ds-meta {
-        font-size: 11px; line-height: 1.35; color: #646e77;
+        font-size: 11px; line-height: 1.35; color: var(--ct-muted);
         white-space: normal; overflow-wrap: anywhere;
       }
       /* row action icons (✎ rename, ✕ remove) — visible, darken on hover */
-      .proj__ds-x { border: 0; background: none; color: #646e77; cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 4px; }
-      .proj__ds-x:hover:not(:disabled) { color: #1a1a1a; background: #dfe5ea; }
+      .proj__ds-x { border: 0; background: none; color: var(--ct-muted); cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 4px; }
+      .proj__ds-x:hover:not(:disabled) { color: var(--ct-text); background: #dfe5ea; }
       .proj__ds-x:disabled { opacity: .3; cursor: default; } /* greyed, still visible */
       .proj__ds-edit { flex: 1; min-width: 0; font: inherit; padding: 2px 4px; border: 1px solid var(--accent); border-radius: 4px; }
       .proj__blob {
@@ -186,7 +221,7 @@
       }
       .proj__blob-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       /* where a listed project lives — dim, so it reads as a detail rather than a name */
-      .proj__ds-where { font-size: 11px; color: #646e77; white-space: nowrap; flex: 0 0 auto; }
+      .proj__ds-where { font-size: 11px; color: var(--ct-muted); white-space: nowrap; flex: 0 0 auto; }
 
       /* project manager (#173): one modal, location as a dimension inside a verb.
          Sizes here deliberately match the rest of the app: body text is 14px, so a
@@ -198,8 +233,8 @@
       .ctpm__tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 0 12px; }
       .ctpm__tab { font: inherit; font-size: 15px; border: 0; background: none; padding: 9px 16px;
         cursor: pointer; color: #4a5560; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; }
-      .ctpm__tab:hover { background: #eef5fb; }
-      .ctpm__tab.is-active { color: #1a1a1a; font-weight: 600; border-bottom-color: var(--accent); }
+      .ctpm__tab:hover { background: var(--ct-accent-wash); }
+      .ctpm__tab.is-active { color: var(--ct-text); font-weight: 600; border-bottom-color: var(--accent); }
       .ctpm__body { min-height: 300px; max-height: 58vh; overflow: auto; padding: 4px 0 0; }
       .ctpm__split { display: flex; gap: 14px; align-items: stretch; }
       .ctpm__rail { flex: 0 0 180px; display: flex; flex-direction: column; gap: 4px;
@@ -208,13 +243,13 @@
          list" control, which is exactly what this is. */
       .ctpm__railitem { font: inherit; font-size: 14px; text-align: left; border: 0; background: none;
         cursor: pointer; padding: 10px 12px; border-radius: 8px; color: #2a3540; }
-      .ctpm__railitem:hover { background: #eef5fb; }
+      .ctpm__railitem:hover { background: var(--ct-accent-wash); }
       .ctpm__railitem.is-active { background: #e3edf7; font-weight: 600; }
       .ctpm__pane { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
       .ctpm__list { display: flex; flex-direction: column; gap: 3px; }
       .ctpm__row { display: flex; align-items: center; gap: 8px; border-radius: 6px; }
       .ctpm__row:hover { background: #f4f7fa; }
-      .ctpm__row.is-open { background: #eef5fb; }
+      .ctpm__row.is-open { background: var(--ct-accent-wash); }
       .ctpm__rowmain { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px;
         font: inherit; font-size: 15px; text-align: left; border: 0; background: none;
         cursor: pointer; padding: 11px 12px; }
@@ -224,20 +259,20 @@
       /* The NAME is what the row is for, so it gets the space and the location gives way:
          both can ellipsise, but `flex: 1 1 auto` against `0 1 auto` decides which goes
          first when there is not enough room for both. */
-      .ctpm__name { font-weight: 600; color: #1a1a1a; flex: 1 1 auto; min-width: 0;
+      .ctpm__name { font-weight: 600; color: var(--ct-text); flex: 1 1 auto; min-width: 0;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .ctpm__where { font-size: 13px; color: #646e77; flex: 0 1 auto; min-width: 0;
+      .ctpm__where { font-size: 13px; color: var(--ct-muted); flex: 0 1 auto; min-width: 0;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ctpm__acts { display: flex; gap: 4px; padding-right: 8px; }
       /* Same metrics as `.ct-dialog__buttons button`, because it is the same kind of
          thing — a button in a dialog. */
-      .ctpm__act { font: inherit; border: 1px solid var(--line); background: #fff;
+      .ctpm__act { font: inherit; border: 1px solid var(--line); background: var(--ct-surface);
         border-radius: 6px; padding: 8px 16px; cursor: pointer; color: #2a3540; }
-      .ctpm__act:hover { background: #eef5fb; }
+      .ctpm__act:hover { background: var(--ct-accent-wash); }
       .ctpm__act.is-danger { color: #a33; border-color: #e3c3c3; }
       .ctpm__act.is-danger:hover { background: #fdf2f2; }
-      .ctpm__hint { color: #5a6470; margin: 0 0 12px; line-height: 1.45; } /* = .ct-dialog__hint */
-      .ctpm__empty, .ctpm__loading { color: #646e77; padding: 32px 12px; }
+      .ctpm__hint { color: var(--ct-muted); margin: 0 0 12px; line-height: 1.45; } /* = .ct-dialog__hint */
+      .ctpm__empty, .ctpm__loading { color: var(--ct-muted); padding: 32px 12px; }
       /* Export-tab group heads (#181). The two groups differ in what the file can DO —
          reopen as a project, or not — so they are separated rather than listed flat. */
       .ctpm__grouphead { font-size: 1em; margin: 4px 0 4px; }
@@ -254,9 +289,9 @@
       .proj__memo-text { flex: 1; min-width: 0; color: #4a5560; overflow-wrap: anywhere; }
       .proj__add {
         width: 100%; font: inherit; font-size: 13px; padding: 6px;
-        border: 1px dashed var(--line); border-radius: 6px; background: #fff; color: #5a6470; cursor: pointer;
+        border: 1px dashed var(--line); border-radius: 6px; background: var(--ct-surface); color: var(--ct-muted); cursor: pointer;
       }
-      .proj__add:hover { background: #eef5fb; color: #1a1a1a; }
+      .proj__add:hover { background: var(--ct-accent-wash); color: var(--ct-text); }
 
       /* workspace: tabbed main area (Data / Variables / Output) */
       /* min-width:0 so this flex item clips its wide grid instead of expanding to
@@ -268,7 +303,7 @@
       }
       .tab {
         background: transparent; border: 0; border-bottom: 2px solid transparent;
-        font: inherit; padding: 9px 14px; cursor: pointer; color: #5a6470;
+        font: inherit; padding: 9px 14px; cursor: pointer; color: var(--ct-muted);
         /* Keep each tab at its natural width. `.tabs` is a flex row that scrolls
            (overflow-x: auto), but a flex item's default `flex-shrink: 1` wins over
            that: the items squeezed instead of overflowing, so the strip never
@@ -278,14 +313,14 @@
            nothing to scroll (owner's screenshot, 2026-10-10). */
         flex: 0 0 auto; white-space: nowrap;
       }
-      .tab:hover { color: #1a1a1a; }
-      .tab[aria-selected="true"] { color: #1a1a1a; border-bottom-color: var(--accent); font-weight: 600; }
+      .tab:hover { color: var(--ct-text); }
+      .tab[aria-selected="true"] { color: var(--ct-text); border-bottom-color: var(--accent); font-weight: 600; }
       .tab-action {
         margin-left: auto; align-self: center; background: transparent;
         border: 1px solid var(--line); border-radius: 6px; font: inherit; font-size: 13px;
-        padding: 4px 10px; cursor: pointer; color: #5a6470;
+        padding: 4px 10px; cursor: pointer; color: var(--ct-muted);
       }
-      .tab-action:hover { background: #eef5fb; color: #1a1a1a; }
+      .tab-action:hover { background: var(--ct-accent-wash); color: var(--ct-text); }
       .tab-action[hidden] { display: none; }
       .view { flex: 1; overflow: auto; min-height: 0; min-width: 0; }
       /* The data-grid panel lays out as a flex column (toolbar + scroller). A
@@ -303,7 +338,7 @@
          the picked variables CONTAIN, not how the console behaves. */
       .rc-keepmissing {
         flex: none; display: inline-flex; align-items: center; gap: 5px;
-        font-size: 12px; color: #5a6470; white-space: nowrap; cursor: pointer; user-select: none;
+        font-size: 12px; color: var(--ct-muted); white-space: nowrap; cursor: pointer; user-select: none;
       }
       .rc-keepmissing input { margin: 0; cursor: pointer; }
       .rc-filter {
@@ -320,7 +355,7 @@
       .rc-vars__empty { color: #888; font-style: italic; font-size: 13px; }
       .rc-info { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: #444; background: #fafbfc; }
       .rc-info__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
-      .rc-info__k { color: #646e77; }
+      .rc-info__k { color: var(--ct-muted); }
       .rc-vars-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; }
       .rc-libs-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; flex: 1; min-width: 0; }
       .rc-lib-add { font: inherit; font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; width: 130px; }
@@ -334,17 +369,17 @@
       }
       .rc-term > div { margin: 0 0 2px; }
       .rc-cmd { color: #2563a8; }
-      .rc-result { color: #1a1a1a; }
+      .rc-result { color: var(--ct-text); }
       .rc-err { color: #b3201a; }
-      .rc-note { color: #646e77; font-style: italic; }
+      .rc-note { color: var(--ct-muted); font-style: italic; }
       .rc-plot {
         display: block; max-width: 100%; max-height: 360px; height: auto; width: auto;
-        margin: 6px 0 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff;
+        margin: 6px 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--ct-surface);
       }
       .rc-prompt { display: flex; align-items: flex-start; gap: 6px; }
       .rc-caret { color: var(--accent); font-weight: 700; }
       .rc-input {
-        flex: 1; border: 0; outline: none; background: transparent; font: inherit; color: #1a1a1a;
+        flex: 1; border: 0; outline: none; background: transparent; font: inherit; color: var(--ct-text);
         resize: none; overflow-y: auto; line-height: 1.45; padding: 0; max-height: 160px;
       }
       .rc-input:disabled { color: #aaa; }
@@ -371,13 +406,13 @@
       .ct-vartools__order,
       .ct-vartools__display {
         font: inherit; font-size: 13px; padding: 5px 8px; flex: none;
-        border: 1px solid var(--line); border-radius: 6px; background: #fff;
+        border: 1px solid var(--line); border-radius: 6px; background: var(--ct-surface);
       }
       /* The count after the controls is each surface's own fact — selection in the
          grid, filter result in Variable View and the picker — so only its look is
          shared, not its text. */
-      .ct-vartools__count { font-size: 12px; color: #646e77; }
-      .ct-vartools__count--dialog { margin: 0 0 6px; color: #5a6470; }
+      .ct-vartools__count { font-size: 12px; color: var(--ct-muted); }
+      .ct-vartools__count--dialog { margin: 0 0 6px; color: var(--ct-muted); }
       .grid-scroll { flex: 1; overflow: auto; min-height: 0; min-width: 0; }
       /* column header: a selection checkbox + an ellipsised label */
       .colhead { display: flex; align-items: center; gap: 6px; cursor: pointer; overflow: hidden; }
@@ -390,7 +425,7 @@
          readable at any column width. */
       .colhead__stack { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
       .colhead__name {
-        font: 11.5px ui-monospace, Menlo, Consolas, monospace; color: #646e77;
+        font: 11.5px ui-monospace, Menlo, Consolas, monospace; color: var(--ct-muted);
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
 
@@ -420,7 +455,7 @@
            gutter number rather than inheriting the UA's bold header weight. */
         font-weight: 400;
         position: sticky; left: 0; z-index: 1; width: 56px; max-width: 56px;
-        background: var(--panel); color: #646e77; border-left: 1px solid var(--line);
+        background: var(--panel); color: var(--ct-muted); border-left: 1px solid var(--line);
         text-align: right; font-variant-numeric: tabular-nums;
       }
       /* The top-left corner must beat both the sticky header and the sticky gutter. */
@@ -442,7 +477,7 @@
       }
       /* virtualisation spacers: no border/padding; size set inline */
       .grid td.spacer { padding: 0; border: none; overflow: hidden; }
-      .grid-empty { padding: 16px; color: #646e77; }
+      .grid-empty { padding: 16px; color: var(--ct-muted); }
 
       /* variable view — metadata table */
       .vargrid { border-collapse: collapse; width: 100%; font: 13px/1.4 system-ui, sans-serif; }
@@ -451,9 +486,9 @@
       }
       .vargrid thead th {
         position: sticky; top: 0; background: var(--panel);
-        font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #646e77;
+        font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ct-muted);
       }
-      .vargrid code { font: 12px ui-monospace, Menlo, monospace; color: #1a1a1a; }
+      .vargrid code { font: 12px ui-monospace, Menlo, monospace; color: var(--ct-text); }
       /* The frequency weight, in the list that is about the variables themselves. The
          chip carries the meaning and the tint only reinforces it — colour alone is not
          information a colourblind or screen-reader user receives (WCAG 1.4.1), and this
@@ -471,7 +506,7 @@
         font: inherit; background: none; border: 0; padding: 0; margin: 0;
         color: inherit; cursor: pointer; text-align: left;
       }
-      .vargrid__row:hover { background: #eef5fb; }
+      .vargrid__row:hover { background: var(--ct-accent-wash); }
 
       /* history / rewind panel */
       .ct-historyhost { padding: 4px 2px; }
@@ -485,7 +520,7 @@
       .history__btn {
         display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0;
         text-align: left; background: none; border: 0; cursor: pointer;
-        padding: 7px 10px; border-radius: 6px; color: #1a1a1a; font: inherit;
+        padding: 7px 10px; border-radius: 6px; color: var(--ct-text); font: inherit;
       }
       /* per-step controls: move up/down, delete */
       /* Always visible — NOT revealed on hover (owner, 2026-09-27: "touch devices dont have
@@ -500,10 +535,10 @@
          drift apart the way the two pickers' tooltips did. */
       .history-panel__gctl { display: flex; gap: 1px; flex: none; }
       .history__ctlbtn {
-        border: 0; background: none; cursor: pointer; color: #687381; font-size: 12px;
+        border: 0; background: none; cursor: pointer; color: var(--ct-muted); font-size: 12px;
         width: 20px; height: 22px; border-radius: 4px; line-height: 1;
       }
-      .history__ctlbtn:hover:not(:disabled) { background: #e3e8ee; color: #1a1a1a; }
+      .history__ctlbtn:hover:not(:disabled) { background: #e3e8ee; color: var(--ct-text); }
       .history__ctlbtn:disabled { opacity: .25; cursor: default; }
       /* 44px on a touch screen, per the accessibility baseline. These were 20x22 and had
          no small-screen rule at all — a leak the contrast/keyboard pass never covered,
@@ -545,7 +580,7 @@
       /* floating History panel (Edit ▸ History…) — non-blocking, grid stays live */
       .history-panel {
         position: fixed; top: 52px; right: 12px; bottom: 12px; width: 340px; z-index: 50;
-        background: var(--panel, #fff); border: 1px solid var(--line); border-radius: 10px;
+        background: var(--panel, var(--ct-surface)); border: 1px solid var(--line); border-radius: 10px;
         box-shadow: 0 12px 40px rgba(0,0,0,.22); display: flex; flex-direction: column; overflow: hidden;
       }
       .history-panel[hidden] { display: none; }
@@ -561,7 +596,7 @@
       .history-panel__toolbar { padding: 7px 12px; border-bottom: 1px solid var(--line); }
       .history-panel__action {
         font: inherit; font-size: 12px; padding: 5px 10px; cursor: pointer;
-        background: #fff; border: 1px solid var(--accent); color: var(--accent); border-radius: 6px;
+        background: var(--ct-surface); border: 1px solid var(--accent); color: var(--accent); border-radius: 6px;
       }
       .history-panel__action:hover { background: #f0f7ff; }
       .history-panel__err {
@@ -569,7 +604,7 @@
         border-bottom: 1px solid #f0d8d5;
       }
       .history-panel__content { flex: 1; overflow: auto; padding: 8px 6px; }
-      .history__btn:hover:not(:disabled) { background: #eef5fb; }
+      .history__btn:hover:not(:disabled) { background: var(--ct-accent-wash); }
       .history__btn:disabled { cursor: default; }
       .history__marker {
         position: relative; z-index: 1; flex: none; width: 22px; height: 22px;
@@ -583,7 +618,7 @@
       /* The kind glyph sits WITH the title, so an analysis can keep its number. It used
          to replace the number, which is how analysis rows ended up unnumbered and —
          since only numbered rows were clickable — unable to be rewound to at all. */
-      .history__glyph { color: var(--accent, #2572a5); font-weight: 700; margin-right: 6px; }
+      .history__glyph { color: var(--accent, var(--ct-accent)); font-weight: 700; margin-right: 6px; }
       .history__step--analysis .history__title { font-weight: 600; }
       /* Records (memos, coding) are not steps in the recipe: no number, and set back so
          the numbered sequence still reads as a sequence. */
@@ -595,7 +630,7 @@
       .history__step--record > .history__btn { padding-left: 26px; }
       .history__step--more > .history__btn { font-size: 12px; color: #5a7fa8; padding-left: 26px; }
       .history__title { font-weight: 600; }
-      .history__detail { font-size: 12px; color: #646e77; }
+      .history__detail { font-size: 12px; color: var(--ct-muted); }
       .history__step--future .history__detail { color: #aeb7c0; }
       .history__badge {
         margin-left: auto; align-self: center; font-size: 11px; font-weight: 600;
@@ -604,7 +639,7 @@
       /* A result whose data moved after it ran. Amber rather than red: the numbers are not
          wrong, they describe an earlier state — which is the whole point of a history. */
       .history__badge--stale { color: #8a5a00; background: #fdf0d5; }
-      .history-hint { color: #646e77; font-size: 13px; line-height: 1.5; padding: 4px 12px 0; max-width: 48ch; }
+      .history-hint { color: var(--ct-muted); font-size: 13px; line-height: 1.5; padding: 4px 12px 0; max-width: 48ch; }
 
       /* variable metadata editor (recode), and every plugin dialog raised through
          ui-service's showForm. `min(380px, 100%)` rather than a flat 380px because this
@@ -624,7 +659,7 @@
          button holding a long variable label can't shrink and shoves its siblings
          (the "new variable" name) off the dialog. */
       .ct-row .ct-field { flex: 1; min-width: 0; }
-      .ct-hint { color: #646e77; font-weight: 400; font-size: 11px; }
+      .ct-hint { color: var(--ct-muted); font-weight: 400; font-size: 11px; }
       /* Live new-variable-name validation (Compute / Recode / Count): a red box + a
          message below the field the moment a disallowed name is typed. */
       .ct-field input.is-invalid { border-color: #cf5560; box-shadow: 0 0 0 1px #cf5560; outline: none; }
@@ -634,18 +669,18 @@
       .ct-cr__pick {
         display: flex; align-items: center; gap: 6px; width: 100%;
         font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
-        background: #fff; cursor: pointer; text-align: left;
+        background: var(--ct-surface); cursor: pointer; text-align: left;
       }
       .ct-cr__pick:hover { background: #f0f3f6; }
       .ct-cr__picklabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .ct-cr__pickcaret { color: #646e77; flex: 0 0 auto; }
+      .ct-cr__pickcaret { color: var(--ct-muted); flex: 0 0 auto; }
 
       /* --- footer / status --- */
       footer {
         border-top: 1px solid var(--line); background: var(--panel);
-        padding: 6px 12px; font-size: 12px; color: #5a6470;
+        padding: 6px 12px; font-size: 12px; color: var(--ct-muted);
       }
-      .lib-status { margin-left: 16px; color: #646e77; }
+      .lib-status { margin-left: 16px; color: var(--ct-muted); }
       /* Project health. A button, not a coloured word: it is the way into the
          explanation, so it has to look clickable and answer the keyboard. Absent
          entirely when the project is whole — a permanent "healthy" badge trains people
@@ -662,7 +697,7 @@
          client's own progress list, so it has to be readable and copyable. */
       .ct-health__files { margin: 0 0 12px; font-size: 12px; }
       .ct-health__files ul { margin: 4px 0 0; padding-left: 18px; }
-      .ct-health__files li { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #5a6470; }
+      .ct-health__files li { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ct-muted); }
 
       /* dataset library modal: one row per saved entry */
       .ct-lib__list { max-height: 50vh; }
@@ -673,11 +708,11 @@
       .ct-lib__row:hover { background: #f0f3f6; }
       .ct-lib__info { flex: 1; min-width: 0; }
       .ct-lib__name { font-weight: 600; }
-      .ct-lib__meta { font-size: 12px; color: #646e77; }
+      .ct-lib__meta { font-size: 12px; color: var(--ct-muted); }
       .ct-lib__actions { display: flex; gap: 6px; flex: none; }
       .ct-lib__actions button {
         font: inherit; font-size: 13px; padding: 5px 12px;
-        border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer;
+        border: 1px solid var(--line); border-radius: 6px; background: var(--ct-surface); cursor: pointer;
       }
       .ct-lib__delete { color: #b03030; }
       .ct-lib__delete:hover { background: #fbeaea; }
@@ -704,16 +739,16 @@
         border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
       }
       .ct-conflict__opt:hover { background: #f4f8fc; }
-      .ct-conflict__opt:has(input:checked) { border-color: var(--accent); background: #eef5fb; }
+      .ct-conflict__opt:has(input:checked) { border-color: var(--accent); background: var(--ct-accent-wash); }
       .ct-conflict__opt input { margin-top: 3px; flex: none; }
 
       /* join review dialog */
       .ct-join__keys { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
       .ct-join__keys select { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; }
-      .ct-join__summary { margin: 0 0 10px; font-size: 13px; color: #5a6470; }
+      .ct-join__summary { margin: 0 0 10px; font-size: 13px; color: var(--ct-muted); }
       .ct-join__cols { display: flex; gap: 12px; }
       .ct-join__side { flex: 1; min-width: 0; }
-      .ct-join__side-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #646e77; margin: 0 0 4px; }
+      .ct-join__side-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 0 0 4px; }
       .ct-join__list {
         list-style: none; margin: 0; padding: 4px; height: 30vh; overflow-y: auto;
         border: 1px solid var(--line); border-radius: 6px;
@@ -723,15 +758,15 @@
       .ct-join__list li.sel { background: #e6f0fa; outline: 1px solid var(--accent); }
       .ct-join__pair {
         margin: 10px 0; font: inherit; font-size: 13px; padding: 6px 12px;
-        border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer;
+        border: 1px solid var(--line); border-radius: 6px; background: var(--ct-surface); cursor: pointer;
       }
       .ct-join__pair:disabled { opacity: .5; cursor: default; }
-      .ct-join__manual-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #646e77; margin: 4px 0; }
+      .ct-join__manual-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 4px 0; }
       .ct-join__manual-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
       .ct-join__manual-row button { border: 0; background: none; cursor: pointer; color: #b03030; font-size: 13px; }
       .ct-dialog__form { padding: 20px; }
       .ct-dialog__title { margin: 0 0 4px; font-size: 18px; }
-      .ct-dialog__hint { margin: 0 0 12px; color: #5a6470; }
+      .ct-dialog__hint { margin: 0 0 12px; color: var(--ct-muted); }
       /* Recorded source shown read-only in a dialog (the R an analysis ran). Scrolls in
          both directions rather than wrapping: a wrapped R line reads as two statements,
          and this is a record people are asked to check. */
@@ -753,13 +788,13 @@
       /* group label inside the picker ("Selected" / "All variables") */
       .ct-dialog__vars li.ct-dialog__group {
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-        color: #646e77; padding: 10px 8px 2px; pointer-events: none;
+        color: var(--ct-muted); padding: 10px 8px 2px; pointer-events: none;
       }
       .ct-dialog__vars li.ct-dialog__group + li label { border-top: 0; }
-      .ct-dialog__vars code { color: #646e77; font-size: 12px; }
+      .ct-dialog__vars code { color: var(--ct-muted); font-size: 12px; }
       /* The explicit "none" choice on an optional single-select picker, kept apart
          from the variables so it reads as an answer rather than as one of them. */
-      .ct-dialog__vars li.ct-dialog__none label { color: #5a6470; font-style: italic; }
+      .ct-dialog__vars li.ct-dialog__none label { color: var(--ct-muted); font-style: italic; }
       .ct-dialog__vars li.ct-dialog__none { border-bottom: 1px solid var(--line); margin-bottom: 4px; padding-bottom: 2px; }
       /* A variable disabled because a prior `unique` input already took it. */
       .ct-dialog__vars li.ct-dialog__excluded label { opacity: .5; cursor: not-allowed; }
@@ -778,7 +813,7 @@
       .ct-dialog__buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 0; padding: 0; }
       .ct-dialog__buttons button {
         font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line);
-        background: #fff; cursor: pointer;
+        background: var(--ct-surface); cursor: pointer;
       }
       /* Specificity must beat `.ct-dialog__buttons button` (0,1,1) above, else the
          white base background wins and leaves white text on white. */
@@ -787,7 +822,7 @@
       }
       /* Destructive choice (e.g. "Delete data and remove from project", #118). */
       .ct-dialog__buttons .ct-dialog__danger {
-        background: #fff; color: #c0392b; border-color: #e3b4ad;
+        background: var(--ct-surface); color: #c0392b; border-color: #e3b4ad;
       }
       /* Stacked, full-width choices for a multi-option prompt (most-recommended
          first, top-to-bottom) rather than a right-aligned row. */
@@ -797,7 +832,7 @@
       .ct-dialog__row { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; font-size: 13px; }
       .ct-dialog__row > span { color: #555; }
       .ct-dialog__row select {
-        font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff;
+        font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--ct-surface);
       }
       /* Unified Import data… / Export data… format picker */
       .ct-fmt__search {
@@ -807,26 +842,26 @@
       .ct-fmt__list { max-height: 50vh; overflow-y: auto; margin: 0 0 16px; }
       .ct-fmt__group {
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-        color: #646e77; padding: 10px 4px 4px;
+        color: var(--ct-muted); padding: 10px 4px 4px;
       }
       .ct-fmt__row {
         display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left;
         font: inherit; padding: 9px 10px; border: 0; border-radius: 6px;
         background: transparent; cursor: pointer;
       }
-      .ct-fmt__row:hover { background: #eef5fb; }
-      /* Was `outline: none` with only the hover background to stand in — #eef5fb on
+      .ct-fmt__row:hover { background: var(--ct-accent-wash); }
+      /* Was `outline: none` with only the hover background to stand in — var(--ct-accent-wash) on
          white is 1.10:1, so the focused row was indistinguishable from the rest.
          Keep the tint, restore a real ring (WCAG 2.4.11 wants 3:1). */
-      .ct-fmt__row:focus-visible { background: #eef5fb; }
+      .ct-fmt__row:focus-visible { background: var(--ct-accent-wash); }
       .ct-fmt__name { flex: 0 1 auto; }
-      .ct-fmt__ext { margin-left: auto; color: #646e77; font-size: 12px; white-space: nowrap; }
-      .ct-fmt__empty { color: #646e77; padding: 16px 4px; }
+      .ct-fmt__ext { margin-left: auto; color: var(--ct-muted); font-size: 12px; white-space: nowrap; }
+      .ct-fmt__empty { color: var(--ct-muted); padding: 16px 4px; }
       /* "Export as" filename dialog */
       .ct-saveas { max-width: 420px; }
       .ct-saveas__field {
         display: flex; align-items: stretch; border: 1px solid var(--line);
-        border-radius: 6px; overflow: hidden; background: #fff;
+        border-radius: 6px; overflow: hidden; background: var(--ct-surface);
       }
       .ct-saveas__field:focus-within { border-color: var(--accent); }
       .ct-saveas__name {
@@ -835,7 +870,7 @@
       }
       .ct-saveas__ext {
         flex: 0 0 auto; align-self: center; padding: 0 10px 0 4px;
-        color: #646e77; font-size: 13px; white-space: nowrap;
+        color: var(--ct-muted); font-size: 13px; white-space: nowrap;
       }
       /* The plugin picker (launcher centre AND Edit ▸ Plugins) styles itself from
          core/plugin-picker.js, because one component cannot depend on which host page
@@ -850,7 +885,7 @@
       .ct-creator__row { margin: 0 0 8px; }
       /* Simple/Code mode toggle */
       .ct-creator__modes { display: inline-flex; gap: 0; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-      .ct-creator__mode { font: inherit; font-size: 13px; padding: 5px 14px; cursor: pointer; background: #fff; border: 0; border-right: 1px solid var(--line); color: #555; }
+      .ct-creator__mode { font: inherit; font-size: 13px; padding: 5px 14px; cursor: pointer; background: var(--ct-surface); border: 0; border-right: 1px solid var(--line); color: #555; }
       .ct-creator__mode:last-child { border-right: 0; }
       .ct-creator__mode.is-active { background: var(--accent); color: #fff; }
       /* Simple-mode form */
@@ -903,8 +938,8 @@
          "Selected" group with a heading; a grid and a dense table cannot, so the boundary
          is a rule instead — down the left edge of the first unselected column, and under
          the last selected row. Drawn only when there IS a boundary. */
-      .grid th.is-floatedge, .grid td.is-floatedge { border-left: 2px solid var(--accent, #2572a5); }
-      .vargrid__row.is-floatedge > * { border-top: 2px solid var(--accent, #2572a5); }
+      .grid th.is-floatedge, .grid td.is-floatedge { border-left: 2px solid var(--accent, var(--ct-accent)); }
+      .vargrid__row.is-floatedge > * { border-top: 2px solid var(--accent, var(--ct-accent)); }
 
 
       /* Compute / Recode dialogs */
@@ -915,7 +950,7 @@
       .ct-cr__palette-sep { flex: 0 0 100%; height: 0; border-top: 1px solid var(--line); margin: 3px 0; }
       .ct-cr__chip {
         font: 11px ui-monospace, Menlo, monospace; padding: 2px 8px; cursor: pointer;
-        background: #eef5fb; border: 1px solid var(--line); border-radius: 10px; color: #1a4a73;
+        background: var(--ct-accent-wash); border: 1px solid var(--line); border-radius: 10px; color: #1a4a73;
       }
       .ct-cr__chip:hover { background: #dcebfa; }
       .ct-cr__ruleshead, .ct-cr__rule, .ct-cr__else {
@@ -931,9 +966,9 @@
       .ct-cr__tolabelcell { display: flex; min-width: 0; }
       .ct-cr .ct-cr__tolabel { flex: 1; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; min-width: 0; }
       .ct-cr .ct-cr__tolabel[hidden] { display: none; }
-      .ct-cr__ruleshead { color: #646e77; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-top: 8px; }
+      .ct-cr__ruleshead { color: var(--ct-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-top: 8px; }
       .ct-cr__else { grid-template-columns: auto minmax(150px, 1fr); margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
-      .ct-cr__elselabel { color: #5a6470; font-size: 13px; }
+      .ct-cr__elselabel { color: var(--ct-muted); font-size: 13px; }
       .ct-cr__frominputs { display: flex; gap: 4px; align-items: center; min-width: 0; }
       .ct-cr__frominputs input, .ct-cr .ct-cr__to input, .ct-cr .ct-cr__toval, .ct-cr select {
         font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; min-width: 0;
@@ -945,12 +980,12 @@
       .ct-cr__to { display: flex; gap: 4px; }
       .ct-cr__to select { flex: none; }
       .ct-cr__to input { flex: 1; }
-      .ct-cr__arrow { color: #646e77; text-align: center; }
+      .ct-cr__arrow { color: var(--ct-muted); text-align: center; }
       .ct-cr__rm { border: 0; background: none; color: #b3424a; cursor: pointer; font-size: 14px; padding: 0; }
       .ct-cr__addrule { font: inherit; font-size: 13px; background: none; border: 1px dashed var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; color: var(--accent); margin-top: 4px; }
       .ct-cr__addrule:hover { background: #f0f7ff; }
       /* Count values within cases (#174k): the variable picker button + a value list. */
-      .ct-cr__counthead { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #646e77; margin: 12px 0 4px; }
+      .ct-cr__counthead { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ct-muted); margin: 12px 0 4px; }
       .ct-cr__match { display: grid; grid-template-columns: 90px 1fr 24px; gap: 8px; align-items: center; margin: 4px 0; }
       .ct-cr__complete { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; cursor: pointer; }
 
@@ -986,15 +1021,15 @@
          styled inline has quietly opted out of the app's layout. */
       .ws-verb-toolbar {
         display: flex; align-items: center; gap: 6px; padding: 6px 10px;
-        border-bottom: 1px solid #e2e6ea; background: #f7f8fa; flex: none; flex-wrap: wrap;
+        border-bottom: 1px solid #e2e6ea; background: var(--ct-panel); flex: none; flex-wrap: wrap;
       }
       .ws-verb-toolbar__spacer { flex: 1; }
       .ws-verb {
         font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid #ccd2d8;
-        border-radius: 6px; background: #fff; cursor: pointer;
+        border-radius: 6px; background: var(--ct-surface); cursor: pointer;
       }
       .ws-verb:hover { background: #eef3f8; }
-      .ws-verb--restart { color: #5a6470; }
+      .ws-verb--restart { color: var(--ct-muted); }
 
       /* A dialog's title row, with the ⓘ that opens its how-to (#192). Help at the
          moment the question is asked, rather than three menus away. */
@@ -1003,9 +1038,9 @@
       .ct-dialog__howto {
         flex: none; min-width: 32px; min-height: 32px; font: inherit; font-size: 17px;
         border: 0; border-radius: 8px; background: none; cursor: pointer;
-        color: var(--accent, #2572a5); line-height: 1;
+        color: var(--accent, var(--ct-accent)); line-height: 1;
       }
-      .ct-dialog__howto:hover { background: #eef5fb; }
+      .ct-dialog__howto:hover { background: var(--ct-accent-wash); }
       [data-screen="small"] .ct-dialog__howto { min-width: 44px; min-height: 44px; font-size: 20px; }
 
       /* --- shared small controls ---------------------------------------------
@@ -1016,19 +1051,19 @@
          button came to be missed five times in a row. Styling a control inline is a quiet
          opt-out of the app's own layout. */
       .ct-iconbtn {
-        border: 0; background: none; color: #687381; cursor: pointer;
+        border: 0; background: none; color: var(--ct-muted); cursor: pointer;
         font: inherit; line-height: 1; border-radius: 6px; min-width: 28px; min-height: 28px;
       }
-      .ct-iconbtn:hover { background: #eef3f8; color: #1a1a1a; }
+      .ct-iconbtn:hover { background: #eef3f8; color: var(--ct-text); }
       .ct-iconbtn--inline { margin-left: 6px; }
       .ct-textbtn {
         border: 0; background: none; color: #5a6570; cursor: pointer;
         font: inherit; font-size: 12px; padding: 2px 0; text-align: left;
       }
-      .ct-textbtn:hover { color: var(--accent, #2572a5); }
+      .ct-textbtn:hover { color: var(--accent, var(--ct-accent)); }
       .ct-primarybtn {
-        font: inherit; background: var(--accent, #2572a5); color: #fff;
-        border: 1px solid var(--accent, #2572a5); border-radius: 6px;
+        font: inherit; background: var(--accent, var(--ct-accent)); color: #fff;
+        border: 1px solid var(--accent, var(--ct-accent)); border-radius: 6px;
         padding: 6px 12px; cursor: pointer;
       }
       .ct-primarybtn:disabled { opacity: .55; cursor: default; }
@@ -1036,7 +1071,7 @@
         display: block; width: 100%; text-align: left; padding: 6px 10px;
         border: 0; background: none; cursor: pointer; color: #2b6cb0; font: inherit;
       }
-      .cellmenu__add:hover { background: #eef5fb; }
+      .cellmenu__add:hover { background: var(--ct-accent-wash); }
       /* The touch sizes those controls could never have been given before. */
       [data-screen="small"] .ct-iconbtn { min-width: 44px; min-height: 44px; font-size: 16px; }
       [data-screen="small"] .ct-textbtn { font-size: 15px; min-height: 44px; }
@@ -1052,14 +1087,14 @@
       .howto__form { display: flex; flex-direction: column; max-height: 86vh; padding: 0; }
       .howto__bar {
         display: flex; align-items: center; gap: 8px; flex: none;
-        padding: 8px 10px; border-bottom: 1px solid var(--line, #e2e7ec); background: #f7f9fb;
+        padding: 8px 10px; border-bottom: 1px solid var(--line, #e2e7ec); background: var(--ct-panel);
         border-radius: 10px 10px 0 0;
       }
       .howto__nav {
         min-width: 44px; min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px;
-        border: 1px solid #ccd4dc; border-radius: 8px; background: #fff; cursor: pointer; color: #2a323a;
+        border: 1px solid #ccd4dc; border-radius: 8px; background: var(--ct-surface); cursor: pointer; color: #2a323a;
       }
-      .howto__nav:hover:not(:disabled) { background: #eef5fb; }
+      .howto__nav:hover:not(:disabled) { background: var(--ct-accent-wash); }
       .howto__nav:disabled { opacity: .4; cursor: default; }
       .howto__close { margin-left: auto; font-size: 16px; }
       /* Where you are. After two or three cross-links this is the only thing on screen
@@ -1070,14 +1105,14 @@
       }
       .howto__content { overflow: auto; padding: 14px 18px 20px; }
 
-      .howto__filterbar { position: sticky; top: 0; background: var(--panel, #fff); padding-bottom: 8px; z-index: 1; }
+      .howto__filterbar { position: sticky; top: 0; background: var(--panel, var(--ct-surface)); padding-bottom: 8px; z-index: 1; }
       .howto__filter {
         width: 100%; box-sizing: border-box; font: inherit; font-size: 16px;
         min-height: 44px; padding: 8px 12px; border: 1px solid #ccd4dc; border-radius: 8px;
       }
       /* The scope, said out loud: a reader who searches a word that lives inside a page
          and gets nothing would otherwise conclude the topic does not exist. */
-      .howto__scope { margin: 6px 2px 0; font-size: 12px; color: #6b7682; }
+      .howto__scope { margin: 6px 2px 0; font-size: 12px; color: var(--ct-muted); }
 
       /* The category restriction an entry point applied, visible and removable. */
       .howto__chip {
@@ -1096,18 +1131,18 @@
       .howto__row {
         display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
         min-height: 44px; padding: 8px 10px; margin: 0 0 2px; font: inherit;
-        background: none; border: 0; border-radius: 8px; cursor: pointer; color: #1a1a1a;
+        background: none; border: 0; border-radius: 8px; cursor: pointer; color: var(--ct-text);
       }
-      .howto__row:hover { background: #eef5fb; }
+      .howto__row:hover { background: var(--ct-accent-wash); }
       .howto__rowmain { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
       .howto__rowtitle { font-weight: 600; }
       /* Attribution, never a sort key. */
-      .howto__rowfrom { font-size: 12px; color: #6b7682; }
+      .howto__rowfrom { font-size: 12px; color: var(--ct-muted); }
       .howto__badge {
         flex: none; font-size: 11px; font-weight: 600; color: #8a5a00; background: #fdf0d5;
         padding: 2px 8px; border-radius: 10px;
       }
-      .howto__empty { color: #6b7682; padding: 12px 2px; }
+      .howto__empty { color: var(--ct-muted); padding: 12px 2px; }
 
       /* "Needs Crosstabs - Enable": an affordance, not a warning. Going from "huh, that
          wasn't the one I wanted" to "ah, there's the one I meant" is the common case. */
@@ -1119,8 +1154,8 @@
       .howto__needstext { font-size: 13px; color: #2a4a68; }
       .howto__enable {
         font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px;
-        border: 1px solid var(--accent, #2572a5); border-radius: 8px;
-        background: var(--accent, #2572a5); color: #fff; cursor: pointer;
+        border: 1px solid var(--accent, var(--ct-accent)); border-radius: 8px;
+        background: var(--accent, var(--ct-accent)); color: #fff; cursor: pointer;
       }
       .howto__enable:disabled { opacity: .6; cursor: default; }
 
@@ -1137,27 +1172,27 @@
       /* A link to another topic is a BUTTON: it navigates the overlay, not the page. */
       .howto__link--topic {
         font: inherit; background: none; border: 0; padding: 0; cursor: pointer;
-        color: var(--accent, #2572a5); text-decoration: underline; text-underline-offset: 2px;
+        color: var(--accent, var(--ct-accent)); text-decoration: underline; text-underline-offset: 2px;
       }
-      .howto__link--external { color: var(--accent, #2572a5); text-underline-offset: 2px; }
+      .howto__link--external { color: var(--accent, var(--ct-accent)); text-underline-offset: 2px; }
       /* The destination host, shown rather than implied. This is what defeats a link
          captioned "SPSS documentation" that points at evil.tld - no dialog to dismiss. */
-      .howto__host { color: #6b7682; font-size: .85em; white-space: nowrap; }
+      .howto__host { color: var(--ct-muted); font-size: .85em; white-space: nowrap; }
 
       .howto__fig { margin: 0 0 14px; }
       .howto__img {
         max-width: 100%; height: auto; display: block;
         border: 1px solid var(--line, #e2e7ec); border-radius: 8px; cursor: zoom-in;
       }
-      .howto__caption { margin: 6px 2px 0; font-size: 12px; color: #6b7682; }
+      .howto__caption { margin: 6px 2px 0; font-size: 12px; color: var(--ct-muted); }
       .howto__missing { font-size: 13px; color: #8a5a00; background: #fdf0d5; padding: 8px 10px; border-radius: 6px; }
 
-      .howto__loading { color: #6b7682; padding: 12px 2px; }
+      .howto__loading { color: var(--ct-muted); padding: 12px 2px; }
       /* Never blank: a blank panel reads as "no documentation exists". */
       .howto__problem { padding: 12px 14px; border-radius: 8px; background: #fdf0d5; border: 1px solid #f0dcb0; }
       .howto__problemtitle { margin: 0 0 4px; font-weight: 600; color: #6b4600; }
       .howto__problemdetail { margin: 0; font-size: 13px; color: #6b4600; }
-      .howto__authornotes { margin: 16px 0 0; font-size: 12px; color: #6b7682; }
+      .howto__authornotes { margin: 16px 0 0; font-size: 12px; color: var(--ct-muted); }
       .howto__authornotes summary { cursor: pointer; }
       .howto__seealso { margin-top: 18px; border-top: 1px solid var(--line, #e2e7ec); padding-top: 8px; }
 
@@ -1216,7 +1251,7 @@
       }
       [data-screen="small"] .menu__group-toggle:hover,
       [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { background: #eef4fa; }
-      [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { color: #1a1a1a; font-weight: 700; }
+      [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { color: var(--ct-text); font-weight: 700; }
       .menu__caret { display: inline-block; transition: transform .12s ease; font-size: 10px; }
       [aria-expanded="true"] > .menu__caret { transform: rotate(90deg); }
       /* Indent a section's items so the heading reads as their parent. */

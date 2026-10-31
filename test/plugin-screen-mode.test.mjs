@@ -389,8 +389,12 @@ test('…and those classes are sized for a thumb in small-screen mode', () => {
 test('Restart stays visually secondary without being too small to hit', () => {
   // It is a recovery action, so it is de-emphasised by COLOUR rather than by being
   // shrunk below a usable target — which is what it was before.
+  //
+  // Asserted as the MUTED TOKEN rather than a hex. The literal here used to be #5a6470,
+  // one of three greys the host used for secondary text alongside --ct-muted's #646e77,
+  // with no principled difference between them. Pinning the hex pinned the drift.
   const html = readFileSync('index.html', 'utf8');
-  assert.match(html, /\.ws-verb--restart \{ color: #5a6470; \}/);
+  assert.match(html, /\.ws-verb--restart \{ color: var\(--ct-muted\); \}/);
 });
 
 test('no CSS template literal contains a backtick', () => {
@@ -472,4 +476,55 @@ test('the standard control classes do not defeat the standard no-zoom floor', ()
     '.ct-field must not use the font shorthand — it resets the size');
   assert.match(field, /font-size: 16px/, 'it states the floor itself');
   assert.match(field, /font-family: inherit/, 'while still inheriting the family');
+});
+
+// ---------------------------------------------------------------------------------------
+// One palette, two files
+// ---------------------------------------------------------------------------------------
+
+test('the host and the plugin standard hold the SAME palette', () => {
+  // They had grown two vocabularies for one set of colours. Mostly they agreed, which is
+  // worse than disagreeing: it reads as deliberate while nothing keeps them in step. One
+  // pair had already drifted (--bg #f7f8fa against --ct-panel #f7f9fb) and one name meant
+  // OPPOSITE things — the host's --panel was white, the standard's --ct-panel is the grey
+  // BEHIND a panel. A theme written against one would have got the other backwards.
+  //
+  // CSS cannot import the JS tokens, so index.html restates them. This is what stops the
+  // restatement drifting: the values must match, exactly, forever.
+  const html = readFileSync('index.html', 'utf8');
+  const root = html.slice(html.indexOf(':root {'), html.indexOf('}', html.indexOf(':root {')));
+
+  const tokens = {};
+  const block = stdlib.slice(stdlib.indexOf('export const TOKENS'), stdlib.indexOf('};', stdlib.indexOf('export const TOKENS')));
+  for (const m of block.matchAll(/(\w+):\s*'([^']+)'/g)) tokens[m[1]] = m[2];
+
+  const CSS_NAME = {
+    accent: '--ct-accent', accentWash: '--ct-accent-wash', onAccent: '--ct-on-accent',
+    line: '--ct-line', lineSoft: '--ct-line-soft', panel: '--ct-panel',
+    surface: '--ct-surface', text: '--ct-text', muted: '--ct-muted',
+    danger: '--ct-danger', radius: '--ct-radius',
+  };
+  const mismatches = [];
+  for (const [jsName, cssName] of Object.entries(CSS_NAME)) {
+    const want = tokens[jsName];
+    assert.ok(want, `TOKENS.${jsName} exists`);
+    const m = root.match(new RegExp(`${cssName}:\\s*([^;]+);`));
+    if (!m) { mismatches.push(`${cssName} missing from index.html`); continue; }
+    if (m[1].trim() !== want) mismatches.push(`${cssName}: host ${m[1].trim()} vs TOKENS ${want}`);
+  }
+  assert.deepEqual(mismatches, [], `host palette has drifted: ${mismatches.join('; ')}`);
+});
+
+test('the host keeps its old names working, as aliases', () => {
+  // 98 declarations use --line, --accent, --panel and friends. Rewriting every one would
+  // be churn with no reader benefit; an alias costs nothing and leaves one source.
+  const html = readFileSync('index.html', 'utf8');
+  const root = html.slice(html.indexOf(':root {'), html.indexOf('}', html.indexOf(':root {')));
+  for (const [alias, target] of [
+    ['--accent', '--ct-accent'], ['--line', '--ct-line'],
+    ['--bg', '--ct-panel'], ['--panel', '--ct-surface'],
+  ]) {
+    assert.match(root, new RegExp(`${alias}:\\s*var\\(${target}\\)`),
+      `${alias} should alias ${target} rather than restating a literal`);
+  }
 });
