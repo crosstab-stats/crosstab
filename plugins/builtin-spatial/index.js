@@ -26,6 +26,24 @@
 const { fmtP, rStr, unpackR: flat, cleanSvg } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
+/**
+ * Ink for the MAP, which is data rather than chrome.
+ *
+ * A region's fill, the hairline between two regions and the colour that says "selected"
+ * are not theme decisions: they carry meaning, they have to stay legible against whatever
+ * choropleth palette the data brings, and a map that leaves this pane (to Output, to a
+ * report) has to keep them. The pane AROUND the map uses tokens; the map itself uses
+ * these, named so that "the grey a region is before you colour it" is a decision made
+ * once rather than a literal repeated in four rules.
+ */
+const MAP_INK = Object.freeze({
+  region: '#d5dbe2',
+  hairline: '#ffffff',
+  selected: '#e74c3c',
+  warn: '#fef9e7',
+  warnText: '#7d6608',
+});
+
 export const manifest = {
   id: 'builtin-spatial',
   name: 'Spatial analysis',
@@ -400,15 +418,15 @@ export const workspace = {
       :host, * { box-sizing: border-box; }
       /* A column, with .ct-split as the row inside it — the split is what knows how to
          stack itself when the user is in small-screen mode. */
-      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #2c3e50; display: flex; flex-direction: column; height: 100vh; }
-      .map-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid #e2e6ea; }
-      .map-pane svg { flex: 1; background: #fafbfc; cursor: crosshair; }
-      .map-pane svg path { stroke: #fff; stroke-width: 0.5; fill: #d5dbe2; transition: fill 0.15s; }
-      .map-pane svg path:hover { stroke: #2980b9; stroke-width: 1.2; }
-      .map-pane svg path.selected { stroke: #e74c3c; stroke-width: 1.5; }
-      .status { padding: 6px 10px; border-top: 1px solid #e2e6ea; font-size: 12px; color: #6b7685; }
+      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; color: var(--ct-text); display: flex; flex-direction: column; height: 100vh; }
+      .map-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--ct-line-soft); }
+      .map-pane svg { flex: 1; background: var(--ct-panel); cursor: crosshair; }
+      .map-pane svg path { stroke: ${MAP_INK.hairline}; stroke-width: 0.5; fill: ${MAP_INK.region}; transition: fill 0.15s; }
+      .map-pane svg path:hover { stroke: var(--ct-accent); stroke-width: 1.2; }
+      .map-pane svg path.selected { stroke: ${MAP_INK.selected}; stroke-width: 1.5; }
+      .status { padding: 6px 10px; border-top: 1px solid var(--ct-line-soft); font-size: 12px; color: var(--ct-muted); }
       .list-pane { width: 220px; display: flex; flex-direction: column; overflow: hidden; }
-      .list-header { padding: 8px 10px; border-bottom: 1px solid #e2e6ea; display: flex; gap: 6px; align-items: center; }
+      .list-header { padding: 8px 10px; border-bottom: 1px solid var(--ct-line-soft); display: flex; gap: 6px; align-items: center; }
       .list-header strong { flex: 1; }
       .list-body { flex: 1; overflow-y: auto; padding: 2px 0; }
       /* The left padding is the tree indent: it is what says a region sits UNDER its
@@ -416,24 +434,24 @@ export const workspace = {
          shorthand, and any later rule setting it would reset the indent without
          mentioning it — which is exactly what the small-screen block below used to do. */
       .region-row { display: flex; align-items: center; gap: 6px; padding: 2px 10px 2px 26px; cursor: pointer; }
-      .region-row:hover { background: #f0f4f8; }
+      .region-row:hover { background: var(--ct-accent-wash); }
       .region-row input { margin: 0; }
-      .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #ccc; flex: none; }
+      .swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--ct-line); flex: none; }
       .map-pane.unlinked svg { opacity: 0.35; }
-      .map-pane.unlinked .status { background: #fef9e7; color: #7d6608; }
-      .empty { padding: 20px; text-align: center; color: #8899a6; }
+      .map-pane.unlinked .status { background: ${MAP_INK.warn}; color: ${MAP_INK.warnText}; }
+      .empty { padding: 20px; text-align: center; color: var(--ct-muted); }
       /* A layer row is a button so it is reachable by Tab and answers Enter and Space
          without this pane re-implementing either. */
       .layer-row { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px;
-        font: inherit; text-align: left; background: #f7f9fb; border: 0;
-        border-bottom: 1px solid #e2e6ea; cursor: pointer; color: inherit; }
-      .layer-row:hover { background: #eef3f8; }
-      .layer-row.is-active { background: #e8f1fa; }
+        font: inherit; text-align: left; background: var(--ct-panel); border: 0;
+        border-bottom: 1px solid var(--ct-line-soft); cursor: pointer; color: inherit; }
+      .layer-row:hover { background: var(--ct-accent-wash); }
+      .layer-row.is-active { background: var(--ct-accent-wash); }
       .layer-row.is-active .layer-name { font-weight: 600; }
-      .layer-row:focus-visible { outline: 2px solid #2980b9; outline-offset: -2px; }
-      .twisty { flex: none; width: 10px; color: #5a6a78; }
+      .layer-row:focus-visible { outline: 2px solid var(--ct-accent); outline-offset: -2px; }
+      .twisty { flex: none; width: 10px; color: var(--ct-muted); }
       .layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .layer-count { flex: none; font-size: 11px; color: #5a6a78; font-variant-numeric: tabular-nums; }
+      .layer-count { flex: none; font-size: 11px; color: var(--ct-muted); font-variant-numeric: tabular-nums; }
       /* (The region indent is on .region-row itself, above.) */
 
       /* ---- Layout ------------------------------------------------------------------
@@ -472,7 +490,7 @@ export const workspace = {
            this pane exists; below about this it stops being readable. */
         min-height: 45vh;
         border-right: 0;
-        border-bottom: 1px solid #e2e6ea;
+        border-bottom: 1px solid var(--ct-line-soft);
       }
       [data-screen="small"] .list-pane { max-height: 40vh; }
       /* A region row is the primary gesture here — a checkbox and a label, 20px tall at

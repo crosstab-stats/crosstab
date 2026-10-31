@@ -22,9 +22,26 @@
  * and blocks interaction until the workspace is ready, but treat "no writes during
  * mount" as the contract so your plugin stays safe regardless of load ordering.
  *
- * Styles are applied via the CSSOM (element.style.*), not <style>/style attributes,
- * because the sandbox CSP is `default-src 'none'` (inline style attributes are
- * blocked, but the CSSOM is not).
+ * ## Styling: take the standard, do not re-invent it
+ *
+ * This file is the one people copy, so what it demonstrates becomes what the next
+ * workspace does. It used to hand-roll a `css()` helper and write `#555`, `#ccc`,
+ * `#f3f6fa` — and every plugin that grew from it inherited colours no theme can move and
+ * controls that fail a touch target.
+ *
+ * So: inject `app.std.injectStdlibStyles(document)` FIRST, then use the classes it
+ * brings — `.ct-btn`, `.ct-field`, `.ct-row` — and the tokens `var(--ct-text)`,
+ * `var(--ct-muted)`, `var(--ct-surface)`, `var(--ct-line)`, `var(--ct-accent)`. You get
+ * the 16px that stops iOS zooming on focus and the 44px touch targets for free, which is
+ * the whole reason the standard ships components and not just a palette.
+ *
+ * Where a style genuinely is yours (a layout, a gap), set it through the CSSOM
+ * (element.style.*) rather than a style ATTRIBUTE: the sandbox CSP is
+ * `default-src 'none'`, which blocks the attribute but not the object model.
+ *
+ * Rule of thumb: if you are typing a `#` followed by hex, stop and ask which token you
+ * mean. If there genuinely isn't one, that is worth raising — a missing token is a gap
+ * in the standard, not a licence to write a literal.
  */
 
 /** @type {import('../../core/loader.js').PluginManifest} */
@@ -62,8 +79,12 @@ export const workspace = {
       for (const k of Object.keys(styles)) el.style[k] = styles[k];
       return el;
     };
+    // The host's base sheet: tokens, the control primitives, the no-zoom font floor and
+    // the touch targets. Optional-chained because a build that failed to serve the
+    // stdlib must not take the pane down with it — the pane just looks plainer.
+    app.std?.injectStdlibStyles?.(document);
     root.textContent = '';
-    css(document.body, { margin: '0', font: '14px system-ui, sans-serif', color: '#1a1a1a' });
+    // The sheet already sets body font and colour from the tokens; nothing to repeat.
 
     const wrap = css(document.createElement('div'), { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '560px' });
 
@@ -74,25 +95,31 @@ export const workspace = {
     const blurb = document.createElement('p');
     blurb.textContent =
       'This tab is a sandboxed plugin iframe. What you type is saved into the project (app.state.set) and restored when you reopen it (app.state.get).';
-    css(blurb, { margin: '0', color: '#555', lineHeight: '1.5' });
+    css(blurb, { margin: '0', color: 'var(--ct-muted)', lineHeight: '1.5' });
 
     const label = document.createElement('label');
     label.textContent = 'A note (persisted with the project):';
     css(label, { fontWeight: '500' });
     const area = document.createElement('textarea');
     area.rows = 4;
-    css(area, { width: '100%', boxSizing: 'border-box', padding: '8px', borderRadius: '6px', border: '1px solid #ccc', font: 'inherit' });
+    // `.ct-field` carries the border, radius and padding — and the sizing rules that
+    // keep it usable on a phone. Only what is genuinely this pane's is set here.
+    area.className = 'ct-field';
+    css(area, { width: '100%', boxSizing: 'border-box' });
 
     const status = document.createElement('div');
-    css(status, { fontSize: '12px', color: '#7a8590', minHeight: '16px' });
+    css(status, { fontSize: '12px', color: 'var(--ct-muted)', minHeight: '16px' });
 
-    const dataRow = css(document.createElement('div'), { display: 'flex', gap: '8px', alignItems: 'center' });
+    // `.ct-row` is a wrapping row of controls — it wraps rather than overflowing,
+    // because a control you cannot see is a control you do not have.
+    const dataRow = document.createElement('div');
+    dataRow.className = 'ct-row';
     const countBtn = document.createElement('button');
     countBtn.type = 'button';
     countBtn.textContent = 'Count dataset rows (proves host access)';
-    css(countBtn, { padding: '6px 10px', borderRadius: '6px', border: '1px solid #ccc', background: '#f3f6fa', cursor: 'pointer', font: 'inherit' });
+    countBtn.className = 'ct-btn';
     const countOut = document.createElement('span');
-    css(countOut, { color: '#1d2733' });
+    css(countOut, { color: 'var(--ct-text)' });
     dataRow.append(countBtn, countOut);
 
     wrap.append(h, blurb, label, area, status, dataRow);

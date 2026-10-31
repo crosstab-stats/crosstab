@@ -232,8 +232,14 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__driftrow .q { flex: 1; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__driftrow .why { color: #8a6d3b; font-size: 12px; }
 /* --- transcript pane (time-aligned text) ----------------------------------- */
-.caqdas__tplayer { padding: 6px 8px; border-bottom: 1px solid var(--ct-border, #d8dee4); background: var(--ct-surface-2, #f6f8fa); }
-/* PINNED, for a transcript with a recording. Reviewing one means scrolling a long way
+.caqdas__tplayer { padding: 6px 8px; border-bottom: 1px solid var(--ct-line);
+  background: var(--ct-panel); }
+/* The three rules above once read var(--ct-border), var(--ct-surface-2) and
+   var(--ct-accent-soft) — none of which the standard defines, so each silently fell
+   through to its literal and no theme could ever reach them. An invented token name is
+   worse than a literal: it LOOKS themed. If a token is genuinely missing, add it to
+   core/plugin-stdlib.js rather than naming one here and hoping.
+   /* PINNED, for a transcript with a recording. Reviewing one means scrolling a long way
    down it, and the controls you need constantly were the first thing off the screen.
    This is the element the TRANSCRIPT path builds; .caqdas__nowplaying below is the
    audio-DOCUMENT path. They are different renderers and both needed saying.
@@ -268,7 +274,7 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
   -webkit-user-select: none;
   user-select: none;
 }
-.caqdas__cuetime:hover { background: var(--ct-accent-soft, #dbeafe); color: var(--ct-text, #24292f); }
+.caqdas__cuetime:hover { background: var(--ct-accent-wash); color: var(--ct-text); }
 .caqdas__cuetext { white-space: pre-wrap; }
 /* The line being spoken. A left bar rather than a background, because a background
    would compete with the coding highlights — which are the colours that carry meaning. */

@@ -52,31 +52,64 @@ const TOOLS = [
   ['tree', 'Decision tree'],
 ];
 
+/**
+ * Ink for the SVG figures this plugin DRAWS, as opposed to the pane it renders.
+ *
+ * These stay literal on purpose, and it is the one place in this file where a literal is
+ * right. A figure goes to Output and from there into a report, a slide or a file — it has
+ * to render where no stylesheet of ours is loaded, so `var(--ct-accent)` in an exported
+ * SVG resolves to nothing and the chart comes out black or invisible. The same reasoning
+ * the project applies to saved output generally: it must outlive the plugin that made it.
+ *
+ * What was wrong was not that they were literal but that they were UNNAMED and had
+ * quietly drifted: the chart drew its accent as #2f6fb0 while the app's accent is
+ * #2572a5, so a figure never quite matched the pane it came from. Naming them here, with
+ * the token values, is what keeps the two in step — if a token moves, these move with it,
+ * deliberately rather than by accident.
+ */
+const INK = Object.freeze({
+  // Mirrors of the standard's tokens — keep in step with core/plugin-stdlib.js TOKENS.
+  surface: '#ffffff',
+  text: '#1a1a1a',
+  muted: '#646e77',
+  line: '#d8dde2',
+  accent: '#2572a5',
+  // Figure semantics, which are about MEANING rather than theme: the chosen branch, a
+  // threshold crossing, a point of interest. A theme may restyle the chrome around a
+  // figure; it must not repaint "this is the option the analysis picked".
+  chosen: '#2e7d32',
+  flip: '#e0a52e',
+  marker: '#d24a4a',
+  faint: '#a8b0ba',
+});
+
 const STYLES = `
+/* Tokens with FALLBACKS, deliberately. This pane states its own touch-target and
+   no-zoom rules rather than relying on the host's base sheet, because that sheet arrives
+   through an optional chain and accessibility must not ride on something that can
+   silently not happen. The same reasoning applies to colour: take the theme's value when
+   it is there, and a sane literal when it is not, so a pane without the base sheet looks
+   plain rather than unreadable. */
 :host, body { margin: 0; }
-.ds { display: flex; flex-direction: column; height: 100%; min-height: 460px; font: 14px system-ui, sans-serif; color: #1a1a1a; }
-.ds__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #e2e6ea; }
+.ds { display: flex; flex-direction: column; height: 100%; min-height: 460px; font: 14px system-ui, sans-serif; color: var(--ct-text, #1a1a1a); }
+.ds__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft, #e6eaee); }
 .ds__bar select, .ds__btn, .ds input { font: inherit; }
 .ds__body { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px; max-width: 820px; }
-.ds__hint { color: #555; line-height: 1.5; margin: 0 0 12px; }
+.ds__hint { color: var(--ct-muted, #646e77); line-height: 1.5; margin: 0 0 12px; }
 .ds__row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
-.ds__btn { padding: 6px 10px; border: 1px solid #ccd2d8; border-radius: 6px; background: #f3f6fa; cursor: pointer; }
-.ds__btn:hover { background: #e9eff6; }
-.ds__btn--go { background: #2f6fb0; color: #fff; border-color: #2f6fb0; }
-.ds__btn--go:hover { background: #285f8f; border-color: #285f8f; }
-.ds__seg { display: inline-flex; border: 1px solid #ccd2d8; border-radius: 6px; overflow: hidden; margin: 0 0 12px; }
-.ds__segbtn { padding: 5px 14px; border: 0; background: #f3f6fa; cursor: pointer; font: inherit; color: #333; }
-.ds__segbtn + .ds__segbtn { border-left: 1px solid #ccd2d8; }
-.ds__segbtn:hover { background: #e9eff6; }
-.ds__segbtn.is-on { background: #2f6fb0; color: #fff; }
-.ds h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #7a8590; margin: 16px 0 6px; }
+.ds__seg { display: inline-flex; border: 1px solid var(--ct-line, #d8dde2); border-radius: var(--ct-radius, 6px); overflow: hidden; margin: 0 0 12px; }
+.ds__segbtn { padding: 5px 14px; border: 0; background: var(--ct-panel, #f7f9fb); cursor: pointer; font: inherit; color: var(--ct-text, #1a1a1a); }
+.ds__segbtn + .ds__segbtn { border-left: 1px solid var(--ct-line, #d8dde2); }
+.ds__segbtn:hover { background: var(--ct-accent-wash, #eef5fb); }
+.ds__segbtn.is-on { background: var(--ct-accent, #2572a5); color: var(--ct-on-accent, #ffffff); }
+.ds h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted, #646e77); margin: 16px 0 6px; }
 .ds table { border-collapse: collapse; width: 100%; margin: 4px 0; }
-.ds th, .ds td { border: 1px solid #e2e6ea; padding: 4px 6px; text-align: left; }
-.ds th { background: #f5f8fb; font-weight: 500; font-size: 13px; }
+.ds th, .ds td { border: 1px solid var(--ct-line-soft, #e6eaee); padding: 4px 6px; text-align: left; }
+.ds th { background: var(--ct-panel, #f7f9fb); font-weight: 500; font-size: 13px; }
 .ds td input { width: 100%; box-sizing: border-box; border: 0; padding: 4px; background: transparent; }
-.ds td input:focus { outline: 2px solid #bcd4ec; border-radius: 3px; }
+.ds td input:focus { outline: 2px solid var(--ct-accent-wash, #eef5fb); border-radius: 3px; }
 .ds td.num input { text-align: right; }
-.ds .del { border: 0; background: none; color: #b04a4a; cursor: pointer; font: inherit; }
+.ds .del { border: 0; background: none; color: var(--ct-danger, #b03030); cursor: pointer; font: inherit; }
 
 /* ---- Small-screen mode ----------------------------------------------------------
    Decisions is SINGLE-COLUMN, so unlike CAQDAS and Spatial it never had a stacking
@@ -123,6 +156,11 @@ export const workspace = {
       sheet.replaceSync(STYLES);
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
     } catch {
+      // The host's base sheet FIRST — tokens, control primitives, the no-zoom font
+      // floor and the touch targets — then this pane's own rules on top of them. This
+      // pane had never taken it, which is why it had its own grey for every line and its
+      // own blue for every accent.
+      app.std?.injectStdlibStyles?.(document);
       const s = document.createElement('style'); s.textContent = STYLES; document.head.append(s);
     }
     // The host's helper (app.std.el), which takes an options object. Positional was the
@@ -189,9 +227,9 @@ export const workspace = {
       });
       table.append(tb); body.append(table);
 
-      const add = el('button', { class: 'ds__btn' }); add.textContent = '＋ Add option';
+      const add = el('button', { class: 'ct-btn' }); add.textContent = '＋ Add option';
       add.addEventListener('click', () => { t.rows.push({ name: '', cost: '', effect: '' }); save(); renderICER(); });
-      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ct-btn ct-btn--primary' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runICER());
       const actions = el('div', { class: 'ds__row' }); actions.append(add, go); body.append(actions);
     }
@@ -238,7 +276,7 @@ export const workspace = {
         dtd.append(del); tr.append(dtd); ctb.append(tr);
       });
       ct.append(ctb); body.append(ct);
-      const addC = el('button', { class: 'ds__btn' }); addC.textContent = '＋ Add criterion';
+      const addC = el('button', { class: 'ct-btn' }); addC.textContent = '＋ Add criterion';
       addC.addEventListener('click', () => { m.criteria.push({ name: '', weight: 1 }); save(); renderMatrix(); });
       body.append(addC);
 
@@ -259,9 +297,9 @@ export const workspace = {
         dtd.append(del); tr.append(dtd); otb.append(tr);
       });
       ot.append(otb); body.append(ot);
-      const addO = el('button', { class: 'ds__btn' }); addO.textContent = '＋ Add option';
+      const addO = el('button', { class: 'ct-btn' }); addO.textContent = '＋ Add option';
       addO.addEventListener('click', () => { m.options.push({ name: '', scores: [] }); save(); renderMatrix(); });
-      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ct-btn ct-btn--primary' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runMatrix());
       const actions = el('div', { class: 'ds__row' }); actions.append(addO, go); body.append(actions);
     }
@@ -305,9 +343,9 @@ export const workspace = {
         dtd.append(del); tr.append(dtd); tb.append(tr);
       });
       table.append(tb); body.append(table);
-      const add = el('button', { class: 'ds__btn' }); add.textContent = '＋ Add period';
+      const add = el('button', { class: 'ct-btn' }); add.textContent = '＋ Add period';
       add.addEventListener('click', () => { t.rows.push({ cost: '', benefit: '' }); save(); renderNPV(); });
-      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ct-btn ct-btn--primary' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runNPV());
       const a = el('div', { class: 'ds__row' }); a.append(add, go); body.append(a);
     }
@@ -344,7 +382,7 @@ export const workspace = {
         dtd.append(del); tr.append(dtd); stb.append(tr);
       });
       st.append(stb); body.append(st);
-      const addS = el('button', { class: 'ds__btn' }); addS.textContent = '＋ Add scenario';
+      const addS = el('button', { class: 'ct-btn' }); addS.textContent = '＋ Add scenario';
       addS.addEventListener('click', () => { m.scenarios.push({ name: '', prob: '' }); save(); renderEV(); });
       body.append(addS);
       body.append(Object.assign(el('h3'), { textContent: 'Options & payoffs' }));
@@ -360,9 +398,9 @@ export const workspace = {
         dtd.append(del); tr.append(dtd); otb.append(tr);
       });
       ot.append(otb); body.append(ot);
-      const addO = el('button', { class: 'ds__btn' }); addO.textContent = '＋ Add option';
+      const addO = el('button', { class: 'ct-btn' }); addO.textContent = '＋ Add option';
       addO.addEventListener('click', () => { m.options.push({ name: '', payoffs: [] }); save(); renderEV(); });
-      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output';
+      const go = el('button', { class: 'ct-btn ct-btn--primary' }); go.textContent = 'Compute → Output';
       go.addEventListener('click', () => runEV());
       const a = el('div', { class: 'ds__row' }); a.append(addO, go); body.append(a);
     }
@@ -396,7 +434,7 @@ export const workspace = {
         kindSel.addEventListener('change', () => { node.kind = kindSel.value; save(); renderTree(); });
         row.append(kindSel);
         if (parentKind === 'chance') {
-          const pl = el('span'); pl.textContent = 'p='; pl.style.color = '#7a8590';
+          const pl = el('span'); pl.textContent = 'p='; pl.style.color = 'var(--ct-muted)';
           const pi = el('input'); pi.type = 'number'; pi.step = '0.01'; pi.value = node.prob ?? ''; pi.style.width = '64px';
           pi.addEventListener('input', () => { node.prob = pi.value; save(); });
           row.append(pl, pi);
@@ -405,12 +443,12 @@ export const workspace = {
         li.addEventListener('input', () => { node.label = li.value; save(); });
         row.append(li);
         if (node.kind === 'terminal') {
-          const vl = el('span'); vl.textContent = 'payoff='; vl.style.color = '#7a8590';
+          const vl = el('span'); vl.textContent = 'payoff='; vl.style.color = 'var(--ct-muted)';
           const vi = el('input'); vi.type = 'number'; vi.value = node.payoff ?? ''; vi.style.width = '90px';
           vi.addEventListener('input', () => { node.payoff = vi.value; save(); });
           row.append(vl, vi);
         } else {
-          const addb = el('button', { class: 'ds__btn' }); addb.textContent = '＋ child'; addb.style.padding = '2px 7px';
+          const addb = el('button', { class: 'ct-btn' }); addb.textContent = '＋ child'; addb.style.padding = '2px 7px';
           addb.addEventListener('click', () => { (node.children ||= []).push({ id: uid(), kind: 'terminal', label: '', payoff: 0, prob: '', children: [] }); save(); renderTree(); });
           row.append(addb);
         }
@@ -423,7 +461,7 @@ export const workspace = {
         if (node.kind !== 'terminal') (node.children || []).forEach((c, i) => drawNode(c, node, i, node.kind, depth + 1));
       };
       drawNode(t.root, null, 0, null, 0);
-      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Compute → Output'; go.style.marginTop = '10px';
+      const go = el('button', { class: 'ct-btn ct-btn--primary' }); go.textContent = 'Compute → Output'; go.style.marginTop = '10px';
       go.addEventListener('click', () => runTree());
       body.append(go);
     }
@@ -562,7 +600,7 @@ export const workspace = {
         setBounds(); slider.value = String(base); redraw();
       }
 
-      const go = el('button', { class: 'ds__btn ds__btn--go' }); go.textContent = 'Send to Output'; go.style.marginTop = '10px';
+      const go = el('button', { class: 'ct-btn ct-btn--primary' }); go.textContent = 'Send to Output'; go.style.marginTop = '10px';
       go.addEventListener('click', async () => {
         const figure = currentModel(); // not `chart`: that name is the live preview container
         if (!figure) return;
@@ -698,27 +736,27 @@ function treeSvg(root) {
   const H = padY * 2 + (leaf || 1) * dy;
   const esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="11">`;
-  s += `<rect width="${W}" height="${H}" fill="#fff"/>`;
+  s += `<rect width="${W}" height="${H}" fill="${INK.surface}"/>`;
   const edges = (node) => {
     if (node.kind === 'terminal') return;
     const pp = pos.get(node); const r = rollTree(node);
     (node.children || []).forEach((k, i) => {
       const cp = pos.get(k); if (!cp) return;
       const chosen = node.kind === 'decision' && i === r.choice;
-      s += `<line x1="${(pp.x + 9).toFixed(1)}" y1="${pp.y.toFixed(1)}" x2="${cp.x.toFixed(1)}" y2="${cp.y.toFixed(1)}" stroke="${chosen ? '#2e7d32' : '#a8b0ba'}" stroke-width="${chosen ? 2.5 : 1}"/>`;
-      if (node.kind === 'chance' && k.prob != null && k.prob !== '') s += `<text x="${((pp.x + cp.x) / 2).toFixed(1)}" y="${((pp.y + cp.y) / 2 - 3).toFixed(1)}" fill="#7a8590">p=${esc(k.prob)}</text>`;
+      s += `<line x1="${(pp.x + 9).toFixed(1)}" y1="${pp.y.toFixed(1)}" x2="${cp.x.toFixed(1)}" y2="${cp.y.toFixed(1)}" stroke="${chosen ? INK.chosen : INK.faint}" stroke-width="${chosen ? 2.5 : 1}"/>`;
+      if (node.kind === 'chance' && k.prob != null && k.prob !== '') s += `<text x="${((pp.x + cp.x) / 2).toFixed(1)}" y="${((pp.y + cp.y) / 2 - 3).toFixed(1)}" fill="${INK.muted}">p=${esc(k.prob)}</text>`;
       edges(k);
     });
   };
   edges(root);
   for (const [node, p] of pos) {
     const r = rollTree(node);
-    if (node.kind === 'decision') s += `<rect x="${(p.x - 8).toFixed(1)}" y="${(p.y - 8).toFixed(1)}" width="16" height="16" fill="#2f6fb0"/>`;
-    else if (node.kind === 'chance') s += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="8" fill="#e0a52e"/>`;
-    else s += `<path d="M${(p.x - 8).toFixed(1)} ${(p.y - 8).toFixed(1)} L${(p.x - 8).toFixed(1)} ${(p.y + 8).toFixed(1)} L${(p.x + 8).toFixed(1)} ${p.y.toFixed(1)} Z" fill="#555"/>`;
+    if (node.kind === 'decision') s += `<rect x="${(p.x - 8).toFixed(1)}" y="${(p.y - 8).toFixed(1)}" width="16" height="16" fill="${INK.accent}"/>`;
+    else if (node.kind === 'chance') s += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="8" fill="${INK.flip}"/>`;
+    else s += `<path d="M${(p.x - 8).toFixed(1)} ${(p.y - 8).toFixed(1)} L${(p.x - 8).toFixed(1)} ${(p.y + 8).toFixed(1)} L${(p.x + 8).toFixed(1)} ${p.y.toFixed(1)} Z" fill="${INK.muted}"/>`;
     const label = node.label ? esc(node.label) + ' ' : '';
     const val = node.kind === 'terminal' ? fmt(num(node.payoff) ?? 0) : fmt(r.value);
-    s += `<text x="${(p.x + 12).toFixed(1)}" y="${(p.y + 4).toFixed(1)}" fill="#1a1a1a">${label}<tspan fill="#2f6fb0">${val}</tspan></text>`;
+    s += `<text x="${(p.x + 12).toFixed(1)}" y="${(p.y + 4).toFixed(1)}" fill="${INK.text}">${label}<tspan fill="${INK.accent}">${val}</tspan></text>`;
   }
   return s + '</svg>';
 }
@@ -881,24 +919,24 @@ function sensLineSvg(pts, o) {
   const px = (x) => mL + (xmax === xmin ? 0 : (x - xmin) / (xmax - xmin)) * (W - mL - mR);
   const py = (y) => H - mB - (y - ymin) / (ymax - ymin) * (H - mT - mB);
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="11">`;
-  s += `<rect width="${W}" height="${H}" fill="#fff"/>`;
-  s += `<text x="${mL}" y="18" font-size="12" font-weight="600" fill="#1a1a1a">${esc2(o.title || '')}</text>`;
+  s += `<rect width="${W}" height="${H}" fill="${INK.surface}"/>`;
+  s += `<text x="${mL}" y="18" font-size="12" font-weight="600" fill="${INK.text}">${esc2(o.title || '')}</text>`;
   // axes
-  s += `<line x1="${mL}" y1="${H - mB}" x2="${W - mR}" y2="${H - mB}" stroke="#333"/><line x1="${mL}" y1="${mT}" x2="${mL}" y2="${H - mB}" stroke="#333"/>`;
+  s += `<line x1="${mL}" y1="${H - mB}" x2="${W - mR}" y2="${H - mB}" stroke="${INK.text}"/><line x1="${mL}" y1="${mT}" x2="${mL}" y2="${H - mB}" stroke="${INK.text}"/>`;
   // reference line
-  if (o.reference != null) s += `<line x1="${mL}" y1="${py(o.reference).toFixed(1)}" x2="${W - mR}" y2="${py(o.reference).toFixed(1)}" stroke="#bbb" stroke-dasharray="3 3"/>`;
+  if (o.reference != null) s += `<line x1="${mL}" y1="${py(o.reference).toFixed(1)}" x2="${W - mR}" y2="${py(o.reference).toFixed(1)}" stroke="${INK.line}" stroke-dasharray="3 3"/>`;
   // flips
-  for (const f of o.flips || []) s += `<line x1="${px(f.x).toFixed(1)}" y1="${mT}" x2="${px(f.x).toFixed(1)}" y2="${H - mB}" stroke="#e0a52e" stroke-dasharray="4 3"/><text x="${(px(f.x) + 3).toFixed(1)}" y="${mT + 10}" fill="#b07d12">→ ${esc2(f.to)}</text>`;
+  for (const f of o.flips || []) s += `<line x1="${px(f.x).toFixed(1)}" y1="${mT}" x2="${px(f.x).toFixed(1)}" y2="${H - mB}" stroke="${INK.flip}" stroke-dasharray="4 3"/><text x="${(px(f.x) + 3).toFixed(1)}" y="${mT + 10}" fill="${INK.flip}">→ ${esc2(f.to)}</text>`;
   // threshold
-  if (o.threshold != null) s += `<line x1="${px(o.threshold).toFixed(1)}" y1="${mT}" x2="${px(o.threshold).toFixed(1)}" y2="${H - mB}" stroke="#2e7d32" stroke-width="1.5"/><text x="${(px(o.threshold) + 3).toFixed(1)}" y="${H - mB - 4}" fill="#2e7d32">break-even</text>`;
+  if (o.threshold != null) s += `<line x1="${px(o.threshold).toFixed(1)}" y1="${mT}" x2="${px(o.threshold).toFixed(1)}" y2="${H - mB}" stroke="${INK.chosen}" stroke-width="1.5"/><text x="${(px(o.threshold) + 3).toFixed(1)}" y="${H - mB - 4}" fill="${INK.chosen}">break-even</text>`;
   // curve
-  s += `<polyline fill="none" stroke="#2f6fb0" stroke-width="2" points="${pts.map((p) => `${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`).join(' ')}"/>`;
+  s += `<polyline fill="none" stroke="${INK.accent}" stroke-width="2" points="${pts.map((p) => `${px(p.x).toFixed(1)},${py(p.y).toFixed(1)}`).join(' ')}"/>`;
   // base + marker
-  if (o.base != null) { const r = pts.find((p) => p.x >= o.base) || pts[0]; if (r) s += `<circle cx="${px(o.base).toFixed(1)}" cy="${py(r.y).toFixed(1)}" r="3" fill="#888"/>`; }
-  if (o.marker) s += `<circle cx="${px(o.marker.x).toFixed(1)}" cy="${py(o.marker.y).toFixed(1)}" r="4" fill="#d24"/>`;
+  if (o.base != null) { const r = pts.find((p) => p.x >= o.base) || pts[0]; if (r) s += `<circle cx="${px(o.base).toFixed(1)}" cy="${py(r.y).toFixed(1)}" r="3" fill="${INK.muted}"/>`; }
+  if (o.marker) s += `<circle cx="${px(o.marker.x).toFixed(1)}" cy="${py(o.marker.y).toFixed(1)}" r="4" fill="${INK.marker}"/>`;
   // tick labels
-  s += `<text x="${mL}" y="${H - mB + 14}" fill="#555">${fmt(xmin)}</text><text x="${W - mR}" y="${H - mB + 14}" text-anchor="end" fill="#555">${fmt(xmax)}</text>`;
-  s += `<text x="${mL - 6}" y="${py(ymax).toFixed(1)}" text-anchor="end" fill="#555">${fmt(ymax)}</text><text x="${mL - 6}" y="${py(ymin).toFixed(1)}" text-anchor="end" fill="#555">${fmt(ymin)}</text>`;
+  s += `<text x="${mL}" y="${H - mB + 14}" fill="${INK.muted}">${fmt(xmin)}</text><text x="${W - mR}" y="${H - mB + 14}" text-anchor="end" fill="${INK.muted}">${fmt(xmax)}</text>`;
+  s += `<text x="${mL - 6}" y="${py(ymax).toFixed(1)}" text-anchor="end" fill="${INK.muted}">${fmt(ymax)}</text><text x="${mL - 6}" y="${py(ymin).toFixed(1)}" text-anchor="end" fill="${INK.muted}">${fmt(ymin)}</text>`;
   s += `<text x="${(W / 2).toFixed(0)}" y="${H - 6}" text-anchor="middle" fill="#444">${esc2(o.xLabel || '')}</text>`;
   s += `<text x="14" y="${(H / 2).toFixed(0)}" transform="rotate(-90 14 ${(H / 2).toFixed(0)})" text-anchor="middle" fill="#444">${esc2(o.yLabel || '')}</text>`;
   return s + '</svg>';
@@ -934,7 +972,7 @@ export function tornadoModel(bars, o) {
 }
 
 function sensTornadoSvg(bars, o) {
-  if (!bars.length) { return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 60" width="400" height="60"><rect width="400" height="60" fill="#fff"/><text x="12" y="34" font-family="system-ui" font-size="12" fill="#777">No parameter has a non-zero base to vary.</text></svg>`; }
+  if (!bars.length) { return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 60" width="400" height="60"><rect width="400" height="60" fill="${INK.surface}"/><text x="12" y="34" font-family="system-ui" font-size="12" fill="#777">No parameter has a non-zero base to vary.</text></svg>`; }
   const rowH = 26, mL = 180, mR = 24, mT = 36, mB = 30, W = 600;
   const H = mT + mB + bars.length * rowH;
   const lo = Math.min(...bars.map((b) => Math.min(b.lo, b.hi)), o.baseline ?? Infinity);
@@ -942,14 +980,14 @@ function sensTornadoSvg(bars, o) {
   const span = hi === lo ? 1 : hi - lo;
   const px = (v) => mL + (v - lo) / span * (W - mL - mR);
   let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" font-family="system-ui,sans-serif" font-size="11">`;
-  s += `<rect width="${W}" height="${H}" fill="#fff"/>`;
-  s += `<text x="12" y="18" font-size="12" font-weight="600" fill="#1a1a1a">${esc2(o.title || '')}</text>`;
+  s += `<rect width="${W}" height="${H}" fill="${INK.surface}"/>`;
+  s += `<text x="12" y="18" font-size="12" font-weight="600" fill="${INK.text}">${esc2(o.title || '')}</text>`;
   if (o.baseline != null) s += `<line x1="${px(o.baseline).toFixed(1)}" y1="${mT - 6}" x2="${px(o.baseline).toFixed(1)}" y2="${H - mB + 4}" stroke="#888" stroke-dasharray="3 3"/><text x="${px(o.baseline).toFixed(1)}" y="${mT - 10}" text-anchor="middle" fill="#777">base ${fmt(o.baseline)}</text>`;
   bars.forEach((b, i) => {
     const y = mT + i * rowH, x0 = px(Math.min(b.lo, b.hi)), x1 = px(Math.max(b.lo, b.hi));
-    s += `<rect x="${x0.toFixed(1)}" y="${(y + 3).toFixed(1)}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${rowH - 8}" fill="#2f6fb0" opacity="0.85"/>`;
+    s += `<rect x="${x0.toFixed(1)}" y="${(y + 3).toFixed(1)}" width="${Math.max(1, x1 - x0).toFixed(1)}" height="${rowH - 8}" fill="${INK.accent}" opacity="0.85"/>`;
     s += `<text x="${mL - 8}" y="${(y + rowH / 2 + 1).toFixed(1)}" text-anchor="end" fill="#333">${esc2(b.label)}</text>`;
-    s += `<text x="${(x1 + 4).toFixed(1)}" y="${(y + rowH / 2 + 1).toFixed(1)}" fill="#555">${fmt(b.swing)}</text>`;
+    s += `<text x="${(x1 + 4).toFixed(1)}" y="${(y + rowH / 2 + 1).toFixed(1)}" fill="${INK.muted}">${fmt(b.swing)}</text>`;
   });
   return s + '</svg>';
 }

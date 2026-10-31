@@ -342,8 +342,17 @@ test('the row-delete glyph gets a target, since it sits beside what it would dis
 test('decisions states its touch rules locally, not through the optional base sheet', () => {
   // Same lesson builtin-spatial paid for: a touch target and the no-zoom font are
   // accessibility, so they must not ride on an injection that can silently not happen.
-  assert.ok(!/injectStdlibStyles/.test(decisions),
-    'decisions relies on nothing optional for its control sizing');
+  //
+  // This used to be written as "decisions must not call injectStdlibStyles at all", which
+  // was stronger than the reason behind it and blocked the pane from taking the THEME. The
+  // invariant that actually matters is that nothing which must work is CONDITIONAL on the
+  // injection: the sizing rules stay local, and every colour token carries a fallback, so
+  // a pane without the base sheet is plain rather than unreadable.
+  const sheet = decisions.slice(decisions.indexOf('const STYLES = `'), decisions.indexOf('\n`;'));
+  const bare = sheet.match(/var\(--ct-[a-z-]+\)/g) ?? [];
+  assert.deepEqual(bare, [], `every token needs a fallback here; bare: ${bare.join(', ')}`);
+  assert.match(sheet, /\[data-screen="small"\] \.ds input \{ font-size: 16px; min-height: 44px; \}/,
+    'and the sizing it depends on is still its own');
   assert.ok(!/@media[^{]*width/.test(decisions), 'the mode is a choice, never a measurement');
 });
 
@@ -410,4 +419,39 @@ test('no CSS template literal contains a backtick', () => {
       `${path}: ${name} contains a backtick, which ends the stylesheet early`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------------------
+// The token vocabulary is closed
+// ---------------------------------------------------------------------------------------
+
+test('no plugin reaches for a token the standard does not define', () => {
+  // Found by auditing, not by anything failing: builtin-caqdas referenced
+  // --ct-border, --ct-surface-2 and --ct-accent-soft, none of which exist. Each had a
+  // fallback, so each silently used its literal forever and no theme could reach it.
+  //
+  // An invented token name is WORSE than a plain literal, because it looks themed. If a
+  // token is genuinely missing, it belongs in core/plugin-stdlib.js — which is how
+  // --ct-on-accent and --ct-accent-wash came to exist.
+  const stripComments = (src) => src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+
+  const defined = new Set(
+    [...stdlib.matchAll(/(--ct-[a-z0-9-]+)\s*:/g)].map((m) => m[1]),
+  );
+  assert.ok(defined.size >= 10, 'the standard defines a vocabulary');
+
+  const files = [
+    ['builtin-caqdas', caqdas],
+    ['builtin-decisions', decisions],
+    ['builtin-spatial', spatial],
+  ];
+  const offences = [];
+  for (const [name, src] of files) {
+    for (const m of stripComments(src).matchAll(/var\((--ct-[a-z0-9-]+)/g)) {
+      if (!defined.has(m[1])) offences.push(`${name}: ${m[1]}`);
+    }
+  }
+  assert.deepEqual(offences, [], `undefined tokens referenced: ${offences.join(', ')}`);
 });
