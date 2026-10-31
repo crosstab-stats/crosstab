@@ -47,6 +47,17 @@
         --ct-text: #1a1a1a;
         --ct-muted: #646e77;
         --ct-danger: #b03030;
+        --ct-danger-bg: #fdf3f2;
+        --ct-danger-line: #f0d8d5;
+        --ct-warn: #8a5a00;
+        --ct-warn-bg: #fdf0d5;
+        --ct-warn-line: #f0c674;
+        --ct-ok: #2e7d32;
+        --ct-ok-bg: #eaf6ea;
+        --ct-ok-line: #bcd9bd;
+        --ct-hover: #f0f3f6;
+        --ct-text-soft: #3c4a57;
+        --ct-disabled: #9aa4ae;
         --ct-radius: 6px;
 
         /* Host chrome with no equivalent in a pane: the application bar is the
@@ -107,7 +118,7 @@
       /* Global focus indicator. The app had 8 :focus rules in total and several places
          that removed the outline outright, so keyboard users had little to follow.
          2px at 3:1+ against both surfaces satisfies WCAG 2.4.11 focus appearance. */
-      :focus-visible { outline: 2px solid #1b6ea8; outline-offset: 2px; }
+      :focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 2px; }
       header :focus-visible, .ctl__bar :focus-visible { outline-color: #66aedd; }
       /* Wrap to additional rows when there are many menus, rather than overflowing
          the header (which used to scroll the whole window sideways). min-width:0
@@ -136,7 +147,7 @@
       /* An item whose action is unavailable right now (a computed `enabled`, #191).
          Greyed rather than hidden: a missing Undo reads as a broken menu, where a
          greyed one reads as "nothing to undo", which is the true statement. */
-      .menu__item:disabled { color: #9aa4ae; cursor: default; }
+      .menu__item:disabled { color: var(--ct-disabled); cursor: default; }
       .menu__item:disabled:hover { background: transparent; }
       .menu__group { padding: 4px 0; }
       .menu__group-label {
@@ -175,14 +186,14 @@
       .proj__name { flex: 1; min-width: 0; font-weight: 700; font-size: 14px; color: var(--ct-text); word-break: break-word; }
       .proj__sub { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 0 0 6px; }
       .proj__sub--zone { margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); }
-      .proj__empty { font-size: 12px; color: #6c7882; padding: 4px 8px; }
+      .proj__empty { font-size: 12px; color: var(--ct-muted); padding: 4px 8px; }
       .proj__datasets { list-style: none; margin: 0 0 10px; padding: 0; }
       .proj__ds {
         display: flex; align-items: center; gap: 6px; padding: 7px 8px;
         border-radius: 6px; border: 1px solid transparent; cursor: pointer; margin-bottom: 2px;
       }
-      .proj__ds:hover { background: #f0f3f6; }
-      .proj__ds--active { background: #e6f0fa; border-color: var(--accent); }
+      .proj__ds:hover { background: var(--ct-hover); }
+      .proj__ds--active { background: var(--ct-accent-wash); border-color: var(--accent); }
       /* Genuine subordination — a record that really does belong to the dataset above it
          (CAQDAS coding). Indented with a rule, but the SAME row treatment: it is a
          relationship, not a lower class of thing (#153). Project-scoped records are peers
@@ -212,12 +223,12 @@
       }
       /* row action icons (✎ rename, ✕ remove) — visible, darken on hover */
       .proj__ds-x { border: 0; background: none; color: var(--ct-muted); cursor: pointer; font-size: 12px; padding: 0 3px; border-radius: 4px; }
-      .proj__ds-x:hover:not(:disabled) { color: var(--ct-text); background: #dfe5ea; }
+      .proj__ds-x:hover:not(:disabled) { color: var(--ct-text); background: var(--ct-line); }
       .proj__ds-x:disabled { opacity: .3; cursor: default; } /* greyed, still visible */
       .proj__ds-edit { flex: 1; min-width: 0; font: inherit; padding: 2px 4px; border: 1px solid var(--accent); border-radius: 4px; }
       .proj__blob {
         display: flex; align-items: center; gap: 4px; padding: 2px 8px 2px 24px;
-        font-size: 12px; color: #6b7685; margin-bottom: 1px;
+        font-size: 12px; color: var(--ct-muted); margin-bottom: 1px;
       }
       .proj__blob-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       /* where a listed project lives — dim, so it reads as a detail rather than a name */
@@ -232,7 +243,7 @@
       .ctpm__shell { display: flex; flex-direction: column; }
       .ctpm__tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 0 12px; }
       .ctpm__tab { font: inherit; font-size: 15px; border: 0; background: none; padding: 9px 16px;
-        cursor: pointer; color: #4a5560; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; }
+        cursor: pointer; color: var(--ct-text-soft); border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; }
       .ctpm__tab:hover { background: var(--ct-accent-wash); }
       .ctpm__tab.is-active { color: var(--ct-text); font-weight: 600; border-bottom-color: var(--accent); }
       .ctpm__body { min-height: 300px; max-height: 58vh; overflow: auto; padding: 4px 0 0; }
@@ -242,13 +253,13 @@
       /* Matches `.ctl__source` in the launcher — the app's existing "pick a thing from a
          list" control, which is exactly what this is. */
       .ctpm__railitem { font: inherit; font-size: 14px; text-align: left; border: 0; background: none;
-        cursor: pointer; padding: 10px 12px; border-radius: 8px; color: #2a3540; }
+        cursor: pointer; padding: 10px 12px; border-radius: 8px; color: var(--ct-text); }
       .ctpm__railitem:hover { background: var(--ct-accent-wash); }
-      .ctpm__railitem.is-active { background: #e3edf7; font-weight: 600; }
+      .ctpm__railitem.is-active { background: var(--ct-accent-wash); font-weight: 600; }
       .ctpm__pane { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
       .ctpm__list { display: flex; flex-direction: column; gap: 3px; }
       .ctpm__row { display: flex; align-items: center; gap: 8px; border-radius: 6px; }
-      .ctpm__row:hover { background: #f4f7fa; }
+      .ctpm__row:hover { background: var(--ct-hover); }
       .ctpm__row.is-open { background: var(--ct-accent-wash); }
       .ctpm__rowmain { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px;
         font: inherit; font-size: 15px; text-align: left; border: 0; background: none;
@@ -267,10 +278,10 @@
       /* Same metrics as `.ct-dialog__buttons button`, because it is the same kind of
          thing — a button in a dialog. */
       .ctpm__act { font: inherit; border: 1px solid var(--line); background: var(--ct-surface);
-        border-radius: 6px; padding: 8px 16px; cursor: pointer; color: #2a3540; }
+        border-radius: 6px; padding: 8px 16px; cursor: pointer; color: var(--ct-text); }
       .ctpm__act:hover { background: var(--ct-accent-wash); }
-      .ctpm__act.is-danger { color: #a33; border-color: #e3c3c3; }
-      .ctpm__act.is-danger:hover { background: #fdf2f2; }
+      .ctpm__act.is-danger { color: var(--ct-danger); border-color: var(--ct-danger-line); }
+      .ctpm__act.is-danger:hover { background: var(--ct-danger-bg); }
       .ctpm__hint { color: var(--ct-muted); margin: 0 0 12px; line-height: 1.45; } /* = .ct-dialog__hint */
       .ctpm__empty, .ctpm__loading { color: var(--ct-muted); padding: 32px 12px; }
       /* Export-tab group heads (#181). The two groups differ in what the file can DO —
@@ -286,7 +297,7 @@
          one place a memo can be read would defeat the point of counting them (#168) */
       .proj__memos { display: block; padding: 2px 8px 4px 24px; font-size: 12px; }
       .proj__memo { display: flex; align-items: flex-start; gap: 4px; margin-bottom: 3px; }
-      .proj__memo-text { flex: 1; min-width: 0; color: #4a5560; overflow-wrap: anywhere; }
+      .proj__memo-text { flex: 1; min-width: 0; color: var(--ct-text-soft); overflow-wrap: anywhere; }
       .proj__add {
         width: 100%; font: inherit; font-size: 13px; padding: 6px;
         border: 1px dashed var(--line); border-radius: 6px; background: var(--ct-surface); color: var(--ct-muted); cursor: pointer;
@@ -352,12 +363,12 @@
         overflow-x: auto; overflow-y: hidden; white-space: nowrap; padding-bottom: 2px;
       }
       .rc-var { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; flex: none; }
-      .rc-vars__empty { color: #888; font-style: italic; font-size: 13px; }
-      .rc-info { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: #444; background: #fafbfc; }
+      .rc-vars__empty { color: var(--ct-muted); font-style: italic; font-size: 13px; }
+      .rc-info { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: #444; background: var(--ct-hover); }
       .rc-info__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
       .rc-info__k { color: var(--ct-muted); }
-      .rc-vars-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; }
-      .rc-libs-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: #1d2733; flex: 1; min-width: 0; }
+      .rc-vars-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ct-text); }
+      .rc-libs-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ct-text); flex: 1; min-width: 0; }
       .rc-lib-add { font: inherit; font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; width: 130px; }
       /* The terminal is one scroller; the prompt flows as the last line, right
          after the latest output (like the webR/RStudio console) rather than being
@@ -368,9 +379,9 @@
         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.45;
       }
       .rc-term > div { margin: 0 0 2px; }
-      .rc-cmd { color: #2563a8; }
+      .rc-cmd { color: var(--ct-accent); }
       .rc-result { color: var(--ct-text); }
-      .rc-err { color: #b3201a; }
+      .rc-err { color: var(--ct-danger); }
       .rc-note { color: var(--ct-muted); font-style: italic; }
       .rc-plot {
         display: block; max-width: 100%; max-height: 360px; height: auto; width: auto;
@@ -382,7 +393,7 @@
         flex: 1; border: 0; outline: none; background: transparent; font: inherit; color: var(--ct-text);
         resize: none; overflow-y: auto; line-height: 1.45; padding: 0; max-height: 160px;
       }
-      .rc-input:disabled { color: #aaa; }
+      .rc-input:disabled { color: var(--ct-disabled); }
       .results { background: var(--bg); }
 
       /* The filter + order strip above EVERY list of variables — the Data grid's
@@ -460,10 +471,10 @@
       }
       /* The top-left corner must beat both the sticky header and the sticky gutter. */
       .grid thead th.corner { z-index: 3; }
-      .grid td.na { color: #c0c6cc; }
+      .grid td.na { color: var(--ct-disabled); }
       /* editable data cells (double-click to edit → sparse override transform) */
       .grid td.cell { cursor: cell; }
-      .grid td.cell:hover { background: #f0f6fc; }
+      .grid td.cell:hover { background: var(--ct-accent-wash); }
       /* A cell carrying memos (#152) — a corner triangle, the spreadsheet convention.
          Always visible: a note nobody can see is a note nobody re-reads. */
       .grid td.has-memo { position: relative; }
@@ -493,11 +504,11 @@
          chip carries the meaning and the tint only reinforces it — colour alone is not
          information a colourblind or screen-reader user receives (WCAG 1.4.1), and this
          is a variable that silently changes the N of every analysis. */
-      .vargrid__row.is-weight { background: #fbf6e9; }
+      .vargrid__row.is-weight { background: var(--ct-warn-bg); }
       .vargrid__weight {
         margin-left: 7px; padding: 1px 6px; border-radius: 10px;
         font: 11px/1.5 inherit; letter-spacing: .01em;
-        background: #efe3c4; color: #6b541b; white-space: nowrap;
+        background: var(--ct-warn-line); color: var(--ct-warn); white-space: nowrap;
       }
       .vargrid__row { cursor: pointer; }
       /* The variable name is a button (keyboard route to the row's editor) but should
@@ -515,7 +526,7 @@
       /* connector line behind the markers (markers sit above it, opaque) */
       .history__step:not(:last-child)::before {
         content: ''; position: absolute; left: 20px; top: 19px; bottom: -1px;
-        width: 2px; background: #e0e5eb; z-index: 0;
+        width: 2px; background: var(--ct-line); z-index: 0;
       }
       .history__btn {
         display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0;
@@ -538,7 +549,7 @@
         border: 0; background: none; cursor: pointer; color: var(--ct-muted); font-size: 12px;
         width: 20px; height: 22px; border-radius: 4px; line-height: 1;
       }
-      .history__ctlbtn:hover:not(:disabled) { background: #e3e8ee; color: var(--ct-text); }
+      .history__ctlbtn:hover:not(:disabled) { background: var(--ct-line); color: var(--ct-text); }
       .history__ctlbtn:disabled { opacity: .25; cursor: default; }
       /* 44px on a touch screen, per the accessibility baseline. These were 20x22 and had
          no small-screen rule at all — a leak the contrast/keyboard pass never covered,
@@ -598,10 +609,10 @@
         font: inherit; font-size: 12px; padding: 5px 10px; cursor: pointer;
         background: var(--ct-surface); border: 1px solid var(--accent); color: var(--accent); border-radius: 6px;
       }
-      .history-panel__action:hover { background: #f0f7ff; }
+      .history-panel__action:hover { background: var(--ct-accent-wash); }
       .history-panel__err {
-        background: #fdf3f2; color: #7a201a; font-size: 12px; padding: 7px 12px;
-        border-bottom: 1px solid #f0d8d5;
+        background: var(--ct-danger-bg); color: var(--ct-danger); font-size: 12px; padding: 7px 12px;
+        border-bottom: 1px solid var(--ct-danger-line);
       }
       .history-panel__content { flex: 1; overflow: auto; padding: 8px 6px; }
       .history__btn:hover:not(:disabled) { background: var(--ct-accent-wash); }
@@ -609,11 +620,11 @@
       .history__marker {
         position: relative; z-index: 1; flex: none; width: 22px; height: 22px;
         border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
-        font-size: 12px; line-height: 1; background: #e3e8ee; color: #51606e;
+        font-size: 12px; line-height: 1; background: var(--ct-line); color: var(--ct-text-soft);
       }
-      .history__step--current > .history__btn > .history__marker { background: var(--accent); color: #fff; }
-      .history__step--future > .history__btn { color: #9aa6b1; }
-      .history__step--future > .history__btn > .history__marker { background: #f0f2f5; color: #b3bcc6; }
+      .history__step--current > .history__btn > .history__marker { background: var(--accent); color: var(--ct-on-accent); }
+      .history__step--future > .history__btn { color: var(--ct-disabled); }
+      .history__step--future > .history__btn > .history__marker { background: var(--ct-hover); color: var(--ct-disabled); }
       .history__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
       /* The kind glyph sits WITH the title, so an analysis can keep its number. It used
          to replace the number, which is how analysis rows ended up unnumbered and —
@@ -622,23 +633,23 @@
       .history__step--analysis .history__title { font-weight: 600; }
       /* Records (memos, coding) are not steps in the recipe: no number, and set back so
          the numbered sequence still reads as a sequence. */
-      .history__step--record .history__marker { background: transparent; color: #8b96a1; }
+      .history__step--record .history__marker { background: transparent; color: var(--ct-disabled); }
       .history__step--record .history__title { font-weight: 500; }
       .history__step--sub { opacity: 0.7; padding-top: 6px; font-size: 12px; }
       /* Nested under the step they annotate, set in so the numbered sequence still
          reads as a sequence down the left edge. */
       .history__step--record > .history__btn { padding-left: 26px; }
-      .history__step--more > .history__btn { font-size: 12px; color: #5a7fa8; padding-left: 26px; }
+      .history__step--more > .history__btn { font-size: 12px; color: var(--ct-accent); padding-left: 26px; }
       .history__title { font-weight: 600; }
       .history__detail { font-size: 12px; color: var(--ct-muted); }
-      .history__step--future .history__detail { color: #aeb7c0; }
+      .history__step--future .history__detail { color: var(--ct-disabled); }
       .history__badge {
         margin-left: auto; align-self: center; font-size: 11px; font-weight: 600;
-        color: var(--accent); background: #eaf2fb; padding: 1px 8px; border-radius: 10px;
+        color: var(--accent); background: var(--ct-accent-wash); padding: 1px 8px; border-radius: 10px;
       }
       /* A result whose data moved after it ran. Amber rather than red: the numbers are not
          wrong, they describe an earlier state — which is the whole point of a history. */
-      .history__badge--stale { color: #8a5a00; background: #fdf0d5; }
+      .history__badge--stale { color: var(--ct-warn); background: var(--ct-warn-bg); }
       .history-hint { color: var(--ct-muted); font-size: 13px; line-height: 1.5; padding: 4px 12px 0; max-width: 48ch; }
 
       /* variable metadata editor (recode), and every plugin dialog raised through
@@ -662,8 +673,8 @@
       .ct-hint { color: var(--ct-muted); font-weight: 400; font-size: 11px; }
       /* Live new-variable-name validation (Compute / Recode / Count): a red box + a
          message below the field the moment a disallowed name is typed. */
-      .ct-field input.is-invalid { border-color: #cf5560; box-shadow: 0 0 0 1px #cf5560; outline: none; }
-      .ct-cr__nameerr { color: #b3424a; font-size: 11px; margin: 2px 0 0; }
+      .ct-field input.is-invalid { border-color: var(--ct-danger); box-shadow: 0 0 0 1px var(--ct-danger); outline: none; }
+      .ct-cr__nameerr { color: var(--ct-danger); font-size: 11px; margin: 2px 0 0; }
       /* Recode's "Recode from" — a button that opens the shared variable picker,
          styled like a <select> and ellipsising a long label instead of growing. */
       .ct-cr__pick {
@@ -671,7 +682,7 @@
         font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
         background: var(--ct-surface); cursor: pointer; text-align: left;
       }
-      .ct-cr__pick:hover { background: #f0f3f6; }
+      .ct-cr__pick:hover { background: var(--ct-hover); }
       .ct-cr__picklabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ct-cr__pickcaret { color: var(--ct-muted); flex: 0 0 auto; }
 
@@ -689,10 +700,10 @@
         border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
       /* Amber for "this may fix itself", red for "it will not". The two states are the
          whole point of the feature, so they must not look alike at a glance. */
-      .ct-health-chip.is-waiting { background: #fef3c7; border-color: #f0c674; color: #7d5a00; }
-      .ct-health-chip.is-damaged { background: #fde2e1; border-color: #e6a6a3; color: #8a1f1a; }
+      .ct-health-chip.is-waiting { background: var(--ct-warn-bg); border-color: var(--ct-warn-line); color: var(--ct-warn); }
+      .ct-health-chip.is-damaged { background: var(--ct-danger-bg); border-color: var(--ct-danger-line); color: var(--ct-danger); }
       .ct-health-chip:hover { filter: brightness(0.96); }
-      .ct-health-chip:focus-visible { outline: 2px solid #2980b9; outline-offset: 1px; }
+      .ct-health-chip:focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 1px; }
       /* The file list inside the health dialog: a name is what you look for in the sync
          client's own progress list, so it has to be readable and copyable. */
       .ct-health__files { margin: 0 0 12px; font-size: 12px; }
@@ -705,7 +716,7 @@
         display: flex; align-items: center; gap: 12px;
         padding: 8px; border-radius: 6px;
       }
-      .ct-lib__row:hover { background: #f0f3f6; }
+      .ct-lib__row:hover { background: var(--ct-hover); }
       .ct-lib__info { flex: 1; min-width: 0; }
       .ct-lib__name { font-weight: 600; }
       .ct-lib__meta { font-size: 12px; color: var(--ct-muted); }
@@ -714,8 +725,8 @@
         font: inherit; font-size: 13px; padding: 5px 12px;
         border: 1px solid var(--line); border-radius: 6px; background: var(--ct-surface); cursor: pointer;
       }
-      .ct-lib__delete { color: #b03030; }
-      .ct-lib__delete:hover { background: #fbeaea; }
+      .ct-lib__delete { color: var(--ct-danger); }
+      .ct-lib__delete:hover { background: var(--ct-danger-bg); }
 
       /* --- analysis dialogs (rendered by plugins) --- */
       .ct-dialog {
@@ -738,7 +749,7 @@
         display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px;
         border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
       }
-      .ct-conflict__opt:hover { background: #f4f8fc; }
+      .ct-conflict__opt:hover { background: var(--ct-hover); }
       .ct-conflict__opt:has(input:checked) { border-color: var(--accent); background: var(--ct-accent-wash); }
       .ct-conflict__opt input { margin-top: 3px; flex: none; }
 
@@ -754,8 +765,8 @@
         border: 1px solid var(--line); border-radius: 6px;
       }
       .ct-join__list li { padding: 5px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .ct-join__list li:hover { background: #f0f3f6; }
-      .ct-join__list li.sel { background: #e6f0fa; outline: 1px solid var(--accent); }
+      .ct-join__list li:hover { background: var(--ct-hover); }
+      .ct-join__list li.sel { background: var(--ct-accent-wash); outline: 1px solid var(--accent); }
       .ct-join__pair {
         margin: 10px 0; font: inherit; font-size: 13px; padding: 6px 12px;
         border: 1px solid var(--line); border-radius: 6px; background: var(--ct-surface); cursor: pointer;
@@ -763,7 +774,7 @@
       .ct-join__pair:disabled { opacity: .5; cursor: default; }
       .ct-join__manual-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 4px 0; }
       .ct-join__manual-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
-      .ct-join__manual-row button { border: 0; background: none; cursor: pointer; color: #b03030; font-size: 13px; }
+      .ct-join__manual-row button { border: 0; background: none; cursor: pointer; color: var(--ct-danger); font-size: 13px; }
       .ct-dialog__form { padding: 20px; }
       .ct-dialog__title { margin: 0 0 4px; font-size: 18px; }
       .ct-dialog__hint { margin: 0 0 12px; color: var(--ct-muted); }
@@ -772,7 +783,7 @@
          and this is a record people are asked to check. */
       .ct-source {
         margin: 0 0 12px; padding: 10px 12px; max-height: 45vh; overflow: auto;
-        background: #f6f8fa; border: 1px solid var(--line); border-radius: 6px;
+        background: var(--ct-hover); border: 1px solid var(--line); border-radius: 6px;
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: 12px; line-height: 1.5; color: #24292f; white-space: pre; tab-size: 2;
       }
@@ -784,7 +795,7 @@
       .ct-dialog__vars label {
         display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; cursor: pointer;
       }
-      .ct-dialog__vars label:hover { background: #f0f3f6; }
+      .ct-dialog__vars label:hover { background: var(--ct-hover); }
       /* group label inside the picker ("Selected" / "All variables") */
       .ct-dialog__vars li.ct-dialog__group {
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
@@ -804,11 +815,11 @@
          background, so it passes AA as small text rather than relying on the reader
          noticing a colon in the code beside it. */
       .ct-dialog__dsbadge {
-        margin-left: auto; font-size: 11px; color: #3c4a57; background: #eef2f6;
+        margin-left: auto; font-size: 11px; color: var(--ct-text-soft); background: var(--ct-accent-wash);
         border: 1px solid #d7e0e8; border-radius: 999px; padding: 1px 7px; white-space: nowrap;
       }
       /* The cross-dataset scope switch, on the picker's filter strip. */
-      .ct-vartools__scope { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #3c4a57; white-space: nowrap; }
+      .ct-vartools__scope { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ct-text-soft); white-space: nowrap; }
       .ct-vartools__scope input { margin: 0; }
       .ct-dialog__buttons { display: flex; justify-content: flex-end; gap: 8px; margin: 0; padding: 0; }
       .ct-dialog__buttons button {
@@ -818,7 +829,7 @@
       /* Specificity must beat `.ct-dialog__buttons button` (0,1,1) above, else the
          white base background wins and leaves white text on white. */
       .ct-dialog__buttons .ct-dialog__primary {
-        background: var(--accent); color: #fff; border-color: var(--accent);
+        background: var(--accent); color: var(--ct-on-accent); border-color: var(--accent);
       }
       /* Destructive choice (e.g. "Delete data and remove from project", #118). */
       .ct-dialog__buttons .ct-dialog__danger {
@@ -830,7 +841,7 @@
       .ct-dialog__buttons--stack button { text-align: center; }
       /* Labelled select rows (e.g. the dataset-join key/type chooser, #121). */
       .ct-dialog__row { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; font-size: 13px; }
-      .ct-dialog__row > span { color: #555; }
+      .ct-dialog__row > span { color: var(--ct-muted); }
       .ct-dialog__row select {
         font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--ct-surface);
       }
@@ -885,25 +896,25 @@
       .ct-creator__row { margin: 0 0 8px; }
       /* Simple/Code mode toggle */
       .ct-creator__modes { display: inline-flex; gap: 0; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-      .ct-creator__mode { font: inherit; font-size: 13px; padding: 5px 14px; cursor: pointer; background: var(--ct-surface); border: 0; border-right: 1px solid var(--line); color: #555; }
+      .ct-creator__mode { font: inherit; font-size: 13px; padding: 5px 14px; cursor: pointer; background: var(--ct-surface); border: 0; border-right: 1px solid var(--line); color: var(--ct-muted); }
       .ct-creator__mode:last-child { border-right: 0; }
-      .ct-creator__mode.is-active { background: var(--accent); color: #fff; }
+      .ct-creator__mode.is-active { background: var(--accent); color: var(--ct-on-accent); }
       /* Simple-mode form */
-      .ct-creator__field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #333; margin: 0 0 12px; }
+      .ct-creator__field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ct-text); margin: 0 0 12px; }
       .ct-creator__cat, .ct-creator__name { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; max-width: 340px; }
       .ct-creator__inputs { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
       .ct-creator__inputrow { display: flex; gap: 6px; align-items: center; }
       .ct-creator__inname { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; width: 130px; }
       .ct-creator__inkind { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; flex: 1; }
-      .ct-creator__inopt { font-size: 12px; color: #555; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
-      .ct-creator__inrm { border: 0; background: none; color: #b3424a; cursor: pointer; font-size: 13px; }
-      .ct-creator__addinput, .ct-creator__tpl { font: inherit; font-size: 12px; padding: 5px 11px; cursor: pointer; background: #f4f7fb; border: 1px solid var(--line); border-radius: 999px; align-self: flex-start; margin-top: 4px; }
-      .ct-creator__addinput:hover { background: #e8f1fb; border-color: var(--accent); }
+      .ct-creator__inopt { font-size: 12px; color: var(--ct-muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
+      .ct-creator__inrm { border: 0; background: none; color: var(--ct-danger); cursor: pointer; font-size: 13px; }
+      .ct-creator__addinput, .ct-creator__tpl { font: inherit; font-size: 12px; padding: 5px 11px; cursor: pointer; background: var(--ct-hover); border: 1px solid var(--line); border-radius: 999px; align-self: flex-start; margin-top: 4px; }
+      .ct-creator__addinput:hover { background: var(--ct-accent-wash); border-color: var(--accent); }
       .ct-creator__radio { font-size: 13px; margin-right: 14px; display: inline-flex; align-items: center; gap: 4px; }
       .ct-creator__r { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; min-height: 130px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; white-space: pre; }
       .ct-creator__rhint { font-size: 12px; color: #777; margin: 4px 0 0; }
       .ct-creator__namelbl {
-        font-size: 13px; color: #333; display: flex; flex-direction: column; gap: 4px; max-width: 340px;
+        font-size: 13px; color: var(--ct-text); display: flex; flex-direction: column; gap: 4px; max-width: 340px;
       }
       .ct-creator__name {
         font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px;
@@ -911,29 +922,29 @@
       .ct-creator__templates { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
       .ct-creator__tpl {
         font: inherit; font-size: 12px; padding: 5px 11px; cursor: pointer;
-        background: #f4f7fb; border: 1px solid var(--line); border-radius: 999px;
+        background: var(--ct-hover); border: 1px solid var(--line); border-radius: 999px;
       }
-      .ct-creator__tpl:hover { background: #e8f1fb; border-color: var(--accent); }
+      .ct-creator__tpl:hover { background: var(--ct-accent-wash); border-color: var(--accent); }
       .ct-creator__editor {
         display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
         height: 360px; background: #fbfcfd;
       }
       .ct-creator__gutter {
         flex: none; width: 40px; padding: 8px 6px; text-align: right; color: #9aa6b2;
-        background: #f1f4f7; border-right: 1px solid var(--line);
+        background: var(--ct-hover); border-right: 1px solid var(--line);
         font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5;
         white-space: pre; overflow: hidden; user-select: none;
       }
       .ct-creator__code {
         flex: 1; border: 0; resize: none; padding: 8px 10px; outline: none; background: transparent;
-        color: #1d2733; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
+        color: var(--ct-text); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
         line-height: 1.5; white-space: pre; tab-size: 2;
       }
       .ct-creator__status {
         margin: 8px 0 0; font-size: 12px; padding: 7px 10px; border-radius: 6px;
         background: #eef7ee; color: #1e5b2a; border: 1px solid #cfe6cf;
       }
-      .ct-creator__status--err { background: #fdf3f2; color: #7a201a; border-color: #f0d8d5; }
+      .ct-creator__status--err { background: var(--ct-danger-bg); color: var(--ct-danger); border-color: var(--ct-danger-line); }
       /* #180: where the floated (selected) variables end. The picker can label its
          "Selected" group with a heading; a grid and a dense table cannot, so the boundary
          is a rule instead — down the left edge of the first unselected column, and under
@@ -981,9 +992,9 @@
       .ct-cr__to select { flex: none; }
       .ct-cr__to input { flex: 1; }
       .ct-cr__arrow { color: var(--ct-muted); text-align: center; }
-      .ct-cr__rm { border: 0; background: none; color: #b3424a; cursor: pointer; font-size: 14px; padding: 0; }
+      .ct-cr__rm { border: 0; background: none; color: var(--ct-danger); cursor: pointer; font-size: 14px; padding: 0; }
       .ct-cr__addrule { font: inherit; font-size: 13px; background: none; border: 1px dashed var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; color: var(--accent); margin-top: 4px; }
-      .ct-cr__addrule:hover { background: #f0f7ff; }
+      .ct-cr__addrule:hover { background: var(--ct-accent-wash); }
       /* Count values within cases (#174k): the variable picker button + a value list. */
       .ct-cr__counthead { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--ct-muted); margin: 12px 0 4px; }
       .ct-cr__match { display: grid; grid-template-columns: 90px 1fr 24px; gap: 8px; align-items: center; margin: 4px 0; }
@@ -1028,7 +1039,7 @@
         font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid #ccd2d8;
         border-radius: 6px; background: var(--ct-surface); cursor: pointer;
       }
-      .ws-verb:hover { background: #eef3f8; }
+      .ws-verb:hover { background: var(--ct-accent-wash); }
       .ws-verb--restart { color: var(--ct-muted); }
 
       /* A dialog's title row, with the ⓘ that opens its how-to (#192). Help at the
@@ -1054,7 +1065,7 @@
         border: 0; background: none; color: var(--ct-muted); cursor: pointer;
         font: inherit; line-height: 1; border-radius: 6px; min-width: 28px; min-height: 28px;
       }
-      .ct-iconbtn:hover { background: #eef3f8; color: var(--ct-text); }
+      .ct-iconbtn:hover { background: var(--ct-accent-wash); color: var(--ct-text); }
       .ct-iconbtn--inline { margin-left: 6px; }
       .ct-textbtn {
         border: 0; background: none; color: #5a6570; cursor: pointer;
@@ -1062,7 +1073,7 @@
       }
       .ct-textbtn:hover { color: var(--accent, var(--ct-accent)); }
       .ct-primarybtn {
-        font: inherit; background: var(--accent, var(--ct-accent)); color: #fff;
+        font: inherit; background: var(--accent, var(--ct-accent)); color: var(--ct-on-accent);
         border: 1px solid var(--accent, var(--ct-accent)); border-radius: 6px;
         padding: 6px 12px; cursor: pointer;
       }
@@ -1087,12 +1098,12 @@
       .howto__form { display: flex; flex-direction: column; max-height: 86vh; padding: 0; }
       .howto__bar {
         display: flex; align-items: center; gap: 8px; flex: none;
-        padding: 8px 10px; border-bottom: 1px solid var(--line, #e2e7ec); background: var(--ct-panel);
+        padding: 8px 10px; border-bottom: 1px solid var(--line, var(--ct-line)); background: var(--ct-panel);
         border-radius: 10px 10px 0 0;
       }
       .howto__nav {
         min-width: 44px; min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px;
-        border: 1px solid #ccd4dc; border-radius: 8px; background: var(--ct-surface); cursor: pointer; color: #2a323a;
+        border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); cursor: pointer; color: #2a323a;
       }
       .howto__nav:hover:not(:disabled) { background: var(--ct-accent-wash); }
       .howto__nav:disabled { opacity: .4; cursor: default; }
@@ -1108,7 +1119,7 @@
       .howto__filterbar { position: sticky; top: 0; background: var(--panel, var(--ct-surface)); padding-bottom: 8px; z-index: 1; }
       .howto__filter {
         width: 100%; box-sizing: border-box; font: inherit; font-size: 16px;
-        min-height: 44px; padding: 8px 12px; border: 1px solid #ccd4dc; border-radius: 8px;
+        min-height: 44px; padding: 8px 12px; border: 1px solid var(--ct-line); border-radius: 8px;
       }
       /* The scope, said out loud: a reader who searches a word that lives inside a page
          and gets nothing would otherwise conclude the topic does not exist. */
@@ -1118,15 +1129,15 @@
       .howto__chip {
         display: inline-flex; align-items: center; gap: 8px; margin: 8px 2px 0;
         font: inherit; font-size: 13px; min-height: 36px; padding: 0 12px;
-        border: 1px solid #cfe0f2; border-radius: 18px; background: #eaf2fb;
-        color: #2a4a68; cursor: pointer;
+        border: 1px solid var(--ct-line); border-radius: 18px; background: var(--ct-accent-wash);
+        color: var(--ct-text-soft); cursor: pointer;
       }
       .howto__chip:hover { background: #ddeafa; }
-      .howto__chipx { color: #5a7fa8; font-size: 12px; }
+      .howto__chipx { color: var(--ct-accent); font-size: 12px; }
       [data-screen="small"] .howto__chip { min-height: 44px; font-size: 15px; }
       .howto__group {
         margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
-        color: #8b96a1; font-weight: 700;
+        color: var(--ct-disabled); font-weight: 700;
       }
       .howto__row {
         display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
@@ -1139,7 +1150,7 @@
       /* Attribution, never a sort key. */
       .howto__rowfrom { font-size: 12px; color: var(--ct-muted); }
       .howto__badge {
-        flex: none; font-size: 11px; font-weight: 600; color: #8a5a00; background: #fdf0d5;
+        flex: none; font-size: 11px; font-weight: 600; color: var(--ct-warn); background: var(--ct-warn-bg);
         padding: 2px 8px; border-radius: 10px;
       }
       .howto__empty { color: var(--ct-muted); padding: 12px 2px; }
@@ -1149,13 +1160,13 @@
       .howto__needs {
         display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
         padding: 10px 12px; margin: 0 0 12px; border-radius: 8px;
-        background: #eaf2fb; border: 1px solid #cfe0f2;
+        background: var(--ct-accent-wash); border: 1px solid var(--ct-line);
       }
-      .howto__needstext { font-size: 13px; color: #2a4a68; }
+      .howto__needstext { font-size: 13px; color: var(--ct-text-soft); }
       .howto__enable {
         font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px;
         border: 1px solid var(--accent, var(--ct-accent)); border-radius: 8px;
-        background: var(--accent, var(--ct-accent)); color: #fff; cursor: pointer;
+        background: var(--accent, var(--ct-accent)); color: var(--ct-on-accent); cursor: pointer;
       }
       .howto__enable:disabled { opacity: .6; cursor: default; }
 
@@ -1166,7 +1177,7 @@
       .howto__list li { margin: 0 0 6px; }
       .howto__body code {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: .92em; background: #f1f4f7; padding: 1px 5px; border-radius: 4px;
+        font-size: .92em; background: var(--ct-hover); padding: 1px 5px; border-radius: 4px;
       }
 
       /* A link to another topic is a BUTTON: it navigates the overlay, not the page. */
@@ -1182,19 +1193,19 @@
       .howto__fig { margin: 0 0 14px; }
       .howto__img {
         max-width: 100%; height: auto; display: block;
-        border: 1px solid var(--line, #e2e7ec); border-radius: 8px; cursor: zoom-in;
+        border: 1px solid var(--line, var(--ct-line)); border-radius: 8px; cursor: zoom-in;
       }
       .howto__caption { margin: 6px 2px 0; font-size: 12px; color: var(--ct-muted); }
-      .howto__missing { font-size: 13px; color: #8a5a00; background: #fdf0d5; padding: 8px 10px; border-radius: 6px; }
+      .howto__missing { font-size: 13px; color: var(--ct-warn); background: var(--ct-warn-bg); padding: 8px 10px; border-radius: 6px; }
 
       .howto__loading { color: var(--ct-muted); padding: 12px 2px; }
       /* Never blank: a blank panel reads as "no documentation exists". */
-      .howto__problem { padding: 12px 14px; border-radius: 8px; background: #fdf0d5; border: 1px solid #f0dcb0; }
-      .howto__problemtitle { margin: 0 0 4px; font-weight: 600; color: #6b4600; }
-      .howto__problemdetail { margin: 0; font-size: 13px; color: #6b4600; }
+      .howto__problem { padding: 12px 14px; border-radius: 8px; background: var(--ct-warn-bg); border: 1px solid #f0dcb0; }
+      .howto__problemtitle { margin: 0 0 4px; font-weight: 600; color: var(--ct-warn); }
+      .howto__problemdetail { margin: 0; font-size: 13px; color: var(--ct-warn); }
       .howto__authornotes { margin: 16px 0 0; font-size: 12px; color: var(--ct-muted); }
       .howto__authornotes summary { cursor: pointer; }
-      .howto__seealso { margin-top: 18px; border-top: 1px solid var(--line, #e2e7ec); padding-top: 8px; }
+      .howto__seealso { margin-top: 18px; border-top: 1px solid var(--line, var(--ct-line)); padding-top: 8px; }
 
       /* --- small-screen arrangement (core/screen-mode.js) ---------------------
          Every rule here keys off `data-screen="small"` on <html> and NOTHING keys off

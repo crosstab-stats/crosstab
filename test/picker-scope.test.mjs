@@ -135,5 +135,29 @@ test('the badge and the toggle are styled, and legibly', () => {
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.match(html, /\.ct-dialog__dsbadge\s*\{/);
   assert.match(html, /\.ct-vartools__scope\s*\{/);
-  assert.match(html, /color: #3c4a57/, 'the muted-but-AA-legible pair used elsewhere');
+  assert.match(html, /color: var\(--ct-text-soft\)/, 'the muted-but-AA-legible pair used elsewhere');
+
+  // It used to pin the literal #3c4a57, which pinned the DRIFT with it: the host had six
+  // greys in this band and the test blessed one of them. What it was actually protecting
+  // is the contrast, so check that instead — on the token, where a theme would change it.
+  const stdlib = readFileSync(new URL('../core/plugin-stdlib.js', import.meta.url), 'utf8');
+  const tok = (name) => {
+    const m = stdlib.match(new RegExp(`${name}:\\s*'(#[0-9a-fA-F]{6})'`));
+    assert.ok(m, `TOKENS.${name} is a hex value`);
+    return m[1];
+  };
+  const lum = (hex) => {
+    const ch = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  };
+  const ratio = (a, b) => {
+    const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+    return (x + 0.05) / (y + 0.05);
+  };
+  const onSurface = ratio(tok('textSoft'), tok('surface'));
+  assert.ok(onSurface >= 4.5, `text-soft on surface is ${onSurface.toFixed(2)}:1, below AA 4.5`);
+  // And the band below it, which labels and hints use.
+  const mutedOnSurface = ratio(tok('muted'), tok('surface'));
+  assert.ok(mutedOnSurface >= 4.5, `muted on surface is ${mutedOnSurface.toFixed(2)}:1, below AA 4.5`);
 });

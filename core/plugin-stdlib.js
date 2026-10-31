@@ -677,6 +677,25 @@ export const TOKENS = {
   text: '#1a1a1a',
   muted: '#646e77',
   danger: '#b03030',
+  // A state is a SET, not a shade. The host had amber chips, red chips and blue chips
+  // each spelling out their own background, border and text — nineteen literals for four
+  // ideas, and no way for a theme to move one without hunting all three parts of it.
+  dangerBg: '#fdf3f2',
+  dangerLine: '#f0d8d5',
+  warn: '#8a5a00',
+  warnBg: '#fdf0d5',
+  warnLine: '#f0c674',
+  ok: '#2e7d32',
+  okBg: '#eaf6ea',
+  okLine: '#bcd9bd',
+  // The wash under a hovered row, distinct from `accentWash` (which marks a SELECTED or
+  // active thing). They were one value in some places and two in others.
+  hover: '#f0f3f6',
+  // Text that is quieter than `text` but not as quiet as `muted` — a secondary label
+  // rather than a hint. The host had six greys in this band.
+  textSoft: '#3c4a57',
+  // Disabled, and the greys below `muted`: not information, just shape.
+  disabled: '#9aa4ae',
   radius: '6px',
   font: '14px system-ui, -apple-system, "Segoe UI", sans-serif',
 };
@@ -713,6 +732,17 @@ export const BASE_CSS = `
   --ct-text: ${TOKENS.text};
   --ct-muted: ${TOKENS.muted};
   --ct-danger: ${TOKENS.danger};
+  --ct-danger-bg: ${TOKENS.dangerBg};
+  --ct-danger-line: ${TOKENS.dangerLine};
+  --ct-warn: ${TOKENS.warn};
+  --ct-warn-bg: ${TOKENS.warnBg};
+  --ct-warn-line: ${TOKENS.warnLine};
+  --ct-ok: ${TOKENS.ok};
+  --ct-ok-bg: ${TOKENS.okBg};
+  --ct-ok-line: ${TOKENS.okLine};
+  --ct-hover: ${TOKENS.hover};
+  --ct-text-soft: ${TOKENS.textSoft};
+  --ct-disabled: ${TOKENS.disabled};
   --ct-radius: ${TOKENS.radius};
 }
 html, body { margin: 0; }
