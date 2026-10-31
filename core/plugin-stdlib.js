@@ -727,7 +727,13 @@ body { font: ${TOKENS.font}; color: var(--ct-text); }
 .ct-btn--danger { color: var(--ct-danger); }
 .ct-btn:disabled { opacity: .5; cursor: default; }
 
-.ct-field { font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: var(--ct-radius); }
+/* NOT the "font" shorthand. "font: inherit" resets font-SIZE too, and because a class
+   selector outranks the bare "input, select, textarea" floor below, every field built
+   from this class dropped back to 14px and would still zoom iOS on focus — the
+   standard's own control defeating the standard's own rule. Measured: bare input
+   16px, .ct-field input 14px. */
+.ct-field { font-family: inherit; font-size: 16px; padding: 5px 8px;
+  border: 1px solid var(--ct-line); border-radius: var(--ct-radius); }
 
 /* A row of controls. Wraps rather than overflowing: a control you cannot see is a
    control you do not have, and a pane has no horizontal scrollbar to rescue it. */

@@ -455,3 +455,21 @@ test('no plugin reaches for a token the standard does not define', () => {
   }
   assert.deepEqual(offences, [], `undefined tokens referenced: ${offences.join(', ')}`);
 });
+
+test('the standard control classes do not defeat the standard no-zoom floor', () => {
+  // The floor is written as a bare element selector — `input, select, textarea` — and a
+  // CLASS outranks an element. `.ct-field` then declared `font: inherit`, a shorthand
+  // that resets font-SIZE, so every field built from the standard class dropped back to
+  // 14px and would still zoom iOS on focus. Measured in a frame: bare input 16px,
+  // .ct-field input 14px. The standard's own control defeating the standard's own rule,
+  // in the same file.
+  //
+  // Buttons are deliberately left at the inherited size: iOS zooms on focusing a text
+  // control, not on tapping a button, and their touch target is handled by the pointer
+  // query.
+  const field = stdlib.slice(stdlib.indexOf('.ct-field {'), stdlib.indexOf('.ct-field {') + 220);
+  assert.ok(!/font:\s*inherit/.test(field),
+    '.ct-field must not use the font shorthand — it resets the size');
+  assert.match(field, /font-size: 16px/, 'it states the floor itself');
+  assert.match(field, /font-family: inherit/, 'while still inheriting the family');
+});

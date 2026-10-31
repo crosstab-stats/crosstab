@@ -198,6 +198,15 @@ export const manifest = {
 
 /** Distinct, readable highlight colours (assigned round-robin to new codes). */
 const PALETTE = ['#ffd166', '#8ecae6', '#a7c957', '#ffadad', '#bdb2ff', '#ffc6ff', '#caffbf', '#fdffb6', '#9bf6ff', '#ffd6a5'];
+/** The swatch colour for "no code here yet".
+ *
+ * One idea that was four different greys — #ccc, #eee, #888, #cccccc — depending on which
+ * function drew it. Named so the absence looks the same everywhere, and expressed as a
+ * token so a theme can move it; it is chrome (a placeholder), not data, which is what
+ * separates it from PALETTE above.
+ */
+const UNCODED = 'var(--ct-line)';
+
 const uid = (pfx = 'c') => pfx + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const MAX_DOCS = 10000; // v1 cap; virtualise for larger corpora later.
 
@@ -227,9 +236,9 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__drifthead { font-weight: 600; }
 .caqdas__drifthint { margin-top: 3px; font-size: 12px; }
 .caqdas__driftrow { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 13px;
-  border-bottom: 1px solid #eee; }
+  border-bottom: 1px solid var(--ct-line-soft); }
 .caqdas__driftrow .nm { font-weight: 600; }
-.caqdas__driftrow .q { flex: 1; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__driftrow .q { flex: 1; color: var(--ct-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__driftrow .why { color: #8a6d3b; font-size: 12px; }
 /* --- transcript pane (time-aligned text) ----------------------------------- */
 .caqdas__tplayer { padding: 6px 8px; border-bottom: 1px solid var(--ct-line);
@@ -250,7 +259,7 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 [data-screen="small"] .caqdas__tplayer.is-audio { position: static; }
 .caqdas__taudio { width: 100%; }
 .caqdas__tvideo { width: 100%; max-height: 40vh; background: #000; }
-.caqdas__tloading { font-size: 12px; color: #646e77; padding: 4px 2px; }
+.caqdas__tloading { font-size: 12px; color: var(--ct-muted); padding: 4px 2px; }
 /* The no-zoom font floor and the pointer-based touch targets used to live here. They
    were right, and that is exactly why they belong to the STANDARD rather than to this
    plugin: every pane has fields and buttons, and a rule copied into each is a rule four
@@ -262,7 +271,7 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__cue { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
 .caqdas__cuetime {
   font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: #646e77; background: none; border: 0; padding: 0 2px; text-align: right;
+  color: var(--ct-muted); background: none; border: 0; padding: 0 2px; text-align: right;
   cursor: pointer; border-radius: 3px;
   /* Tabular figures so the column does not jitter between 9:59 and 10:00. */
   font-variant-numeric: tabular-nums;
@@ -278,24 +287,24 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__cuetext { white-space: pre-wrap; }
 /* The line being spoken. A left bar rather than a background, because a background
    would compete with the coding highlights — which are the colours that carry meaning. */
-.caqdas__cue.is-now .caqdas__cuetext { box-shadow: inset 2px 0 0 var(--ct-accent, #2563eb); padding-left: 6px; margin-left: -8px; }
-.caqdas__cue.is-now .caqdas__cuetime { color: var(--ct-accent, #2563eb); font-weight: 600; }
+.caqdas__cue.is-now .caqdas__cuetext { box-shadow: inset 2px 0 0 var(--ct-accent); padding-left: 6px; margin-left: -8px; }
+.caqdas__cue.is-now .caqdas__cuetime { color: var(--ct-accent); font-weight: 600; }
 .caqdas__segtools { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
 .caqdas__segwarn { padding: 4px 0; font-size: 12px; color: #8a6d3b; }
 .caqdas__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft); flex-wrap: wrap; }
-.caqdas__bar label { color: #555; }
+.caqdas__bar label { color: var(--ct-muted); }
 .caqdas__bar select, .caqdas__btn { font: inherit; padding: 5px 9px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); }
-.caqdas__btn { cursor: pointer; background: #f3f6fa; }
-.caqdas__btn:hover { background: #e9eff6; }
+.caqdas__btn { cursor: pointer; background: var(--ct-panel); }
+.caqdas__btn:hover { background: var(--ct-accent-wash); }
 .caqdas__btn--primary { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
 .caqdas__paint { display: none; align-items: center; gap: 10px; padding: 6px 12px; background: var(--ct-accent); color: #fff; font-size: 13px; }
 .caqdas__paint.is-on { display: flex; }
 .caqdas__paint .stop { margin-left: auto; cursor: pointer; border: 1px solid rgba(255,255,255,.6); background: transparent; color: #fff; font: inherit; border-radius: 6px; padding: 2px 8px; }
 .caqdas__body { display: flex; flex: 1; min-height: 0; }
 .caqdas__docs { width: 230px; border-right: 1px solid var(--ct-line-soft); overflow: auto; flex: none; }
-.caqdas__doc { padding: 8px 12px; border-bottom: 1px solid #f0f2f4; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.caqdas__doc:hover { background: #f5f8fb; }
-.caqdas__doc.is-active { background: #e6f0fa; font-weight: 500; }
+.caqdas__doc { padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.caqdas__doc:hover { background: var(--ct-accent-wash); }
+.caqdas__doc.is-active { background: var(--ct-accent-wash); font-weight: 500; }
 .caqdas__doc .n { color: var(--ct-muted); font-size: 12px; margin-right: 6px; }
 .caqdas__doc .c { color: var(--ct-accent); font-size: 11px; float: right; }
 .caqdas__text { flex: 1; overflow: auto; padding: 16px 20px; white-space: pre-wrap; line-height: 1.7; min-width: 0; }
@@ -305,8 +314,8 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__codes h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 6px 6px 4px; }
 .caqdas__hint { font-size: 12px; color: var(--ct-muted); margin: 0 6px 10px; line-height: 1.4; transition: color .15s; }
 .caqdas__code { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
-.caqdas__code:hover { background: #f5f8fb; }
-.caqdas__code.is-armed { outline: 2px solid var(--ct-accent); outline-offset: -2px; background: #eef5fb; }
+.caqdas__code:hover { background: var(--ct-accent-wash); }
+.caqdas__code.is-armed { outline: 2px solid var(--ct-accent); outline-offset: -2px; background: var(--ct-accent-wash); }
 .caqdas__code .pb { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 4px; opacity: .45; }
 .caqdas__code:hover .pb { opacity: .8; }
 .caqdas__code .pb.is-on { opacity: 1; }
@@ -318,8 +327,8 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__newcode input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: 6px; }
 .caqdas__menu { position: absolute; z-index: 20; background: var(--ct-surface); border: 1px solid var(--ct-line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 270px; max-width: 340px; max-height: 340px; overflow: auto; }
 .caqdas__menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
-.caqdas__menu button:hover { background: #eef5fb; }
-.caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid #eef0f2; margin-top: 4px; }
+.caqdas__menu button:hover { background: var(--ct-accent-wash); }
+.caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid var(--ct-line-soft); margin-top: 4px; }
 .caqdas__menu .row input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: 6px; }
 /* --- codebook manager: a real modal overlay, this plugin's first ------------------
    Everything else here is a positioned div dismissed by a document click, which is fine
@@ -334,25 +343,25 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__mgrbody { display: flex; min-height: 0; flex: 1; }
 .caqdas__mgrside { width: 210px; border-right: 1px solid var(--ct-line-soft); padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .caqdas__mgrmain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.caqdas__mgrbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid #eef0f2; }
+.caqdas__mgrbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--ct-line-soft); }
 .caqdas__mgrlist { flex: 1; overflow: auto; padding: 4px 0; min-height: 220px; }
 .caqdas__mgrfoot { padding: 10px 14px; border-top: 1px solid var(--ct-line-soft); display: flex; gap: 8px; align-items: center; }
 .caqdas__bookbtn { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
-.caqdas__bookbtn:hover { background: #f2f5f8; }
-.caqdas__bookbtn.is-active { background: #eef5fb; border-color: #b7d4ea; font-weight: 600; }
+.caqdas__bookbtn:hover { background: var(--ct-accent-wash); }
+.caqdas__bookbtn.is-active { background: var(--ct-accent-wash); border-color: var(--ct-accent); font-weight: 600; }
 .caqdas__bookn { margin-left: auto; color: var(--ct-muted); font-size: 11px; font-weight: 400; }
 .caqdas__mgrrow { display: flex; align-items: center; gap: 8px; padding: 5px 12px; }
-.caqdas__mgrrow:hover { background: #f7f9fb; }
+.caqdas__mgrrow:hover { background: var(--ct-panel); }
 .caqdas__mgrrow input[type=text] { font: inherit; padding: 4px 7px; border: 1px solid var(--ct-line); border-radius: 6px; min-width: 0; }
 .caqdas__mgrname { flex: 2 1 0; }
 .caqdas__mgrtheme { flex: 1 1 0; }
 .caqdas__mgrcount { width: 46px; text-align: right; color: var(--ct-muted); font-size: 11px; }
-.caqdas__mgrempty { padding: 28px 14px; text-align: center; color: #7b848c; font-size: 13px; }
+.caqdas__mgrempty { padding: 28px 14px; text-align: center; color: var(--ct-muted); font-size: 13px; }
 .caqdas__paste { width: 100%; box-sizing: border-box; font: 12px/1.45 ui-monospace, Menlo, monospace; padding: 8px; border: 1px solid var(--ct-line); border-radius: 6px; resize: vertical; min-height: 120px; }
 .caqdas__mgrnote { font-size: 12px; color: var(--ct-muted); margin: 0 0 8px; line-height: 1.45; }
 .caqdas__sel { color: var(--ct-muted); font-size: 12px; margin-right: auto; }
 .caqdas__group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); font-weight: 600; margin: 16px 6px 2px; }
-.caqdas__group--none { font-weight: 500; font-style: italic; text-transform: none; letter-spacing: 0; color: #b3bac1; }
+.caqdas__group--none { font-weight: 500; font-style: italic; text-transform: none; letter-spacing: 0; color: var(--ct-muted); }
 .caqdas__code .caqdas__iconbtn { cursor: pointer; border: 0; background: none; font: inherit; padding: 0 3px; opacity: .4; }
 .caqdas__code:hover .caqdas__iconbtn { opacity: .8; }
 .caqdas__code .caqdas__iconbtn.has { opacity: .95; }
@@ -362,7 +371,7 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__retrhead { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .caqdas__retrhead h3 { margin: 0; }
 .caqdas__retr { border: 1px solid var(--ct-line-soft); border-radius: 6px; padding: 8px 10px; margin: 8px 0; cursor: pointer; }
-.caqdas__retr:hover { background: #f5f8fb; }
+.caqdas__retr:hover { background: var(--ct-accent-wash); }
 .caqdas__retr .rl { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ct-muted); margin-bottom: 3px; }
 .caqdas__retr .rl > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__retr .rl .caqdas__segrm { flex: 0 0 auto; font-size: 13px; line-height: 1; }
@@ -376,14 +385,14 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__thread { display: flex; flex-direction: column; gap: 6px; margin: 0 0 8px; min-width: 0; }
 .caqdas__notes { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; overflow-x: hidden; }
 .caqdas__notesempty { font-size: 12px; color: var(--ct-muted); font-style: italic; }
-.caqdas__note { background: #f6f8fa; border: 1px solid #e3e8ee; border-radius: 6px; padding: 5px 7px; min-width: 0; }
+.caqdas__note { background: var(--ct-panel); border: 1px solid var(--ct-line); border-radius: 6px; padding: 5px 7px; min-width: 0; }
 .caqdas__note--legacy { background: #fbfaf3; }
 .caqdas__noterow { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; min-width: 0; }
 .caqdas__notechip { flex: none; width: 18px; height: 18px; border-radius: 50%; color: #fff; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.caqdas__notewho { font-size: 11px; font-weight: 600; color: #41505e; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caqdas__notewho { font-size: 11px; font-weight: 600; color: var(--ct-text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caqdas__notemeta { font-size: 10.5px; color: var(--ct-muted); font-style: italic; margin: 0 0 2px; }
 .caqdas__notedel { flex: none; border: 0; background: none; color: var(--ct-danger); cursor: pointer; font-size: 11px; padding: 0 2px; }
-.caqdas__notebody { font-size: 12px; color: #2c3742; white-space: pre-wrap; word-break: break-word; }
+.caqdas__notebody { font-size: 12px; color: var(--ct-text); white-space: pre-wrap; word-break: break-word; }
 .caqdas__noteadd { display: flex; flex-direction: column; gap: 4px; }
 .caqdas__noteinput { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--ct-line); border-radius: 6px; resize: vertical; }
 .caqdas__noteadd .caqdas__btn { align-self: flex-end; font-size: 12px; padding: 3px 10px; }
@@ -435,13 +444,13 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__speedlabel { font-size: 12px; color: var(--ct-muted); margin-right: 2px; }
 .caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); cursor: pointer; }
 .caqdas__speedbtn.is-on { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
-.caqdas__transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px; background: #eef2f6; border-top: 1px solid var(--ct-line-soft); border-bottom: 1px solid var(--ct-line-soft); }
+.caqdas__transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px; background: var(--ct-panel); border-top: 1px solid var(--ct-line-soft); border-bottom: 1px solid var(--ct-line-soft); }
 .caqdas__ctlbtn { font: inherit; font-size: 12px; padding: 3px 9px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); cursor: pointer; }
 .caqdas__ctlbtn.is-on { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
 .caqdas__playbtn { min-width: 40px; font-size: 12px; }
 .caqdas__regionbtn { margin-left: auto; }
 .caqdas__timeline { padding: 6px 20px 16px; }
-.caqdas__tltrack { position: relative; height: 22px; background: #eef1f4; border: 1px solid var(--ct-line-soft); border-radius: 4px; cursor: crosshair; overflow: hidden; touch-action: none; }
+.caqdas__tltrack { position: relative; height: 22px; background: var(--ct-line-soft); border: 1px solid var(--ct-line-soft); border-radius: 4px; cursor: crosshair; overflow: hidden; touch-action: none; }
 .caqdas__tlsel { position: absolute; top: 0; bottom: 0; background: rgba(47,111,176,.18); border-left: 2px solid var(--ct-accent); border-right: 2px solid var(--ct-accent); box-sizing: border-box; pointer-events: none; }
 .caqdas__playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ct-danger); pointer-events: none; }
 .caqdas__scrub { position: absolute; top: 0; bottom: 0; width: 16px; margin-left: -8px; cursor: ew-resize; z-index: 3; touch-action: none; }
@@ -451,7 +460,7 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__lanes { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
 .caqdas__lane { display: flex; align-items: center; gap: 8px; }
 .caqdas__lanelabel { flex: 0 0 120px; font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.caqdas__lanestrip { position: relative; flex: 1; height: 16px; background: #f5f7f9; border-radius: 3px; }
+.caqdas__lanestrip { position: relative; flex: 1; height: 16px; background: var(--ct-panel); border-radius: 3px; }
 .caqdas__lanebar { position: absolute; top: 1px; bottom: 1px; min-width: 3px; border-radius: 3px; cursor: pointer; opacity: .85; }
 .caqdas__lanebar:hover { opacity: 1; }
 .caqdas__lanebar.has-memo { box-shadow: inset 0 0 0 2px rgba(0,0,0,.35); }
@@ -651,7 +660,7 @@ export const workspace = {
           const n = el('div', { class: 'caqdas__note' });
           const row = el('div', { class: 'caqdas__noterow' });
           const chip = el('span', { class: 'caqdas__notechip' }); chip.textContent = a.initials || '·';
-          chip.style.background = a.color || '#8a94a0'; chip.title = a.name || a.initials || 'Unknown';
+          chip.style.background = a.color || UNCODED; chip.title = a.name || a.initials || 'Unknown';
           const who = el('span', { class: 'caqdas__notewho' }); who.textContent = a.name || a.initials || 'Unknown';
           row.append(chip, who);
           if (me && a.authorId === me.authorId) {
@@ -928,7 +937,7 @@ export const workspace = {
       for (const sg of segs) {
         const row = el('div', { class: 'caqdas__driftrow' });
         const code = codeById(sg.codeId);
-        const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code ? code.color : '#ccc';
+        const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code ? code.color : UNCODED;
         row.append(sw, el('span', { class: 'nm', text: code ? code.name : '(code)' }));
         row.append(el('span', { class: 'q', text: sg.quote || '' }));
         row.append(el('span', { class: 'why', text: sg.reason || sg.status }));
@@ -983,7 +992,7 @@ export const workspace = {
         if (!run.covering.length) return document.createTextNode(slice);
         const m = el('mark');
         const code = codeById(run.covering[0].codeId);
-        m.style.backgroundColor = code ? code.color : '#eee';
+        m.style.backgroundColor = code ? code.color : UNCODED;
         if (run.covering.some((x) => hasNotes(x))) m.classList.add('has-memo');
         // On a transcript the tooltip also says WHEN — the thing a reader of a coded
         // passage asks next, and the reason the cue index is kept at all.
@@ -1434,7 +1443,7 @@ export const workspace = {
         .sort((a, b) => (order.get(a.codeId) ?? 0) - (order.get(b.codeId) ?? 0)); // codebook order = layer order
       for (const s of segs) {
         const code = codeById(s.codeId);
-        const color = code ? code.color : '#888';
+        const color = code ? code.color : UNCODED;
         const box = el('div', { class: 'caqdas__region' + (hasNotes(s) ? ' has-memo' : '') });
         positionPct(box, s.region);
         box.style.borderColor = color;
@@ -1561,7 +1570,7 @@ export const workspace = {
       }
       for (const cid of ids) {
         const code = codeById(cid);
-        const color = code ? code.color : '#888';
+        const color = code ? code.color : UNCODED;
         const lane = el('div', { class: 'caqdas__lane' });
         const label = el('span', { class: 'caqdas__lanelabel' }); label.textContent = code ? code.name : '(code)'; label.style.color = color;
         lane.append(label);
@@ -1792,7 +1801,7 @@ export const workspace = {
         const r = regionAtTime(s.keys, t);
         if (!r) continue;
         const code = codeById(s.codeId);
-        const color = code ? code.color : '#888';
+        const color = code ? code.color : UNCODED;
         const box = el('div', { class: 'caqdas__trackbox' + (s === activeTrack ? ' is-active' : '') });
         positionPct(box, r);
         box.style.borderColor = color;
@@ -2107,9 +2116,9 @@ export const workspace = {
           renderList();
         });
         const hn = el('span', { class: 'caqdas__mgrname' }); hn.textContent = 'Code';
-        hn.style.color = '#8b949c'; hn.style.fontSize = '11px';
+        hn.style.color = 'var(--ct-muted)'; hn.style.fontSize = '11px';
         const ht = el('span', { class: 'caqdas__mgrtheme' }); ht.textContent = 'Theme';
-        ht.style.color = '#8b949c'; ht.style.fontSize = '11px';
+        ht.style.color = 'var(--ct-muted)'; ht.style.fontSize = '11px';
         const hc = el('span', { class: 'caqdas__mgrcount' }); hc.textContent = 'Uses';
         hdr.append(all, el('span'), hn, ht, hc);
         list.append(hdr);
@@ -2687,7 +2696,7 @@ export const workspace = {
       else document.getSelection()?.removeAllRanges();
     };
 
-    const flashHint = (elm) => { elm.style.color = '#b04a4a'; setTimeout(() => { elm.style.color = ''; }, 900); };
+    const flashHint = (elm) => { elm.style.color = 'var(--ct-danger)'; setTimeout(() => { elm.style.color = ''; }, 900); };
 
     // Coding is deliberately NOT auto-pop-on-selection (the Dedoose/Taguette way) —
     // coders select text to read, compare, and copy, so a menu on every selection
@@ -2762,7 +2771,7 @@ export const workspace = {
       for (const seg of covering) {
         const code = codeById(seg.codeId);
         const head = el('div', { class: 'caqdas__seghead' });
-        const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code ? code.color : '#ccc';
+        const sw = el('span', { class: 'caqdas__sw' }); sw.style.backgroundColor = code ? code.color : UNCODED;
         const nm = el('span', { class: 'nm' }); nm.textContent = code ? code.name : '(code)';
         const rm = el('button', { class: 'caqdas__segrm' }); rm.textContent = 'Remove'; rm.title = 'Remove this coding and its notes';
         rm.addEventListener('click', (e) => { e.stopPropagation(); void removeCoding(seg); });
@@ -6191,14 +6200,23 @@ async function mountTranscripts(app, root) {
   };
   // CSSOM, never style attributes: the sandbox CSP is `default-src 'none'`, which blocks
   // an inline style attribute but not a property set through the object model.
-  const BTN = { font: 'inherit', padding: '4px 10px', border: '1px solid #ccd2d8',
-    borderRadius: '6px', background: '#fff', cursor: 'pointer' };
-  const MUTED = { color: '#5b6672', fontSize: '12px' };
+  // `.ct-btn` rather than a local copy of it. This tab hand-rolled its own button —
+  // its own border grey, its own radius, its own background — which is how it ended up
+  // looking subtly unlike the rest of the app and missing the sizing rules that keep a
+  // control usable under a finger. The class brings all of that, and a theme can move it.
+  const btn = (text) => {
+    const b = document.createElement('button');
+    b.className = 'ct-btn';
+    b.textContent = text;
+    return b;
+  };
+  const MUTED = { color: 'var(--ct-muted)', fontSize: '12px' };
 
   root.replaceChildren();
   // The hook the sheet above keys off.
   root.classList.add('caqdas-tx');
-  css(root, { font: '14px/1.5 system-ui, sans-serif', padding: '12px', color: '#1b2530' });
+  // Font and colour come from the base sheet now; only the padding is this pane's.
+  css(root, { padding: '12px' });
 
   const h = mk('h2', { fontSize: '1.05rem', margin: '0 0 2px' }, 'Transcripts');
   const sub = mk('p', { ...MUTED, margin: '0 0 10px' },
@@ -6209,7 +6227,7 @@ async function mountTranscripts(app, root) {
   let options = { sizes: [], modes: [], languages: [], limitations: [] };
   try { options = await app.transcribe.options(); } catch { /* capability absent */ }
   if (!app.transcribe?.enqueue) {
-    root.append(mk('p', { color: '#b3261e' },
+    root.append(mk('p', { color: 'var(--ct-danger)' },
       'Transcription is not available in this build.'));
     return;
   }
@@ -6220,6 +6238,9 @@ async function mountTranscripts(app, root) {
   // this split, and summaries beat a single "show warnings" toggle because the one that
   // matters to a given researcher is legible without opening anything.
   for (const lim of options.limitations ?? []) {
+    // The caveat amber is this plugin's own, like the drift warning: it marks a STATE
+    // rather than instancing a shared value, and a theme restyling the pane should not
+    // repaint "here is something this tool cannot do".
     const d = mk('details', { ...MUTED, margin: '0 0 6px', borderLeft: '3px solid #e3b341',
       paddingLeft: '8px' });
     const sum = mk('summary', { cursor: 'pointer' }, lim.short || lim.detail);
@@ -6312,8 +6333,8 @@ async function mountTranscripts(app, root) {
   fromIn.setAttribute('aria-label', 'Transcribe from');
   toIn.setAttribute('aria-label', 'Transcribe until');
   const rangeNote = mk('span', MUTED, '');
-  const allBtn = css(mk('button', BTN, 'Transcribe all'), { fontWeight: '600' });
-  const pauseBtn = mk('button', BTN, 'Pause');
+  const allBtn = css(btn('Transcribe all'), { fontWeight: '600' });
+  const pauseBtn = btn('Pause');
   bar.append(
     field('Model', sizeSel),
     field('Mode', modeSel),
@@ -6328,7 +6349,7 @@ async function mountTranscripts(app, root) {
     + 'recording. A range applies to whichever recordings you start next, and the '
     + 'transcript keeps the original times — so 2:15 in the audio is still 2:15 in the '
     + 'transcript.'), { margin: '0 0 8px' }));
-  root.append(css(rangeNote, { display: 'block', margin: '0 0 8px', color: '#e06c75' }));
+  root.append(css(rangeNote, { display: 'block', margin: '0 0 8px', color: 'var(--ct-danger)' }));
 
   const capacityLine = mk('p', { ...MUTED, margin: '0 0 8px' }, '');
   root.append(capacityLine);
@@ -6339,7 +6360,7 @@ async function mountTranscripts(app, root) {
   // nobody told, which is exactly what happened on a phone.
   const orphanLine = mk('p', { ...MUTED, margin: '0 0 8px' });
   orphanLine.hidden = true;
-  const orphanDiscard = mk('button', BTN, 'Discard them');
+  const orphanDiscard = btn('Discard them');
   root.append(orphanLine);
 
   const tableWrap = mk('div', { overflowX: 'auto' });
@@ -6349,7 +6370,7 @@ async function mountTranscripts(app, root) {
 
   const footer = mk('div', { display: 'flex', gap: '8px', alignItems: 'center',
     margin: '12px 0' });
-  const saveBtn = mk('button', BTN, 'Save transcripts to a new dataset');
+  const saveBtn = btn('Save transcripts to a new dataset');
   const saveNote = mk('span', MUTED, '');
   footer.append(saveBtn, saveNote);
   root.append(footer);
@@ -6728,7 +6749,7 @@ async function mountTranscripts(app, root) {
     const head = mk('tr');
     for (const label of ['Recording', 'State', 'Progress', '']) {
       head.append(css(mk('th', { textAlign: 'left', padding: '4px 8px',
-        borderBottom: '1px solid #d8dde2', ...MUTED }, label), {}));
+        borderBottom: '1px solid var(--ct-line)', ...MUTED }, label), {}));
     }
     table.append(head);
     if (!rows.length) {
@@ -6746,12 +6767,12 @@ async function mountTranscripts(app, root) {
       const job = byId.get(jobOf.get(row.rid));
       const d = describe(job, row);
       const tr = mk('tr');
-      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4' }, row.label));
-      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4' }, d.state));
-      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4', ...MUTED }, d.detail));
-      const actions = mk('td', { padding: '4px 8px', borderBottom: '1px solid #eef1f4' });
+      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid var(--ct-line-soft)' }, row.label));
+      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid var(--ct-line-soft)' }, d.state));
+      tr.append(mk('td', { padding: '4px 8px', borderBottom: '1px solid var(--ct-line-soft)', ...MUTED }, d.detail));
+      const actions = mk('td', { padding: '4px 8px', borderBottom: '1px solid var(--ct-line-soft)' });
       if (saved[row.rid]) {
-        const again = mk('button', BTN, 'Redo');
+        const again = btn('Redo');
         again.addEventListener('click', async () => {
           try {
             rangeNote.textContent = '';
@@ -6768,7 +6789,7 @@ async function mountTranscripts(app, root) {
         });
         actions.append(again);
       } else if (job && (job.state === 'running' || job.state === 'queued')) {
-        const stop = mk('button', BTN, 'Stop');
+        const stop = btn('Stop');
         stop.addEventListener('click', async () => {
           await app.transcribe.cancel(job.id);
           jobOf.delete(row.rid);
@@ -6780,7 +6801,7 @@ async function mountTranscripts(app, root) {
       } else {
         // "Try again" rather than "Transcribe" after a failure: the same button doing
         // the same thing, but it tells the user the row has been attempted before.
-        const go = mk('button', BTN, failures[row.rid] ? 'Try again' : 'Transcribe');
+        const go = btn(failures[row.rid] ? 'Try again' : 'Transcribe');
         go.addEventListener('click', async () => {
           try {
             rangeNote.textContent = '';
