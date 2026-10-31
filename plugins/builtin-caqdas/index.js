@@ -245,24 +245,11 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__taudio { width: 100%; }
 .caqdas__tvideo { width: 100%; max-height: 40vh; background: #000; }
 .caqdas__tloading { font-size: 12px; color: #646e77; padding: 4px 2px; }
-/* 16px STOPS iOS ZOOMING THE VIEWPORT when a control takes focus, and iOS does that
-   whenever the focused control is under 16px — it has never heard of our screen-mode
-   setting. Keying this to [data-screen="small"], which is what it used to be, meant a
-   phone in the FULL layout (the owner's, reported while typing into a time field) zoomed
-   on every tap. A floor on anything typable or pickable, in every mode. */
-.caqdas input, .caqdas select, .caqdas textarea,
-.caqdas-tx input, .caqdas-tx select, .caqdas-tx textarea { font-size: 16px; }
-/* TOUCH TARGETS FOLLOW THE POINTER, not our layout mode. The 44px rules elsewhere are
-   keyed to [data-screen="small"], which is a user's CHOICE of layout — and the owner was
-   on a phone in the FULL layout, where none of them applied and every button was 31px.
-   A phone in the full layout is still a phone, and "pointer: coarse" is the question
-   actually being asked: is this being operated by a finger? */
-@media (pointer: coarse) {
-  .caqdas-tx button, .caqdas-tx input, .caqdas-tx select { min-height: 44px; }
-  .caqdas-tx button { font-size: 16px; }
-  /* A disclosure summary is a tap target too — it is how the caveats open. */
-  .caqdas-tx summary { min-height: 44px; display: flex; align-items: center; }
-}
+/* The no-zoom font floor and the pointer-based touch targets used to live here. They
+   were right, and that is exactly why they belong to the STANDARD rather than to this
+   plugin: every pane has fields and buttons, and a rule copied into each is a rule four
+   panes can drift on. Both are now in "core/plugin-stdlib.js" BASE_CSS, which this file
+   injects before its own sheet. */
 /* A grid, so every line's words start at the same place however long the clock is —
    ragged text is harder to read than a wider gutter. */
 .caqdas__transcript--timed { display: grid; grid-template-columns: max-content 1fr; gap: 0 10px; align-items: start; }

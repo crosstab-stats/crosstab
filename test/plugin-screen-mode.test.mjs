@@ -41,6 +41,7 @@ const broker = readFileSync('core/plugin-broker.js', 'utf8');
 const manager = readFileSync('core/workspace-manager.js', 'utf8');
 const host = readFileSync('plugin-host.html', 'utf8');
 const caqdas = readFileSync('plugins/builtin-caqdas/index.js', 'utf8');
+const stdlib = readFileSync('core/plugin-stdlib.js', 'utf8');
 const spatial = readFileSync('plugins/builtin-spatial/index.js', 'utf8');
 const decisions = readFileSync('plugins/builtin-decisions/index.js', 'utf8');
 
@@ -74,7 +75,7 @@ test('the frame mirrors it onto its own root, using the host’s own attribute',
 test('workspace plugins get the stdlib too — the gap part 1 left', () => {
   // The workspace mount path is NOT the one in loader.js, and it passed only `source`.
   // That is how the pane plugins — the ones that build the most UI — ended up as the only
-  // plugins without app.std.
+  // plugins without app.stdlib.
   assert.match(manager, /sendLoad\(source, null, null, await pluginStdlibSource\(\)\)/);
 });
 
@@ -151,33 +152,40 @@ test('…and its controls meet the touch target', () => {
   assert.match(caqdas, /\[data-screen="small"\][\s\S]{0,200}min-height: 44px/);
 });
 
-test('…but the no-zoom font is NOT conditional on our screen mode', () => {
-  // These two used to be one rule under [data-screen="small"], and that was wrong for
-  // the font half. iOS zooms the viewport whenever a FOCUSED control is under 16px and
-  // has never heard of our setting — so a phone in the FULL layout zoomed on every tap
-  // into a time field, which is how this was reported. 44px is a touch-target decision
-  // and stays keyed to small mode; 16px is a floor that applies everywhere.
-  const rule = caqdas.slice(caqdas.indexOf('.caqdas input, .caqdas select'));
-  assert.ok(rule.startsWith('.caqdas input, .caqdas select'), 'the unconditional rule exists');
-  assert.match(rule.slice(0, 200), /font-size: 16px/);
-  assert.ok(
-    !caqdas.slice(0, caqdas.indexOf('.caqdas input, .caqdas select')).endsWith('[data-screen="small"] '),
-    'and is not nested under a screen-mode selector',
-  );
-  // The Transcripts tab is covered too — it had no stylesheet of its own at all.
-  assert.match(rule.slice(0, 200), /\.caqdas-tx input/);
+test('the no-zoom font floor belongs to the STANDARD, and is unconditional', () => {
+  // These two used to be one rule under [data-screen="small"], in the plugin. Both halves
+  // were wrong about where they lived. iOS zooms whenever a FOCUSED control is under 16px
+  // and has never heard of our screen mode — which is a user's CHOICE of layout — so a
+  // phone in the FULL layout zoomed on every tap into a time field. And every pane has
+  // fields, so the rule is the standard's job, not each plugin's.
+  assert.match(stdlib, /\nbutton, select, input, textarea \{ font-size: 16px; \}/,
+    'a floor on every control, in every mode');
+  // And no plugin keeps a private copy to drift from.
+  assert.ok(!caqdas.includes('.caqdas-tx input, .caqdas-tx select'),
+    'caqdas does not re-declare what the standard provides');
 });
 
 test('touch targets follow the POINTER, not the chosen layout', () => {
-  // Every other 44px rule here is keyed to [data-screen="small"], which is a user's
-  // CHOICE of layout. Reported from a phone in the FULL layout, where none of them
-  // applied: measured buttons at 31px. "pointer: coarse" asks the question that actually
-  // matters — is a finger driving this — and a phone in the full layout is still a phone.
-  assert.match(caqdas, /@media \(pointer: coarse\)/, 'the pointer query exists');
-  const at = caqdas.indexOf('@media (pointer: coarse)');
-  const block = caqdas.slice(at, at + 420);
-  assert.match(block, /\.caqdas-tx button[^}]*min-height: 44px/);
-  assert.match(block, /\.caqdas-tx summary[^}]*min-height: 44px/, 'including the caveat disclosures');
+  // Measured on the owner's phone in the FULL layout: every button 31px against a 44px
+  // target, because every 44px rule was keyed to small-screen mode. "pointer: coarse"
+  // asks the question that actually matters — is a finger driving this.
+  assert.match(stdlib, /@media \(pointer: coarse\)/, 'the pointer query exists');
+  const block = stdlib.slice(stdlib.indexOf('@media (pointer: coarse)'), stdlib.indexOf('@media (pointer: coarse)') + 320);
+  assert.match(block, /min-height: 44px/);
+  assert.match(block, /summary/, 'including disclosures, which are tap targets too');
+});
+
+test('the standard writes no colour literals of its own', () => {
+  // Its own TOKENS comment says a plugin writing `#fff` is writing the one value that
+  // cannot survive a theme — and the sheet then wrote it three times, for the button
+  // background, the primary button's text and the hover wash. A standard that does not
+  // follow itself cannot be cited at a plugin that does not either.
+  const sheet = stdlib.slice(stdlib.indexOf('export const BASE_CSS'), stdlib.indexOf('export function injectStdlibStyles'));
+  const literals = sheet.match(/#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![0-9a-fA-F])/g) ?? [];
+  assert.deepEqual(literals, [], `BASE_CSS should hold no hex literals, found: ${literals.join(', ')}`);
+  for (const t of ['--ct-on-accent', '--ct-accent-wash']) {
+    assert.ok(stdlib.includes(t), `${t} is a real token, not a literal`);
+  }
 });
 
 test('the Transcripts tab takes the shared sheets, like the Coding tab', () => {
@@ -374,4 +382,32 @@ test('Restart stays visually secondary without being too small to hit', () => {
   // shrunk below a usable target — which is what it was before.
   const html = readFileSync('index.html', 'utf8');
   assert.match(html, /\.ws-verb--restart \{ color: #5a6470; \}/);
+});
+
+test('no CSS template literal contains a backtick', () => {
+  // I have broken a module this way THREE times in one week: a stylesheet lives in a
+  // template literal, and a backtick written inside one of its comments — `overflow:
+  // auto`, `data-screen`, `core/plugin-stdlib.js` — closes the string. Two were caught by
+  // `node --check`, which is luck rather than a process: the failure is a syntax error
+  // somewhere far below the typo, and in a 7000-line plugin it reads as nonsense.
+  //
+  // Prose quoting is the natural reflex when writing CSS comments, so the fix is a test,
+  // not resolve. Any `const NAME = \`` sheet here is checked.
+  const files = [
+    ['core/plugin-stdlib.js', 'BASE_CSS'],
+    ['plugins/builtin-caqdas/index.js', 'STYLES'],
+  ];
+  for (const [path, name] of files) {
+    const src = readFileSync(path, 'utf8');
+    const open = `const ${name} = \``;
+    const at = src.indexOf(open);
+    assert.ok(at > 0, `${path} defines ${name}`);
+    const body = src.slice(at + open.length);
+    const close = body.indexOf('\n`;');
+    assert.ok(close > 0, `${name} is a closed template literal`);
+    assert.ok(
+      !body.slice(0, close).includes('`'),
+      `${path}: ${name} contains a backtick, which ends the stylesheet early`,
+    );
+  }
 });

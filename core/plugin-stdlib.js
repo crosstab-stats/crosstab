@@ -666,6 +666,14 @@ export const TOKENS = {
   // moment there is a dark theme — and a plugin writing `#fff` is writing the one value
   // that cannot survive one.
   surface: '#ffffff',
+  // Text ON an accent-filled surface. The primary button had this as a literal `#fff`,
+  // which is the same mistake as `surface` below it and fails in the same way: invert the
+  // theme and white-on-accent may be exactly the wrong contrast.
+  onAccent: '#ffffff',
+  // A wash of the accent, for a hover or a selected row. Named because "the pale blue we
+  // use behind a hovered button" was a value repeated in four files, each free to drift,
+  // and because a theme has to be able to move it with the accent it belongs to.
+  accentWash: '#eef5fb',
   text: '#1a1a1a',
   muted: '#646e77',
   danger: '#b03030',
@@ -700,6 +708,8 @@ export const BASE_CSS = `
   --ct-line-soft: ${TOKENS.lineSoft};
   --ct-panel: ${TOKENS.panel};
   --ct-surface: ${TOKENS.surface};
+  --ct-on-accent: ${TOKENS.onAccent};
+  --ct-accent-wash: ${TOKENS.accentWash};
   --ct-text: ${TOKENS.text};
   --ct-muted: ${TOKENS.muted};
   --ct-danger: ${TOKENS.danger};
@@ -710,10 +720,10 @@ body { font: ${TOKENS.font}; color: var(--ct-text); }
 
 .ct-btn {
   font: inherit; padding: 5px 9px; border: 1px solid var(--ct-line);
-  border-radius: var(--ct-radius); background: #fff; color: inherit; cursor: pointer;
+  border-radius: var(--ct-radius); background: var(--ct-surface); color: inherit; cursor: pointer;
 }
-.ct-btn:hover { background: #eef5fb; }
-.ct-btn--primary { background: var(--ct-accent); border-color: var(--ct-accent); color: #fff; }
+.ct-btn:hover { background: var(--ct-accent-wash); }
+.ct-btn--primary { background: var(--ct-accent); border-color: var(--ct-accent); color: var(--ct-on-accent); }
 .ct-btn--danger { color: var(--ct-danger); }
 .ct-btn:disabled { opacity: .5; cursor: default; }
 
@@ -732,12 +742,25 @@ body { font: ${TOKENS.font}; color: var(--ct-text); }
 [data-screen="small"] .ct-split { flex-direction: column; }
 [data-screen="small"] .ct-split > * { width: auto !important; flex: none; }
 
-/* Touch targets and the 16px that stops iOS zooming the viewport on focus — the same
-   two rules the host applies to itself in small-screen mode. */
+/* 16px STOPS iOS ZOOMING THE VIEWPORT when a control takes focus — and it does that
+   whenever the focused control is under 16px, having never heard of our screen mode.
+   "data-screen" is a USER'S CHOICE of layout, so keying this to it meant a phone in the
+   FULL layout zoomed on every tap into a field. Reported from exactly that, 2026-10-30.
+   A floor on anything typable or pickable, in every mode. */
+button, select, input, textarea { font-size: 16px; }
+
+/* Touch targets follow the POINTER, not the chosen layout: a phone in the full layout is
+   still a phone, and "is a finger driving this" is the question actually being asked.
+   Measured on the owner's phone before this: every button 31px against a 44px target. */
+@media (pointer: coarse) {
+  .ct-btn, .ct-field, button, select, input, textarea { min-height: 44px; }
+  summary { min-height: 44px; display: flex; align-items: center; }
+}
+
+/* Small-screen mode keeps its own touch sizing for anything a pointer query misses
+   (a trackpad-driven narrow window the user has deliberately put in small mode). */
 [data-screen="small"] .ct-btn,
-[data-screen="small"] .ct-field { font-size: 16px; min-height: 44px; }
-[data-screen="small"] button, [data-screen="small"] select,
-[data-screen="small"] input, [data-screen="small"] textarea { font-size: 16px; }
+[data-screen="small"] .ct-field { min-height: 44px; }
 `;
 
 /**
