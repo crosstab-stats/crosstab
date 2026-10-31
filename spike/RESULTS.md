@@ -1354,3 +1354,25 @@ A feature can be fully implemented, fully tested, verified in a browser, and sti
 lie, if the verification only ever ran the case where the lie and the truth agree. The
 check that would have caught this on day one is not a better test of the code — it is one
 file of audio in a language I did not already have.
+
+## Transcribing while the app is in the background (2026-10-30, owner's iPhone)
+
+A **ranged** job (2:40–7:40 of ES2002a, 3 parts, "Faster" model, English) kept running
+while the user switched to another app, and showed correct progress on return, then
+finished normally.
+
+Worth recording because it narrows advice I had given too broadly. The endurance testing
+earlier in this epic found that letting the **display sleep** freezes the tab, and I had
+been telling the owner to keep the screen awake. That still stands — but it is not the
+same thing as switching apps, and a short job demonstrably survives the latter.
+
+Scope of the claim, deliberately narrow: ONE job, about five minutes of audio, a brief
+switch away and back. It says nothing about a 40-minute interview, a long absence, or a
+locked screen, and iOS reclaims backgrounded tabs under memory pressure in ways that are
+not promised anywhere. The honest guidance is: a quick switch away is fine; do not count
+on it for a long run, and do not let the screen sleep.
+
+What it also exercised, as a side effect: the row→job mapping survived whatever iOS did
+to the frame, and the queue's progress was correct on return — the persisted
+`transcribing` state and the re-adoption pass doing the job they were added for.
+
