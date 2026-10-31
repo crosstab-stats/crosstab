@@ -6215,8 +6215,13 @@ async function mountTranscripts(app, root) {
   root.replaceChildren();
   // The hook the sheet above keys off.
   root.classList.add('caqdas-tx');
-  // Font and colour come from the base sheet now; only the padding is this pane's.
-  css(root, { padding: '12px' });
+  // The font is set HERE rather than inherited from the base sheet. The sheet does
+  // provide it — but a pane that cannot render readable text when an optional injection
+  // fails is a pane with a single point of failure for its most basic property. The
+  // Coding tab has always stated its own; this one briefly did not, and fell back to
+  // serif the moment the sheet was genuinely missing.
+  css(root, { font: '14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif',
+    padding: '12px', color: 'var(--ct-text, #1a1a1a)' });
 
   const h = mk('h2', { fontSize: '1.05rem', margin: '0 0 2px' }, 'Transcripts');
   const sub = mk('p', { ...MUTED, margin: '0 0 10px' },

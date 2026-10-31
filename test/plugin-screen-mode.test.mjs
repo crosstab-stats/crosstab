@@ -574,3 +574,69 @@ test('every token the host declares is one the standard knows', () => {
   assert.deepEqual(unknown, [], `host declares tokens the standard does not: ${unknown.join(', ')}`);
   assert.ok(declared.length >= 20, 'and it restates the whole vocabulary, not a subset');
 });
+
+// ---------------------------------------------------------------------------------------
+// The base sheet has to SURVIVE the sandbox CSP
+// ---------------------------------------------------------------------------------------
+
+test('the base sheet goes in as a constructed sheet, not a <style> element', async () => {
+  // The audit's biggest finding, and it was invisible for months. Every plugin pane runs
+  // under "default-src 'none'; script-src 'unsafe-inline' blob:; connect-src 'none'" —
+  // with no style-src, so style-src falls back to default-src 'none' and a <style>
+  // ELEMENT is blocked outright. injectStdlibStyles appended one. The base sheet had
+  // therefore NEVER applied inside a workspace pane: no tokens, no .ct-btn, no .ct-field,
+  // no touch targets, no no-zoom floor — everything the standard ships, inert, in the
+  // only place it ships to.
+  //
+  // Measured in a frame carrying the real CSP, both ways:
+  //   <style> element     body "Times New Roman", button rgb(240,240,240) with a black
+  //                       border, field 13.3px — all browser defaults
+  //   constructed sheet   body system-ui, button rgb(255,255,255) bordered
+  //                       rgb(216,221,226), field 16px
+  //
+  // adoptedStyleSheets is CSSOM rather than markup, and CSP does not police it — which is
+  // why builtin-caqdas has always built its own sheet that way. The standard was not
+  // following the rule its own clients knew.
+  const { injectStdlibStyles, BASE_CSS } = await import('../core/plugin-stdlib.js');
+
+  const adopted = [];
+  const modern = {
+    adoptedStyleSheets: [],
+    getElementById: () => null,
+    createElement: (tag) => ({ tagName: tag.toUpperCase(), id: '', textContent: '' }),
+    head: { append(node) { adopted.push(node.tagName); } },
+    defaultView: {
+      CSSStyleSheet: class { replaceSync(css) { this.css = css; } },
+    },
+  };
+  const ret = injectStdlibStyles(modern, BASE_CSS);
+  assert.equal(modern.adoptedStyleSheets.length, 1, 'the sheet is adopted, not appended as CSS');
+  assert.equal(modern.adoptedStyleSheets[0].css, BASE_CSS, 'and it carries the whole sheet');
+  assert.notEqual(ret.tagName, 'STYLE', 'what is appended is only a marker, not the CSS');
+
+  // And a document that cannot construct one still gets the sheet the old way, because a
+  // plain page (the launcher, a test harness) has no CSP to worry about.
+  const legacy = {
+    getElementById: () => null,
+    createElement: (tag) => ({ tagName: tag.toUpperCase(), id: '', textContent: '' }),
+    head: { append() {} },
+    // no defaultView
+  };
+  const fallback = injectStdlibStyles(legacy, BASE_CSS);
+  assert.equal(fallback.tagName, 'STYLE', 'the element path remains as a fallback');
+  assert.equal(fallback.textContent, BASE_CSS);
+});
+
+test('injecting twice is a no-op', async () => {
+  const { injectStdlibStyles, BASE_CSS } = await import('../core/plugin-stdlib.js');
+  const existing = { tagName: 'META', id: 'ct-stdlib-styles' };
+  const doc = {
+    adoptedStyleSheets: [],
+    getElementById: (id) => (id === 'ct-stdlib-styles' ? existing : null),
+    createElement: () => { throw new Error('should not build a second sheet'); },
+    head: { append() {} },
+    defaultView: { CSSStyleSheet: class { replaceSync() {} } },
+  };
+  assert.equal(injectStdlibStyles(doc, BASE_CSS), existing);
+  assert.equal(doc.adoptedStyleSheets.length, 0, 'and adopts nothing the second time');
+});

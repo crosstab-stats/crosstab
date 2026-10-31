@@ -821,11 +821,43 @@ export function injectStdlibStyles(doc = globalThis.document, css = BASE_CSS) {
   const ID = 'ct-stdlib-styles';
   const existing = doc.getElementById(ID);
   if (existing) return existing;
-  const style = doc.createElement('style');
-  style.id = ID;
-  style.textContent = css;
-  doc.head.append(style);
-  return style;
+
+  // A CONSTRUCTED SHEET FIRST, and this is not an optimisation.
+  //
+  // Every plugin pane runs under "default-src 'none'; script-src 'unsafe-inline' blob:;
+  // connect-src 'none'" — note what is NOT there: a style-src. So style-src falls back to
+  // default-src, which is 'none', and a <style> ELEMENT is blocked outright. This
+  // function appended one, so the base sheet had never applied inside a workspace pane:
+  // no tokens, no .ct-btn, no .ct-field, no touch targets, no no-zoom floor. Everything
+  // the standard ships, inert, in the only place it ships to.
+  //
+  // It was invisible because every pane also sets enough of its own styling to look
+  // roughly right, and because `var(--ct-muted)` against an undefined token silently
+  // yields an unset property rather than an error. The symptom only surfaced when a pane
+  // stopped setting its own font and fell back to serif.
+  //
+  // adoptedStyleSheets is CSSOM, not markup, and CSP does not police it — which is the
+  // same reason builtin-caqdas has always built its OWN sheet this way. The standard
+  // simply was not following the rule its clients already knew.
+  try {
+    const sheet = new doc.defaultView.CSSStyleSheet();
+    sheet.replaceSync(css);
+    doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+    // A marker so a second call is a no-op and a pane can ask whether the sheet arrived.
+    // It carries no CSS: the constructed sheet above is doing the work.
+    const marker = doc.createElement('meta');
+    marker.id = ID;
+    doc.head.append(marker);
+    return marker;
+  } catch {
+    // No constructed-sheet support (or no defaultView, as in some test documents). Fall
+    // back to the element, which works wherever CSP allows it.
+    const style = doc.createElement('style');
+    style.id = ID;
+    style.textContent = css;
+    doc.head.append(style);
+    return style;
+  }
 }
 
 /**
