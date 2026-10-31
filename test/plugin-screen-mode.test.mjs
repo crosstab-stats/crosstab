@@ -147,8 +147,48 @@ test('…while the text column keeps room to be read', () => {
   assert.match(caqdas, /\[data-screen="small"\] \.caqdas__text \{ flex: 1 1 auto; min-height: 40vh/);
 });
 
-test('…and its controls meet the touch target and the no-zoom font', () => {
-  assert.match(caqdas, /\[data-screen="small"\][\s\S]{0,200}font-size: 16px; min-height: 44px/);
+test('…and its controls meet the touch target', () => {
+  assert.match(caqdas, /\[data-screen="small"\][\s\S]{0,200}min-height: 44px/);
+});
+
+test('…but the no-zoom font is NOT conditional on our screen mode', () => {
+  // These two used to be one rule under [data-screen="small"], and that was wrong for
+  // the font half. iOS zooms the viewport whenever a FOCUSED control is under 16px and
+  // has never heard of our setting — so a phone in the FULL layout zoomed on every tap
+  // into a time field, which is how this was reported. 44px is a touch-target decision
+  // and stays keyed to small mode; 16px is a floor that applies everywhere.
+  const rule = caqdas.slice(caqdas.indexOf('.caqdas input, .caqdas select'));
+  assert.ok(rule.startsWith('.caqdas input, .caqdas select'), 'the unconditional rule exists');
+  assert.match(rule.slice(0, 200), /font-size: 16px/);
+  assert.ok(
+    !caqdas.slice(0, caqdas.indexOf('.caqdas input, .caqdas select')).endsWith('[data-screen="small"] '),
+    'and is not nested under a screen-mode selector',
+  );
+  // The Transcripts tab is covered too — it had no stylesheet of its own at all.
+  assert.match(rule.slice(0, 200), /\.caqdas-tx input/);
+});
+
+test('touch targets follow the POINTER, not the chosen layout', () => {
+  // Every other 44px rule here is keyed to [data-screen="small"], which is a user's
+  // CHOICE of layout. Reported from a phone in the FULL layout, where none of them
+  // applied: measured buttons at 31px. "pointer: coarse" asks the question that actually
+  // matters — is a finger driving this — and a phone in the full layout is still a phone.
+  assert.match(caqdas, /@media \(pointer: coarse\)/, 'the pointer query exists');
+  const at = caqdas.indexOf('@media (pointer: coarse)');
+  const block = caqdas.slice(at, at + 420);
+  assert.match(block, /\.caqdas-tx button[^}]*min-height: 44px/);
+  assert.match(block, /\.caqdas-tx summary[^}]*min-height: 44px/, 'including the caveat disclosures');
+});
+
+test('the Transcripts tab takes the shared sheets, like the Coding tab', () => {
+  // Measured before this: zero stylesheets in that frame, controls at 12px, every one of
+  // them a viewport zoom on iOS.
+  const at = caqdas.indexOf('async function mountTranscripts');
+  // Wide enough to clear the local helpers between the injection and the class hook.
+  const head = caqdas.slice(at, at + 2200);
+  assert.match(head, /app\.std\?\.injectStdlibStyles\?\.\(document\)/, 'host tokens first');
+  assert.match(head, /sheet\.replaceSync\(STYLES\)/, 'then the plugin rules');
+  assert.match(head, /classList\.add\('caqdas-tx'\)/, 'and a hook for them to reach');
 });
 
 test('CAQDAS takes the host base sheet before layering its own', () => {

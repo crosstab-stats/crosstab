@@ -245,6 +245,24 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__taudio { width: 100%; }
 .caqdas__tvideo { width: 100%; max-height: 40vh; background: #000; }
 .caqdas__tloading { font-size: 12px; color: #646e77; padding: 4px 2px; }
+/* 16px STOPS iOS ZOOMING THE VIEWPORT when a control takes focus, and iOS does that
+   whenever the focused control is under 16px — it has never heard of our screen-mode
+   setting. Keying this to [data-screen="small"], which is what it used to be, meant a
+   phone in the FULL layout (the owner's, reported while typing into a time field) zoomed
+   on every tap. A floor on anything typable or pickable, in every mode. */
+.caqdas input, .caqdas select, .caqdas textarea,
+.caqdas-tx input, .caqdas-tx select, .caqdas-tx textarea { font-size: 16px; }
+/* TOUCH TARGETS FOLLOW THE POINTER, not our layout mode. The 44px rules elsewhere are
+   keyed to [data-screen="small"], which is a user's CHOICE of layout — and the owner was
+   on a phone in the FULL layout, where none of them applied and every button was 31px.
+   A phone in the full layout is still a phone, and "pointer: coarse" is the question
+   actually being asked: is this being operated by a finger? */
+@media (pointer: coarse) {
+  .caqdas-tx button, .caqdas-tx input, .caqdas-tx select { min-height: 44px; }
+  .caqdas-tx button { font-size: 16px; }
+  /* A disclosure summary is a tap target too — it is how the caveats open. */
+  .caqdas-tx summary { min-height: 44px; display: flex; align-items: center; }
+}
 /* A grid, so every line's words start at the same place however long the clock is —
    ragged text is harder to read than a wider gutter. */
 .caqdas__transcript--timed { display: grid; grid-template-columns: max-content 1fr; gap: 0 10px; align-items: start; }
@@ -472,11 +490,10 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 /* The text is why the pane exists, so it takes what is left and never collapses below
    something readable. */
 [data-screen="small"] .caqdas__text { flex: 1 1 auto; min-height: 40vh; padding: 12px 14px; }
-/* 16px stops iOS zooming the viewport when a control takes focus; 44px is the touch
-   target. The same two rules the host applies to itself in small-screen mode. */
+/* 44px is the touch target, and that IS a small-screen concern. */
 [data-screen="small"] .caqdas__bar select,
 [data-screen="small"] .caqdas__btn,
-[data-screen="small"] .caqdas__newcode input { font-size: 16px; min-height: 44px; }
+[data-screen="small"] .caqdas__newcode input { min-height: 44px; }
 [data-screen="small"] .caqdas__doc { padding: 12px; }
 [data-screen="small"] .caqdas__lanelabel { flex-basis: 84px; }
 `;
@@ -6156,6 +6173,22 @@ function importMediaRow({ name, ref, medium, size, dims }) {
  * data and this polls it.
  */
 async function mountTranscripts(app, root) {
+  // The shared sheets, which this tab never had: the host's base (tokens + the common
+  // conventions) and then this plugin's own. Without them it was styled entirely by its
+  // own inline properties, so it inherited none of the app's sizing rules — which is why
+  // its controls were 12px when the rest of CrossTab's are not, and why iOS zoomed on
+  // every tap into a time field.
+  app.std?.injectStdlibStyles?.(document);
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(STYLES);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+  } catch {
+    const st = document.createElement('style'); // fallback if constructed sheets blocked
+    st.textContent = STYLES;
+    document.head.append(st);
+  }
+
   const css = (el, styles) => { Object.assign(el.style, styles); return el; };
   const mk = (tag, styles, text) => {
     const e = document.createElement(tag);
@@ -6170,6 +6203,8 @@ async function mountTranscripts(app, root) {
   const MUTED = { color: '#5b6672', fontSize: '12px' };
 
   root.replaceChildren();
+  // The hook the sheet above keys off.
+  root.classList.add('caqdas-tx');
   css(root, { font: '14px/1.5 system-ui, sans-serif', padding: '12px', color: '#1b2530' });
 
   const h = mk('h2', { fontSize: '1.05rem', margin: '0 0 2px' }, 'Transcripts');
@@ -6228,7 +6263,10 @@ async function mountTranscripts(app, root) {
    */
   const field = (labelText, control) => {
     const l = css(mk('label', { ...MUTED, ...UNBREAKABLE }), {});
-    l.append(css(mk('span', {}, labelText), { whiteSpace: 'nowrap' }), control);
+    // The LABEL is muted and small; the control inside it must not inherit that. This is
+    // how the time fields ended up at 12px and made iOS zoom — `font: inherit` on the
+    // input faithfully inherited the 12px label it had just been nested inside.
+    l.append(css(mk('span', {}, labelText), { whiteSpace: 'nowrap' }), css(control, { fontSize: '16px' }));
     return l;
   };
 
