@@ -696,6 +696,14 @@ export const TOKENS = {
   textSoft: '#3c4a57',
   // Disabled, and the greys below `muted`: not information, just shape.
   disabled: '#9aa4ae',
+  // The application bar: the one surface a plugin never draws, and therefore the one
+  // that needs saying out loud rather than being assumed. A dark ground, its foreground,
+  // a recessed strip within it, and the link colour that stays legible on all of them —
+  // four hexes that were loose in index.html and are a surface when taken together.
+  bar: '#2c3e50',
+  barFg: '#ecf0f1',
+  barSunken: '#1f3243',
+  barLink: '#9fd0f0',
   radius: '6px',
   font: '14px system-ui, -apple-system, "Segoe UI", sans-serif',
 };
@@ -743,6 +751,10 @@ export const BASE_CSS = `
   --ct-hover: ${TOKENS.hover};
   --ct-text-soft: ${TOKENS.textSoft};
   --ct-disabled: ${TOKENS.disabled};
+  --ct-bar: ${TOKENS.bar};
+  --ct-bar-fg: ${TOKENS.barFg};
+  --ct-bar-sunken: ${TOKENS.barSunken};
+  --ct-bar-link: ${TOKENS.barLink};
   --ct-radius: ${TOKENS.radius};
 }
 html, body { margin: 0; }

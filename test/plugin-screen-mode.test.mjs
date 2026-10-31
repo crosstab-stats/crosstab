@@ -528,3 +528,49 @@ test('the host keeps its old names working, as aliases', () => {
       `${alias} should alias ${target} rather than restating a literal`);
   }
 });
+
+test('the host stylesheet declares no colour outside :root', () => {
+  // The owner's argument, and it is the right one: a value not worth NAMING is not worth
+  // being UNIQUE either. The last 32 literals in this file were all single uses — one
+  // orange triangle, one success chip, one focus ring, one recessed strip on the bar —
+  // and every one of them had an obvious home once the question was asked. What made
+  // them singular was that nobody had asked.
+  //
+  // So the rule is now absolute for this file: colours are DEFINED in :root and
+  // REFERENCED everywhere else. A new literal is not forbidden because literals are
+  // wicked; it is forbidden because writing one means skipping the question "which of
+  // these twenty-seven names did I mean?", and that question is the entire point.
+  const html = readFileSync('index.html', 'utf8');
+  const rootEnd = html.indexOf('--bar-fg: var(--ct-bar-fg);');
+  assert.ok(rootEnd > 0, ':root is where we think it is');
+  const body = html.slice(rootEnd);
+
+  const HEX = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![0-9a-fA-F])/g;
+  // Prose is not CSS. An issue reference like (#153) is not a colour, and a comment
+  // naming a colour is documentation — including the ones this audit wrote. Comments are
+  // tracked as BLOCKS, not per line: the first version tested whether a line STARTED
+  // with a marker, which let three continuation lines of a wrapped /* */ comment through
+  // and reported #153, #168 and #192 as colours.
+  const stripBlockComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const offences = [];
+  for (const line of stripBlockComments(body).split('\n')) {
+    const t = line.trim();
+    if (t.startsWith('//')) continue;
+    for (const m of t.match(HEX) ?? []) offences.push(`${m} in: ${t.slice(0, 70)}`);
+  }
+  assert.deepEqual(offences, [],
+    `colour literals outside :root — use a token:\n  ${offences.join('\n  ')}`);
+});
+
+test('every token the host declares is one the standard knows', () => {
+  // The host may not grow private vocabulary either. It restates TOKENS; it does not
+  // extend them. A name that exists on only one side of the boundary is the drift this
+  // audit spent its time undoing.
+  const html = readFileSync('index.html', 'utf8');
+  const root = html.slice(html.indexOf(':root {'), html.indexOf('}', html.indexOf(':root {')));
+  const declared = [...root.matchAll(/(--ct-[a-z0-9-]+)\s*:/g)].map((m) => m[1]);
+  const known = new Set([...stdlib.matchAll(/(--ct-[a-z0-9-]+):/g)].map((m) => m[1]));
+  const unknown = declared.filter((d) => !known.has(d));
+  assert.deepEqual(unknown, [], `host declares tokens the standard does not: ${unknown.join(', ')}`);
+  assert.ok(declared.length >= 20, 'and it restates the whole vocabulary, not a subset');
+});

@@ -60,10 +60,16 @@
         --ct-disabled: #9aa4ae;
         --ct-radius: 6px;
 
-        /* Host chrome with no equivalent in a pane: the application bar is the
-           one surface a plugin never draws. */
-        --bar: #2c3e50;
-        --bar-fg: #ecf0f1;
+        /* The application bar: a surface in its own right, with a foreground, a
+           recessed strip and a link colour that must stay legible on all of it.
+           A plugin never draws this, which is exactly why it is stated rather
+           than assumed. */
+        --ct-bar: #2c3e50;
+        --ct-bar-fg: #ecf0f1;
+        --ct-bar-sunken: #1f3243;
+        --ct-bar-link: #9fd0f0;
+        --bar: var(--ct-bar);
+        --bar-fg: var(--ct-bar-fg);
 
         /* Aliases. `--bg` was #f7f8fa and is now the token's #f7f9fb — a
            one-step difference nobody can see, taken deliberately so there is a
@@ -119,7 +125,7 @@
          that removed the outline outright, so keyboard users had little to follow.
          2px at 3:1+ against both surfaces satisfies WCAG 2.4.11 focus appearance. */
       :focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 2px; }
-      header :focus-visible, .ctl__bar :focus-visible { outline-color: #66aedd; }
+      header :focus-visible, .ctl__bar :focus-visible { outline-color: var(--ct-bar-link); }
       /* Wrap to additional rows when there are many menus, rather than overflowing
          the header (which used to scroll the whole window sideways). min-width:0
          lets it shrink within the header flex row. */
@@ -160,11 +166,11 @@
       .screennote {
         flex: 1 0 100%; margin: 0 -12px; /* a full-bleed strip under the bar */
         display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-        background: #1f3243; color: var(--bar-fg); font-size: 12.5px;
+        background: var(--ct-bar-sunken); color: var(--bar-fg); font-size: 12.5px;
         padding: 6px 10px; border-top: 1px solid rgba(255,255,255,.14);
       }
       .screennote__btn {
-        font: inherit; font-size: 12.5px; background: none; color: #9fd0f0;
+        font: inherit; font-size: 12.5px; background: none; color: var(--ct-bar-link);
         border: 1px solid rgba(159,208,240,.5); border-radius: 6px; padding: 2px 8px; cursor: pointer;
       }
       .screennote__btn:hover { background: rgba(159,208,240,.12); }
@@ -364,7 +370,7 @@
       }
       .rc-var { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; white-space: nowrap; flex: none; }
       .rc-vars__empty { color: var(--ct-muted); font-style: italic; font-size: 13px; }
-      .rc-info { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: #444; background: var(--ct-hover); }
+      .rc-info { flex: none; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ct-text-soft); background: var(--ct-hover); }
       .rc-info__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0; }
       .rc-info__k { color: var(--ct-muted); }
       .rc-vars-info { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--ct-text); }
@@ -480,7 +486,7 @@
       .grid td.has-memo { position: relative; }
       .grid td.has-memo::after {
         content: ""; position: absolute; top: 0; right: 0;
-        border-top: 7px solid #c2410c; border-left: 7px solid transparent;
+        border-top: 7px solid var(--ct-warn); border-left: 7px solid transparent;
       }
       .cell-edit {
         width: 100%; box-sizing: border-box; font: inherit;
@@ -785,9 +791,9 @@
         margin: 0 0 12px; padding: 10px 12px; max-height: 45vh; overflow: auto;
         background: var(--ct-hover); border: 1px solid var(--line); border-radius: 6px;
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 12px; line-height: 1.5; color: #24292f; white-space: pre; tab-size: 2;
+        font-size: 12px; line-height: 1.5; color: var(--ct-text); white-space: pre; tab-size: 2;
       }
-      .ct-source:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+      .ct-source:focus-visible { outline: 2px solid var(--ct-accent); outline-offset: 1px; }
       /* Plain bulleted list inside a dialog (e.g. the missing-plugins warning). */
       .ct-dialog__list { margin: 0 0 16px; padding: 0 0 0 20px; max-height: 40vh; overflow-y: auto; }
       .ct-dialog__list li { margin: 0 0 6px; line-height: 1.4; }
@@ -809,14 +815,14 @@
       .ct-dialog__vars li.ct-dialog__none { border-bottom: 1px solid var(--line); margin-bottom: 4px; padding-bottom: 2px; }
       /* A variable disabled because a prior `unique` input already took it. */
       .ct-dialog__vars li.ct-dialog__excluded label { opacity: .5; cursor: not-allowed; }
-      .ct-dialog__taken { margin-left: auto; font-size: 11px; color: #b07; font-style: italic; }
+      .ct-dialog__taken { margin-left: auto; font-size: 11px; color: var(--ct-danger); font-style: italic; }
       /* Which dataset a variable came from, when it is not the active one (#179). Colours
          are the muted-but-legible pair used for secondary text elsewhere: 4.6:1 on the row
          background, so it passes AA as small text rather than relying on the reader
          noticing a colon in the code beside it. */
       .ct-dialog__dsbadge {
         margin-left: auto; font-size: 11px; color: var(--ct-text-soft); background: var(--ct-accent-wash);
-        border: 1px solid #d7e0e8; border-radius: 999px; padding: 1px 7px; white-space: nowrap;
+        border: 1px solid var(--ct-line); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
       }
       /* The cross-dataset scope switch, on the picker's filter strip. */
       .ct-vartools__scope { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ct-text-soft); white-space: nowrap; }
@@ -833,7 +839,7 @@
       }
       /* Destructive choice (e.g. "Delete data and remove from project", #118). */
       .ct-dialog__buttons .ct-dialog__danger {
-        background: var(--ct-surface); color: #c0392b; border-color: #e3b4ad;
+        background: var(--ct-surface); color: var(--ct-danger); border-color: var(--ct-danger-line);
       }
       /* Stacked, full-width choices for a multi-option prompt (most-recommended
          first, top-to-bottom) rather than a right-aligned row. */
@@ -912,7 +918,7 @@
       .ct-creator__addinput:hover { background: var(--ct-accent-wash); border-color: var(--accent); }
       .ct-creator__radio { font-size: 13px; margin-right: 14px; display: inline-flex; align-items: center; gap: 4px; }
       .ct-creator__r { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5; min-height: 130px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; white-space: pre; }
-      .ct-creator__rhint { font-size: 12px; color: #777; margin: 4px 0 0; }
+      .ct-creator__rhint { font-size: 12px; color: var(--ct-muted); margin: 4px 0 0; }
       .ct-creator__namelbl {
         font-size: 13px; color: var(--ct-text); display: flex; flex-direction: column; gap: 4px; max-width: 340px;
       }
@@ -927,10 +933,10 @@
       .ct-creator__tpl:hover { background: var(--ct-accent-wash); border-color: var(--accent); }
       .ct-creator__editor {
         display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
-        height: 360px; background: #fbfcfd;
+        height: 360px; background: var(--ct-surface);
       }
       .ct-creator__gutter {
-        flex: none; width: 40px; padding: 8px 6px; text-align: right; color: #9aa6b2;
+        flex: none; width: 40px; padding: 8px 6px; text-align: right; color: var(--ct-disabled);
         background: var(--ct-hover); border-right: 1px solid var(--line);
         font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5;
         white-space: pre; overflow: hidden; user-select: none;
@@ -942,7 +948,7 @@
       }
       .ct-creator__status {
         margin: 8px 0 0; font-size: 12px; padding: 7px 10px; border-radius: 6px;
-        background: #eef7ee; color: #1e5b2a; border: 1px solid #cfe6cf;
+        background: var(--ct-ok-bg); color: var(--ct-ok); border: 1px solid var(--ct-ok-line);
       }
       .ct-creator__status--err { background: var(--ct-danger-bg); color: var(--ct-danger); border-color: var(--ct-danger-line); }
       /* #180: where the floated (selected) variables end. The picker can label its
@@ -961,9 +967,9 @@
       .ct-cr__palette-sep { flex: 0 0 100%; height: 0; border-top: 1px solid var(--line); margin: 3px 0; }
       .ct-cr__chip {
         font: 11px ui-monospace, Menlo, monospace; padding: 2px 8px; cursor: pointer;
-        background: var(--ct-accent-wash); border: 1px solid var(--line); border-radius: 10px; color: #1a4a73;
+        background: var(--ct-accent-wash); border: 1px solid var(--line); border-radius: 10px; color: var(--ct-accent);
       }
-      .ct-cr__chip:hover { background: #dcebfa; }
+      .ct-cr__chip:hover { background: var(--ct-accent-wash); }
       .ct-cr__ruleshead, .ct-cr__rule, .ct-cr__else {
         /* old-kind | old-value | → | new-kind | new-value | label | ✕. The new value
            gets its OWN column (it used to share one cell with the new-kind select, which
@@ -1022,7 +1028,7 @@
       .busy[hidden] { display: none; }
       .busy__spinner {
         width: 14px; height: 14px; border-radius: 50%; flex: none;
-        border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+        border: 2px solid rgba(255,255,255,.35); border-top-color: var(--ct-on-accent);
         animation: busy-spin .7s linear infinite;
       }
       @keyframes busy-spin { to { transform: rotate(360deg); } }
@@ -1032,11 +1038,11 @@
          styled inline has quietly opted out of the app's layout. */
       .ws-verb-toolbar {
         display: flex; align-items: center; gap: 6px; padding: 6px 10px;
-        border-bottom: 1px solid #e2e6ea; background: var(--ct-panel); flex: none; flex-wrap: wrap;
+        border-bottom: 1px solid var(--ct-line); background: var(--ct-panel); flex: none; flex-wrap: wrap;
       }
       .ws-verb-toolbar__spacer { flex: 1; }
       .ws-verb {
-        font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid #ccd2d8;
+        font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--ct-line);
         border-radius: 6px; background: var(--ct-surface); cursor: pointer;
       }
       .ws-verb:hover { background: var(--ct-accent-wash); }
@@ -1068,7 +1074,7 @@
       .ct-iconbtn:hover { background: var(--ct-accent-wash); color: var(--ct-text); }
       .ct-iconbtn--inline { margin-left: 6px; }
       .ct-textbtn {
-        border: 0; background: none; color: #5a6570; cursor: pointer;
+        border: 0; background: none; color: var(--ct-muted); cursor: pointer;
         font: inherit; font-size: 12px; padding: 2px 0; text-align: left;
       }
       .ct-textbtn:hover { color: var(--accent, var(--ct-accent)); }
@@ -1080,7 +1086,7 @@
       .ct-primarybtn:disabled { opacity: .55; cursor: default; }
       .cellmenu__add {
         display: block; width: 100%; text-align: left; padding: 6px 10px;
-        border: 0; background: none; cursor: pointer; color: #2b6cb0; font: inherit;
+        border: 0; background: none; cursor: pointer; color: var(--ct-accent); font: inherit;
       }
       .cellmenu__add:hover { background: var(--ct-accent-wash); }
       /* The touch sizes those controls could never have been given before. */
@@ -1103,7 +1109,7 @@
       }
       .howto__nav {
         min-width: 44px; min-height: 44px; padding: 0 12px; font: inherit; font-size: 14px;
-        border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); cursor: pointer; color: #2a323a;
+        border: 1px solid var(--ct-line); border-radius: 8px; background: var(--ct-surface); cursor: pointer; color: var(--ct-text);
       }
       .howto__nav:hover:not(:disabled) { background: var(--ct-accent-wash); }
       .howto__nav:disabled { opacity: .4; cursor: default; }
@@ -1132,7 +1138,7 @@
         border: 1px solid var(--ct-line); border-radius: 18px; background: var(--ct-accent-wash);
         color: var(--ct-text-soft); cursor: pointer;
       }
-      .howto__chip:hover { background: #ddeafa; }
+      .howto__chip:hover { background: var(--ct-accent-wash); }
       .howto__chipx { color: var(--ct-accent); font-size: 12px; }
       [data-screen="small"] .howto__chip { min-height: 44px; font-size: 15px; }
       .howto__group {
@@ -1200,7 +1206,7 @@
 
       .howto__loading { color: var(--ct-muted); padding: 12px 2px; }
       /* Never blank: a blank panel reads as "no documentation exists". */
-      .howto__problem { padding: 12px 14px; border-radius: 8px; background: var(--ct-warn-bg); border: 1px solid #f0dcb0; }
+      .howto__problem { padding: 12px 14px; border-radius: 8px; background: var(--ct-warn-bg); border: 1px solid var(--ct-warn-line); }
       .howto__problemtitle { margin: 0 0 4px; font-weight: 600; color: var(--ct-warn); }
       .howto__problemdetail { margin: 0; font-size: 13px; color: var(--ct-warn); }
       .howto__authornotes { margin: 16px 0 0; font-size: 12px; color: var(--ct-muted); }
@@ -1258,10 +1264,10 @@
         display: flex; align-items: center; gap: 8px; width: 100%;
         background: none; border: 0; cursor: pointer; text-align: left;
         font: inherit; font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
-        color: #41505e; padding: 12px; border-radius: 4px;
+        color: var(--ct-text-soft); padding: 12px; border-radius: 4px;
       }
       [data-screen="small"] .menu__group-toggle:hover,
-      [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { background: #eef4fa; }
+      [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { background: var(--ct-accent-wash); }
       [data-screen="small"] .menu__group-toggle[aria-expanded="true"] { color: var(--ct-text); font-weight: 700; }
       .menu__caret { display: inline-block; transition: transform .12s ease; font-size: 10px; }
       [aria-expanded="true"] > .menu__caret { transform: rotate(90deg); }
@@ -1275,7 +1281,7 @@
          toggle is a direct child of the panel and never sits inside a flyout. */
       [data-screen="small"] .menu__flyout .menu__group-toggle {
         padding-left: 26px; font-size: 11px; text-transform: none; letter-spacing: 0;
-        font-weight: 600; color: #5a6672;
+        font-weight: 600; color: var(--ct-muted);
       }
       [data-screen="small"] .menu__flyout .menu__group-toggle + .menu__flyout .menu__item {
         padding-left: 40px;
