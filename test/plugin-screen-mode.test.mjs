@@ -640,3 +640,47 @@ test('injecting twice is a no-op', async () => {
   assert.equal(injectStdlibStyles(doc, BASE_CSS), existing);
   assert.equal(doc.adoptedStyleSheets.length, 0, 'and adopts nothing the second time');
 });
+
+test('a control does not get a second opinion from its own plugin', () => {
+  // The owner, comparing two tabs of the SAME plugin: "if we have a standardized ui, why
+  // do the pull-down selections on the coding tab look different from the transcripts
+  // tab?" Three separate reasons, all of them the same shape — a local rule answering a
+  // question the standard had already answered:
+  //
+  //   the SELECT   Transcripts built a bare <select>, so iOS drew its native grey pill
+  //                next to Coding's white bordered one. Nothing styled it wrongly;
+  //                nothing styled it at all.
+  //   the SIZE     .caqdas__bar select said "font: inherit" — the shorthand that resets
+  //                font-SIZE — so it sat at 14px and would zoom iOS on focus, the exact
+  //                trap .ct-field had already been fixed for.
+  //   the COLOUR   .caqdas__btn set no colour, so a <button> took the PLATFORM default:
+  //                system blue on iOS. Coding's buttons were blue and Transcripts' were
+  //                black, and neither sheet mentioned blue.
+  //
+  // Measured in a frame under the real CSP with both tabs' markup side by side: select,
+  // button and primary button now compute identically.
+  const sheet = caqdas.slice(caqdas.indexOf('const STYLES = `'), caqdas.indexOf('\n`;'));
+
+  // The size trap, in the plugin's own toolbar this time.
+  const barSelect = sheet.slice(sheet.indexOf('.caqdas__bar select'), sheet.indexOf('.caqdas__bar select') + 200);
+  assert.ok(!/font:\s*inherit/.test(barSelect), 'the shorthand resets the size; name the parts');
+  assert.match(barSelect, /font-size: 16px/);
+
+  // The button states its colour rather than inheriting the platform's idea of one.
+  assert.match(sheet, /\.caqdas__btn \{[^}]*color: inherit/);
+  // ...and nothing repaints it with the PANEL colour, which is what made a Coding
+  // button grey beside an identical white one in Transcripts. (The base rule setting
+  // `background: var(--ct-surface)` is the definition and is fine; the defect was a
+  // second rule three lines later disagreeing with it.)
+  assert.ok(!/\.caqdas__btn \{[^}]*background: var\(--ct-panel\)/.test(sheet),
+    'a button is a surface, not a panel');
+
+  // The Transcripts controls use the standard class rather than hand-rolled properties.
+  const tx = caqdas.slice(caqdas.indexOf('async function mountTranscripts'));
+  assert.match(tx, /s\.className = 'ct-field'/, 'its selects are standard fields');
+  assert.match(tx, /i\.className = 'ct-field'/, 'and so are its time boxes');
+  // The inline 16px that propped the floor up while the base sheet was blocked is gone:
+  // the class carries it, and an override would ignore a theme changing the field size.
+  assert.ok(!/css\(control, \{ fontSize: '16px' \}\)/.test(tx),
+    'no inline size override now that the class actually applies');
+});

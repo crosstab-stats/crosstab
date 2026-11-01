@@ -293,10 +293,26 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__segwarn { padding: 4px 0; font-size: 12px; color: #8a6d3b; }
 .caqdas__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft); flex-wrap: wrap; }
 .caqdas__bar label { color: var(--ct-muted); }
-.caqdas__bar select, .caqdas__btn { font: inherit; padding: 5px 9px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); }
-.caqdas__btn { cursor: pointer; background: var(--ct-panel); }
+/* NOT the font shorthand on the select. The same trap the standard's own .ct-field fell
+   into: "font: inherit" resets font-SIZE, and a class selector outranks the bare
+   "input, select, textarea" floor — so every select in this toolbar sat at 14px and
+   would zoom iOS on focus, in a pane whose whole point is being usable on a phone.
+   A button is left at the inherited size: tapping one does not zoom. */
+.caqdas__bar select { font-family: inherit; font-size: 16px; padding: 5px 9px;
+  border: 1px solid var(--ct-line); border-radius: var(--ct-radius); background: var(--ct-surface); }
+.caqdas__btn { font: inherit; padding: 5px 9px; border: 1px solid var(--ct-line);
+  border-radius: var(--ct-radius); background: var(--ct-surface); }
+/* Cursor only. This rule used to repaint the background to --ct-panel, which is why a
+   button in the Coding toolbar was grey while the identical button in Transcripts was
+   white: two sheets quietly disagreeing about what a button IS. The standard says
+   surface, and a second opinion three lines below the first is not a design decision.
+   "color: inherit" for the same reason, and it is the more visible of the two: with no
+   colour set, a <button> takes the PLATFORM's default — which on iOS is the system blue.
+   So the Coding toolbar's buttons were blue and the Transcripts tab's were black, and
+   neither sheet said anything about blue. */
+.caqdas__btn { cursor: pointer; color: inherit; }
 .caqdas__btn:hover { background: var(--ct-accent-wash); }
-.caqdas__btn--primary { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
+.caqdas__btn--primary { background: var(--ct-accent); color: var(--ct-on-accent); border-color: var(--ct-accent); }
 .caqdas__paint { display: none; align-items: center; gap: 10px; padding: 6px 12px; background: var(--ct-accent); color: #fff; font-size: 13px; }
 .caqdas__paint.is-on { display: flex; }
 .caqdas__paint .stop { margin-left: auto; cursor: pointer; border: 1px solid rgba(255,255,255,.6); background: transparent; color: #fff; font: inherit; border-radius: 6px; padding: 2px 8px; }
@@ -6285,7 +6301,7 @@ async function mountTranscripts(app, root) {
     // The LABEL is muted and small; the control inside it must not inherit that. This is
     // how the time fields ended up at 12px and made iOS zoom — `font: inherit` on the
     // input faithfully inherited the 12px label it had just been nested inside.
-    l.append(css(mk('span', {}, labelText), { whiteSpace: 'nowrap' }), css(control, { fontSize: '16px' }));
+    l.append(css(mk('span', {}, labelText), { whiteSpace: 'nowrap' }), control);
     return l;
   };
 
@@ -6299,7 +6315,12 @@ async function mountTranscripts(app, root) {
     // `minWidth: 0` for the same reason as above — "Faster — 16 min per hour of audio
     // (73 MB)" is a wide option, and without this the select refuses to shrink below it
     // and drags the whole row past the edge of a phone screen.
-    const s = mk('select', { font: 'inherit', padding: '3px', minWidth: '0', maxWidth: '100%' });
+    // `.ct-field` — the same class the inputs use, and the reason the two tabs now look
+    // alike. Bare, this select had no border and no background, so iOS drew its NATIVE
+    // control: a grey rounded pill, sitting beside the Coding tab's white bordered ones.
+    // Nothing was styling it wrongly; nothing was styling it at all.
+    const s = mk('select', { minWidth: '0', maxWidth: '100%' });
+    s.className = 'ct-field';
     for (const it of items) {
       const o = document.createElement('option');
       o.value = it.id ?? it.code;
@@ -6328,9 +6349,11 @@ async function mountTranscripts(app, root) {
   // opaque-origin sandbox and cannot import `parseClock`, and a second copy of the
   // grammar over here would eventually disagree with the first about something like
   // `2:75` and transcribe the wrong stretch of an interview.
-  const timeBox = () => mk('input', {
-    font: 'inherit', padding: '3px', width: '72px', minWidth: '0',
-  });
+  const timeBox = () => {
+    const i = mk('input', { width: '72px', minWidth: '0' });
+    i.className = 'ct-field';
+    return i;
+  };
   const fromIn = timeBox();
   const toIn = timeBox();
   fromIn.placeholder = '0:00';
