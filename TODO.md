@@ -19,8 +19,12 @@ bottom; they are the project's memory and are not summarised away.
 ### Now / near-term
 
 - [~] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
-      **BUILT 2026-10-14** (H1–H6). What remains is CONTENT, not mechanism — see #184 — plus
-      screenshots, which the renderer supports and nothing yet uses.
+      **BUILT 2026-10-14** (H1–H6). The CONTENT it was built for is done too — #184
+      closed 2026-11-01 with 173 topics across 64 plugins and core, none of them a stub.
+      **What remains is screenshots alone**, which the renderer supports and nothing has
+      ever used, and which wants a decision before it wants work: an image dates the
+      moment the dialog it shows changes, so a few for genuinely spatial topics is worth
+      the upkeep where a sweep across 173 would not be.
       The design settled with the owner before any code. #184 (the comprehensive guide)
       is the CONTENT; this is the mechanism it and everyone else writes into.
 
@@ -3069,128 +3073,6 @@ bottom; they are the project's memory and are not summarised away.
         shaped value (the three encryption toggles, a relay list) is edited generically,
         and whether it absorbs the Encryption settings modal or links out to it.
 
-
-- [~] **#184 — a comprehensive how-to guide (owner, 2026-09-21). SCOPE DECIDED and
-      PHASE 1 SHIPPED 2026-10-23: a task reference. Discipline courses are OUT OF SCOPE,
-      permanently — see the owner's words below.**
-
-      **This header used to end "Courses come later, one per discipline", which flatly
-      contradicted the decision recorded nine lines further down (2026-11-01).** The body
-      has said "ruled OUT OF SCOPE entirely — not deferred" since the day it was written.
-      A summary line is what gets read before anyone reaches the reasoning, so this one
-      was an invitation to start writing exactly the thing the owner forbade — and it
-      survived a re-scope of the #162 preset item that cited the same decision correctly.
-
-      **The scope question, and the owner settled it against my recommendation — rightly.**
-      Task-oriented ("how do I recode a variable", "how do I run a crosstab with weights")
-      or a course (a methods walk-through)? I argued for the course on the strength of
-      #174, where working from a real assignment is what made all thirteen items land.
-
-      **The owner chose narrow topic guides, and ruled discipline courses OUT OF SCOPE
-      entirely** — not deferred: *"I intentionally don't want to be writing any guide for
-      any discipline... I'll leave discipline courses to the faculty in those disciplines.
-      CrossTab is a tool for instructors to use, not to replace the instructors
-      themselves."*
-
-      The hazard is the one that framed the choice: a GSS walk-through reads as a
-      sociology course and is meaningless to a public-policy analyst, so shipping one
-      picks a discipline on behalf of everyone who did not pick it. A topic guide is about
-      the TOOL and is therefore ours; a course is about a FIELD and belongs to someone who
-      teaches it. What we owe a course author is tooling, not curriculum — see the #162
-      preset item.
-
-      **What the entry said was missing was already half-built, which changed the job.**
-      Surveyed before writing a word: the #192 mechanism ships, **Help ▸ How to…** already
-      opens a searchable browser, and **162 topics across 31 categories** are already
-      written with only one synthesised placeholder. This was never a greenfield guide.
-
-      **The gap was visible in the category names.** Every one is named for WHERE A
-      FEATURE LIVES — Regression, Graphs, Multivariate, Categorical — because each was
-      written by the plugin that owns the procedure. Nothing was named for what the reader
-      is trying to DO. Someone who knows the word "ANCOVA" was served superbly; someone
-      holding a question and two variables had 162 doors and no corridor. The proof the
-      layer was wanted was already in the tree: `plots-choosing` ("Choose the right
-      chart") is exactly this shape and was the only one of its kind.
-
-      **PHASE 1 — ten task pages, owned by core.** `How do I…` covering: choose a test,
-      get data ready, describe one variable, two categorical variables, compare a mean
-      across groups, two numeric variables, predict an outcome, use a survey weight, build
-      an index or scale, and write up what you did.
-
-      **The prose is original, and that is a standing rule, not an accident.** The owner's
-      instruction: *"let's avoid taking prose from Dr. Sarabia's lab. academics get touchy
-      about plagiarism."* Agreed, and worth stating positively — what informed the topic
-      LIST is which tasks an introductory methods course demands, which is common
-      knowledge about statistics curricula and nobody's property. No wording, example or
-      sequence comes from any source document, and nothing in CrossTab should. An earlier
-      draft of this entry claimed "the vocabulary is the assignment's rather than mine",
-      which was a bad description of what happened and is the kind of sentence that starts
-      the argument all by itself.
-
-      They **route and do not restate**. A task page explaining how to run a crosstab
-      would be a second copy of `crosstabs-basics`, free to drift, while the plugin's page
-      is the one maintained alongside the dialog. Core holds them not as a privilege but
-      because it is the only participant that spans everything — no plugin owns "which
-      test do I use".
-
-      **Three mechanism changes, each forced by something real:**
-      - **Pinned categories.** `collectTopics` sorts alphabetically, which filed `How do
-        I…` between `Graphs` and `Import`, under a hundred procedure pages. Three names are
-        now pinned above the alphabet. The rank attaches to the CATEGORY, not the provider,
-        so a plugin filing under one sorts there too — an ordering policy, not a host
-        privilege, and tested as such.
-      - **The link tests resolve against the shipped catalogue.** They failed on
-        `task-choose-a-test → plots-choosing`, which was a real question: may core
-        reference a plugin's topic? Yes, and it must — ids are global *because* `howto:`
-        links address them globally, and routing outward is the layer's whole job. The
-        tests now import every builtin's manifest, which is **stricter**: a typo still
-        fails, and so now does a reference into a plugin that renames or drops a topic.
-      - **Two authoring guards**, both for mistakes I made in one draft and neither of
-        which failed anything — the sidecar parsed, every id resolved, every link was
-        well-formed. Only the browser showed them.
-
-      **What the browser showed, in order.** Three markdown tables rendered as literal
-      rows of `| --- |`: `renderHowto` knows headings, lists, paragraphs and inline spans,
-      and nothing else. Rewritten as bulleted lists rather than teaching it tables — a
-      lookup table whose last column is a sentence wraps badly in a dialog that narrow
-      anyway. Then the lists themselves did not render: I had hard-wrapped at 90 columns,
-      and a list block requires EVERY line to start with a bullet, while a paragraph joins
-      its lines with `<br>` and runs the inline pass per line — so a link split across two
-      lines rendered as literal brackets. The twenty-six existing pages are one long line
-      per paragraph, which is why they were fine.
-
-      **A repair script that damaged the file is worth recording.** My unwrapper ran over
-      the whole body and destroyed fifteen pre-existing `--- id:` delimiters, because
-      blocks separated by TWO blank lines start with a newline, so the delimiter was not
-      `lines[0]`. The test caught it (fifteen "in the index but has no section" problems);
-      the fix was to revert and write the prose unwrapped in the first place rather than
-      transform it. Transform-in-place on a file with its own delimiter grammar is the
-      wrong tool.
-
-      **The guard found a pre-existing bug in a shipped page.**
-      `builtin-correlation/howto.md` had a NESTED list, and the renderer does something
-      worse than refusing it: the indented bullets still match the bullet test, so the
-      block passes as a list, and `ordered` is read from the first line — so a three-step
-      procedure with two options had been rendering as **five numbered steps** for as long
-      as the page existed. Flattened. Nesting is not taught to the renderer: it is real
-      indentation rules, and this was the only page in sixty-four that wanted it.
-
-      **Verified live** by driving the real menu item: `How do I…` sits first of 32 groups
-      with all ten pages under it, `task-choose-a-test` renders five list items with seven
-      working inline links and no literal markup, the cross-plugin link into
-      `plots-choosing` navigates and renders, and four more task pages were spot-checked
-      for lists, links and errors. 2345 tests pass.
-
-      **Still open, and deliberately:**
-      - **More topics**, as gaps show up. The layer is ten pages, not a closed set, and
-        the test only requires eight — so adding one is a two-file change with no
-        mechanism work. Discipline courses are explicitly NOT on this list.
-      - **Should the renderer learn tables?** Three task pages wanted one and read fine
-        without. Now a question rather than something silently wanted. It is a sanitiser
-        surface, so it needs a reason better than my first draft's convenience.
-      - Air-gap and offline are satisfied by construction (the sidecars ship with the
-        plugins, [[airgap-offline-requirement]]), and #183 — the dependency this entry
-        named — shipped 2026-09-26.
 
 ### Open follow-ups attached to completed entries
 
@@ -11241,6 +11123,153 @@ The record of what shipped and why. Kept in full, in the original sections.
       shipped in only one of them and produced a chart mode nothing could draw.
 
 ### Nice-to-have / optimisations
+
+- [x] **#184 — a comprehensive how-to guide (owner, 2026-09-21). SCOPE DECIDED and
+      PHASE 1 SHIPPED 2026-10-23: a task reference. Discipline courses are OUT OF SCOPE,
+      permanently — see the owner's words below.**
+
+      **This header used to end "Courses come later, one per discipline", which flatly
+      contradicted the decision recorded nine lines further down (2026-11-01).** The body
+      has said "ruled OUT OF SCOPE entirely — not deferred" since the day it was written.
+      A summary line is what gets read before anyone reaches the reasoning, so this one
+      was an invitation to start writing exactly the thing the owner forbade — and it
+      survived a re-scope of the #162 preset item that cited the same decision correctly.
+
+      **The scope question, and the owner settled it against my recommendation — rightly.**
+      Task-oriented ("how do I recode a variable", "how do I run a crosstab with weights")
+      or a course (a methods walk-through)? I argued for the course on the strength of
+      #174, where working from a real assignment is what made all thirteen items land.
+
+      **The owner chose narrow topic guides, and ruled discipline courses OUT OF SCOPE
+      entirely** — not deferred: *"I intentionally don't want to be writing any guide for
+      any discipline... I'll leave discipline courses to the faculty in those disciplines.
+      CrossTab is a tool for instructors to use, not to replace the instructors
+      themselves."*
+
+      The hazard is the one that framed the choice: a GSS walk-through reads as a
+      sociology course and is meaningless to a public-policy analyst, so shipping one
+      picks a discipline on behalf of everyone who did not pick it. A topic guide is about
+      the TOOL and is therefore ours; a course is about a FIELD and belongs to someone who
+      teaches it. What we owe a course author is tooling, not curriculum — see the #162
+      preset item.
+
+      **What the entry said was missing was already half-built, which changed the job.**
+      Surveyed before writing a word: the #192 mechanism ships, **Help ▸ How to…** already
+      opens a searchable browser, and **162 topics across 31 categories** are already
+      written with only one synthesised placeholder. This was never a greenfield guide.
+
+      **The gap was visible in the category names.** Every one is named for WHERE A
+      FEATURE LIVES — Regression, Graphs, Multivariate, Categorical — because each was
+      written by the plugin that owns the procedure. Nothing was named for what the reader
+      is trying to DO. Someone who knows the word "ANCOVA" was served superbly; someone
+      holding a question and two variables had 162 doors and no corridor. The proof the
+      layer was wanted was already in the tree: `plots-choosing` ("Choose the right
+      chart") is exactly this shape and was the only one of its kind.
+
+      **PHASE 1 — ten task pages, owned by core.** `How do I…` covering: choose a test,
+      get data ready, describe one variable, two categorical variables, compare a mean
+      across groups, two numeric variables, predict an outcome, use a survey weight, build
+      an index or scale, and write up what you did.
+
+      **The prose is original, and that is a standing rule, not an accident.** The owner's
+      instruction: *"let's avoid taking prose from Dr. Sarabia's lab. academics get touchy
+      about plagiarism."* Agreed, and worth stating positively — what informed the topic
+      LIST is which tasks an introductory methods course demands, which is common
+      knowledge about statistics curricula and nobody's property. No wording, example or
+      sequence comes from any source document, and nothing in CrossTab should. An earlier
+      draft of this entry claimed "the vocabulary is the assignment's rather than mine",
+      which was a bad description of what happened and is the kind of sentence that starts
+      the argument all by itself.
+
+      They **route and do not restate**. A task page explaining how to run a crosstab
+      would be a second copy of `crosstabs-basics`, free to drift, while the plugin's page
+      is the one maintained alongside the dialog. Core holds them not as a privilege but
+      because it is the only participant that spans everything — no plugin owns "which
+      test do I use".
+
+      **Three mechanism changes, each forced by something real:**
+      - **Pinned categories.** `collectTopics` sorts alphabetically, which filed `How do
+        I…` between `Graphs` and `Import`, under a hundred procedure pages. Three names are
+        now pinned above the alphabet. The rank attaches to the CATEGORY, not the provider,
+        so a plugin filing under one sorts there too — an ordering policy, not a host
+        privilege, and tested as such.
+      - **The link tests resolve against the shipped catalogue.** They failed on
+        `task-choose-a-test → plots-choosing`, which was a real question: may core
+        reference a plugin's topic? Yes, and it must — ids are global *because* `howto:`
+        links address them globally, and routing outward is the layer's whole job. The
+        tests now import every builtin's manifest, which is **stricter**: a typo still
+        fails, and so now does a reference into a plugin that renames or drops a topic.
+      - **Two authoring guards**, both for mistakes I made in one draft and neither of
+        which failed anything — the sidecar parsed, every id resolved, every link was
+        well-formed. Only the browser showed them.
+
+      **What the browser showed, in order.** Three markdown tables rendered as literal
+      rows of `| --- |`: `renderHowto` knows headings, lists, paragraphs and inline spans,
+      and nothing else. Rewritten as bulleted lists rather than teaching it tables — a
+      lookup table whose last column is a sentence wraps badly in a dialog that narrow
+      anyway. Then the lists themselves did not render: I had hard-wrapped at 90 columns,
+      and a list block requires EVERY line to start with a bullet, while a paragraph joins
+      its lines with `<br>` and runs the inline pass per line — so a link split across two
+      lines rendered as literal brackets. The twenty-six existing pages are one long line
+      per paragraph, which is why they were fine.
+
+      **A repair script that damaged the file is worth recording.** My unwrapper ran over
+      the whole body and destroyed fifteen pre-existing `--- id:` delimiters, because
+      blocks separated by TWO blank lines start with a newline, so the delimiter was not
+      `lines[0]`. The test caught it (fifteen "in the index but has no section" problems);
+      the fix was to revert and write the prose unwrapped in the first place rather than
+      transform it. Transform-in-place on a file with its own delimiter grammar is the
+      wrong tool.
+
+      **The guard found a pre-existing bug in a shipped page.**
+      `builtin-correlation/howto.md` had a NESTED list, and the renderer does something
+      worse than refusing it: the indented bullets still match the bullet test, so the
+      block passes as a list, and `ordered` is read from the first line — so a three-step
+      procedure with two options had been rendering as **five numbered steps** for as long
+      as the page existed. Flattened. Nesting is not taught to the renderer: it is real
+      indentation rules, and this was the only page in sixty-four that wanted it.
+
+      **Verified live** by driving the real menu item: `How do I…` sits first of 32 groups
+      with all ten pages under it, `task-choose-a-test` renders five list items with seven
+      working inline links and no literal markup, the cross-plugin link into
+      `plots-choosing` navigates and renders, and four more task pages were spot-checked
+      for lists, links and errors. 2345 tests pass.
+
+      **Still open, and deliberately:**
+      - **More topics**, as gaps show up. The layer is ten pages, not a closed set, and
+        the test only requires eight — so adding one is a two-file change with no
+        mechanism work. Discipline courses are explicitly NOT on this list.
+      - **Should the renderer learn tables?** Three task pages wanted one and read fine
+        without. Now a question rather than something silently wanted. It is a sanitiser
+        surface, so it needs a reason better than my first draft's convenience.
+      - Air-gap and offline are satisfied by construction (the sidecars ship with the
+        plugins, [[airgap-offline-requirement]]), and #183 — the dependency this entry
+        named — shipped 2026-09-26.
+
+      **CLOSED 2026-11-01, at the owner's word.** What "done" means here, because the
+      entry was `[~]` with no Phase 2 written down and that is the state a reader has to
+      be able to resolve:
+
+      - **Phase 1 shipped in full** — all ten `How do I…` task pages exist and are
+        indexed: choose a test, prepare data, describe one variable, two categorical,
+        compare groups, two numeric, predict an outcome, weighted analysis, build a
+        scale, write up.
+      - **There is no Phase 2.** The only thing the entry ever named as coming after was
+        discipline courses, and those are not deferred, they are out of scope for good.
+        An entry whose remaining work is work that will never be done is finished.
+      - **Measured before closing**, rather than asserted: 64 of 64 plugins carry a
+        how-to index; 173 topics across plugins and core; ~17k words; ZERO topics indexed
+        without prose; zero stubs under 180 characters; zero prose sections nothing
+        indexes. The corridor this entry existed to build — task pages that ROUTE to the
+        procedure pages rather than restating them — is in place and reachable.
+
+      **The one gap found while measuring is NOT this entry's and does not close with
+      it:** no topic uses a screenshot. `renderHowto` supports `![alt](asset:name.png)`
+      (local declared assets only, never a URL — an external image would fetch the moment
+      a topic opened) and nothing has ever used it. That belongs to #192, which names it
+      already, and it wants a decision before it wants work: a screenshot dates the moment
+      a dialog changes, so a handful for genuinely spatial topics — timeline coding,
+      region drawing, the Transcripts queue — is worth the upkeep and a sweep is not.
 
 - [x] **The grid selection is per AUTHOR — a co-author's selection cannot move your
       grid. 2026-10-23.** The owner's challenge to the recency rule below: *"so if two
