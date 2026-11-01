@@ -661,10 +661,24 @@ test('a control does not get a second opinion from its own plugin', () => {
   // button and primary button now compute identically.
   const sheet = caqdas.slice(caqdas.indexOf('const STYLES = `'), caqdas.indexOf('\n`;'));
 
-  // The size trap, in the plugin's own toolbar this time.
-  const barSelect = sheet.slice(sheet.indexOf('.caqdas__bar select'), sheet.indexOf('.caqdas__bar select') + 200);
-  assert.ok(!/font:\s*inherit/.test(barSelect), 'the shorthand resets the size; name the parts');
-  assert.match(barSelect, /font-size: 16px/);
+  // The size trap, in the plugin's own toolbar this time — now resolved by DELETING the
+  // local rule rather than correcting it. The toolbar's selects carry .ct-field, so the
+  // size, the border and the background all come from one definition. The rule that used
+  // to be here had become a character-for-character duplicate of the standard's, and
+  // existed only because .ct-field was missing a background.
+  assert.ok(!/\.caqdas__bar select \{[^}]*font-size/.test(sheet),
+    'the toolbar no longer restates what .ct-field already says');
+  assert.match(caqdas, /const colSel = el\('select', \{ class: 'ct-field' \}\)/);
+  assert.match(caqdas, /const labelSel = el\('select', \{ class: 'ct-field' \}\)/);
+
+  // And the standard's field states every property the platform would otherwise decide:
+  // a bordered select with no background keeps its NATIVE grey fill on iOS.
+  // To the closing brace, not a character count: the explanation above the declaration
+  // is longer than the window I first guessed, so the assertion failed on correct code.
+  const fieldAt = stdlib.indexOf('.ct-field {');
+  const field = stdlib.slice(fieldAt, stdlib.indexOf('}', fieldAt) + 1);
+  assert.match(field, /background: var\(--ct-surface\)/, 'or iOS paints it itself');
+  assert.match(field, /color: var\(--ct-text\)/);
 
   // The button states its colour rather than inheriting the platform's idea of one.
   assert.match(sheet, /\.caqdas__btn \{[^}]*color: inherit/);

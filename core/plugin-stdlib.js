@@ -774,8 +774,18 @@ body { font: ${TOKENS.font}; color: var(--ct-text); }
    from this class dropped back to 14px and would still zoom iOS on focus — the
    standard's own control defeating the standard's own rule. Measured: bare input
    16px, .ct-field input 14px. */
-.ct-field { font-family: inherit; font-size: 16px; padding: 5px 8px;
-  border: 1px solid var(--ct-line); border-radius: var(--ct-radius); }
+.ct-field { font-family: inherit; font-size: 16px; padding: 5px 9px;
+  border: 1px solid var(--ct-line); border-radius: var(--ct-radius);
+  /* BACKGROUND AND COLOUR, stated rather than left to the platform.
+     A bordered <select> with no background keeps its NATIVE fill on iOS — a grey rounded
+     pill — while the same element in desktop Chrome computes to white. So the standard's
+     own field looked correct on every machine a developer tests on and wrong on the
+     device the app is used on, sitting beside a plugin's hand-rolled select that DID set
+     a background and therefore looked right.
+     No measurement here could have caught it: Chrome reports rgb(255,255,255) for both.
+     The general rule it teaches: a control the standard claims to style must state every
+     property the platform would otherwise decide for it. */
+  background: var(--ct-surface); color: var(--ct-text); }
 
 /* A row of controls. Wraps rather than overflowing: a control you cannot see is a
    control you do not have, and a pane has no horizontal scrollbar to rescue it. */

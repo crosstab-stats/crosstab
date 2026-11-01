@@ -298,8 +298,11 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
    "input, select, textarea" floor — so every select in this toolbar sat at 14px and
    would zoom iOS on focus, in a pane whose whole point is being usable on a phone.
    A button is left at the inherited size: tapping one does not zoom. */
-.caqdas__bar select { font-family: inherit; font-size: 16px; padding: 5px 9px;
-  border: 1px solid var(--ct-line); border-radius: var(--ct-radius); background: var(--ct-surface); }
+/* The toolbar's selects carry .ct-field now. This rule had become a character-for-
+   character duplicate of it, and the only reason it ever existed was that .ct-field was
+   missing a background — so the plugin had quietly reimplemented the standard to work
+   around a gap in the standard. Keeping both would mean fixing the next platform quirk
+   twice, in two files, and noticing only on one of them. */
 .caqdas__btn { font: inherit; padding: 5px 9px; border: 1px solid var(--ct-line);
   border-radius: var(--ct-radius); background: var(--ct-surface); }
 /* Cursor only. This rule used to repaint the background to --ct-panel, which is why a
@@ -705,9 +708,9 @@ export const workspace = {
 
     const bar = el('div', { class: 'caqdas__bar' });
     const colLabel = el('label'); colLabel.textContent = 'Documents column:';
-    const colSel = el('select');
+    const colSel = el('select', { class: 'ct-field' });
     const labelLabel = el('label'); labelLabel.textContent = 'Label by:';
-    const labelSel = el('select');
+    const labelSel = el('select', { class: 'ct-field' });
     labelSel.title = 'Column that identifies each document (e.g. a filename or participant id) — used in the document list and the segments export.';
     const freqBtn = el('button', { class: 'caqdas__btn' }); freqBtn.textContent = 'Code frequency';
     const expBtn = el('button', { class: 'caqdas__btn' }); expBtn.textContent = 'Segments → Output';
