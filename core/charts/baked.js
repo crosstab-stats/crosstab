@@ -75,7 +75,36 @@ function legendItems(model) {
       key: String(e.key ?? e.label ?? i),
       label: String(e.label ?? e.key ?? ''),
       color: e.color || '#888888',
+      // The SHAPE, where a figure uses one. `marker` was in this function's documented
+      // shape and then dropped on the next line, so every entry drew a square — which is
+      // fine for a biplot's two colours and wrong for a decision tree, where square,
+      // circle and triangle are the convention and the colour is secondary. A key that
+      // shows three squares beside a picture of three different shapes is not a key.
+      marker: MARKERS[e.marker] ? e.marker : 'square',
     }));
+}
+
+/**
+ * How a legend entry's glyph is drawn, by name.
+ *
+ * Deliberately a small closed set rather than arbitrary SVG from a plugin: these are
+ * drawn into the host's own figure, and a path a plugin supplied would be unescapable
+ * markup in a document the host signs its name to.
+ */
+const MARKERS = {
+  square: (x, y, size, item) =>
+    `<rect x="${x}" y="${y}" width="${size}" height="${size}" rx="2" fill="${item.color}"/>`,
+  circle: (x, y, size, item) =>
+    `<circle cx="${x + size / 2}" cy="${y + size / 2}" r="${size / 2}" fill="${item.color}"/>`,
+  triangle: (x, y, size, item) =>
+    `<path d="M${x} ${y} L${x} ${y + size} L${x + size} ${y + size / 2} Z" fill="${item.color}"/>`,
+  line: (x, y, size, item) =>
+    `<rect x="${x}" y="${y + size / 2 - 1}" width="${size}" height="2.5" fill="${item.color}"/>`,
+};
+
+/** Draw one entry's glyph. Shared by every baked figure, so a kind cannot drift. */
+function bakedSwatch(x, y, size, item) {
+  return (MARKERS[item.marker] || MARKERS.square)(x, y, size, item);
 }
 
 /**
@@ -161,7 +190,9 @@ registerChartKind('baked', {
     body.push(LAYER_CLOSE);
 
     const items = legendItems(model);
-    if (items.length) body.push(legendBlock(items, view.legend, box, view, designBox()));
+    if (items.length) {
+      body.push(legendBlock(items, view.legend, box, view, designBox(), { swatch: bakedSwatch }));
+    }
 
     if (caption) {
       body.push(`<text x="${r((box.x0 + box.x1) / 2)}" y="${r(H - 8)}" text-anchor="middle" `

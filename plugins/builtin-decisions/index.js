@@ -472,7 +472,22 @@ export const workspace = {
       const rootChoice = res.choice != null && root.children?.[res.choice] ? (root.children[res.choice].label || `branch ${res.choice + 1}`) : null;
       await app.results.appendText(`Expected value (fold-back): **${fmt(res.value)}**.${rootChoice ? ` Optimal first decision: **${rootChoice}**.` : ''}`);
       const svg = treeSvg(root);
-      if (svg) await app.results.appendPlot(svg, { title: 'Decision tree' });
+      if (svg) await app.results.appendPlot(svg, {
+      title: 'Decision tree',
+      // The one baked figure that encoded meaning in colour and shape and explained
+      // none of it. Square/circle/triangle is the standard decision-analysis convention,
+      // which is exactly why it needs saying: a convention is only obvious to someone
+      // who already has it, and the people this is for are being taught it.
+      //
+      // The chosen path matters most of all. It is the ANSWER — the branch the analysis
+      // picked — carried by nothing but a thicker green line against thin grey ones.
+      legend: [
+        { key: 'decision', label: 'Decision you make', color: INK.accent, marker: 'square' },
+        { key: 'chance', label: 'Chance event', color: INK.flip, marker: 'circle' },
+        { key: 'terminal', label: 'Outcome', color: INK.muted, marker: 'triangle' },
+        { key: 'chosen', label: 'Optimal path', color: INK.chosen, marker: 'line' },
+      ],
+    });
       await app.results.endAnalysis();
     }
 

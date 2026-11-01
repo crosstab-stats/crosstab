@@ -226,3 +226,98 @@ test('the biplot states its colours once, for R and for the key', () => {
   assert.match(src, /color: ROW_COLOR/);
   assert.match(src, /color: COL_COLOR/);
 });
+
+// ---------------------------------------------------------------------------------------
+// A legend entry's SHAPE, where the figure uses one
+//
+// The open question from chart Layer 3b was "does any other baked figure want a legend?".
+// Answered by reading what each of the nine actually draws: seven plot in a single accent
+// colour and genuinely need none, the correspondence biplot already had one, the
+// choropleth's continuous ramp is a different problem — and the DECISION TREE encodes
+// four meanings and explained none of them.
+//
+// That tree is also why `marker` had to start working. Square, circle and triangle are
+// the standard decision-analysis convention, so a key of three identical colour chips
+// beside a picture of three different shapes is not a key. `legendItems` documented
+// `marker` and then dropped it on the next line.
+// ---------------------------------------------------------------------------------------
+
+test('a legend entry can carry a shape, not only a colour', () => {
+  const model = bakedModel({
+    svg: R_SVG,
+    legend: [
+      { key: 'd', label: 'Decision', color: '#2572a5', marker: 'square' },
+      { key: 'c', label: 'Chance', color: '#e0a52e', marker: 'circle' },
+      { key: 't', label: 'Outcome', color: '#646e77', marker: 'triangle' },
+      { key: 'p', label: 'Optimal path', color: '#2e7d32', marker: 'line' },
+    ],
+  });
+  const svg = renderChart(model, defaultView(model));
+  // Each glyph is drawn with the element that shape needs, so they are distinguishable
+  // in the markup as well as on screen.
+  assert.ok(/<circle[^>]*fill="#e0a52e"/.test(svg), 'the chance node is a circle');
+  assert.ok(/<path[^>]*fill="#646e77"[^>]*\/>|<path[^>]*d="M[^"]*Z"[^>]*fill="#646e77"/.test(svg),
+    'the outcome is a triangle');
+  assert.ok(/<rect[^>]*height="2.5"[^>]*fill="#2e7d32"|<rect[^>]*fill="#2e7d32"[^>]*height="2.5"/.test(svg),
+    'the optimal path is a line chip, because a path is a line');
+  assert.ok(/<rect[^>]*rx="2"[^>]*fill="#2572a5"/.test(svg), 'the decision stays a square');
+});
+
+test('an entry with no marker, or an unknown one, is still a square', () => {
+  // The biplot and every future caller that only has colours must keep working, and a
+  // typo must not produce an invisible entry.
+  const model = bakedModel({
+    svg: R_SVG,
+    legend: [
+      { key: 'rows', label: 'Rows', color: '#2572a5' },
+      { key: 'odd', label: 'Odd', color: '#b03030', marker: 'hexagon' },
+    ],
+  });
+  const items = getChartKind('baked').colorItems(model);
+  assert.deepEqual(items.map((i) => i.marker), ['square', 'square']);
+});
+
+test('the marker is reported to the panel, so an entry stays renameable', () => {
+  // The ⚙ panel lists legend entries so their wording can be edited. Adding a shape must
+  // not drop them out of that list.
+  const model = bakedModel({
+    svg: R_SVG,
+    legend: [{ key: 'c', label: 'Chance', color: '#e0a52e', marker: 'circle' }],
+  });
+  const items = getChartKind('baked').colorItems(model);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].key, 'c');
+  assert.equal(items[0].marker, 'circle');
+});
+
+test('the decision tree supplies the key it never had', () => {
+  // The figure it describes draws a blue square per decision, an amber circle per chance
+  // node, a grey triangle per outcome, and a thick green line along the branch the
+  // analysis picked — that last one being the ANSWER, carried by nothing but a weight
+  // and a hue.
+  const src = readFileSync('plugins/builtin-decisions/index.js', 'utf8');
+  const at = src.indexOf("title: 'Decision tree'");
+  assert.ok(at > 0, 'the tree is still appended as a baked plot');
+  const call = src.slice(at, at + 1200);
+  for (const [label, marker] of [
+    ['Decision you make', 'square'], ['Chance event', 'circle'],
+    ['Outcome', 'triangle'], ['Optimal path', 'line'],
+  ]) {
+    assert.ok(call.includes(label), `${label} is named in the key`);
+    assert.ok(call.includes(`marker: '${marker}'`), `${label} carries its shape`);
+  }
+});
+
+test('the figures that plot in one colour are left without a legend', () => {
+  // The other half of the answer, and the more useful half: NMDS, the MDS perceptual map,
+  // the network, the STL panels and the IRF all draw in a single accent colour. A legend
+  // saying "the colour means: the data" is noise, and adding one to be consistent would
+  // have been worse than the question going unanswered.
+  for (const [plugin, call] of [
+    ['builtin-ecology', 'appendPlot(cleanSvg(svg), { title })'],
+    ['builtin-sna', "appendPlot(cleanSvg(svg), { title: 'Network' })"],
+  ]) {
+    const src = readFileSync(`plugins/${plugin}/index.js`, 'utf8');
+    assert.ok(src.includes(call), `${plugin} still appends without a legend`);
+  }
+});

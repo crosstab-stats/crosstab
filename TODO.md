@@ -3188,7 +3188,8 @@ bottom; they are the project's memory and are not summarised away.
 ### Open follow-ups attached to completed entries
 
 Seven loose ends live as sub-items under entries that are otherwise **done**, where they
-are easy to miss. They stay there because the reasoning around them is the parent entry's;
+are easy to miss. One (the legend question) is answered and kept here with its answer,
+because "we looked and the answer was no, except once" is worth more than a deleted line. They stay there because the reasoning around them is the parent entry's;
 this is the index.
 
 - **Latent transition analysis** — not built, no longer ruled out. *(under #141, More analyses)*
@@ -3197,8 +3198,30 @@ this is the index.
 - **Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin note. *(under #162)*
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
-- **Does any other baked figure want a legend?** Eight have no categorical groups; the
-  choropleth's continuous colour bar is a different problem. *(under chart Layer 3b)*
+- **~~Does any other baked figure want a legend?~~ ANSWERED 2026-11-01 — one did.**
+  Read what each of the nine actually draws rather than guessing from the count. Seven
+  plot in a single accent colour (NMDS, the MDS perceptual map, the network, the STL
+  panels, the IRF) and need none — a key reading "the colour means: the data" is noise,
+  and adding one for consistency would have been worse than leaving the question open.
+  The correspondence biplot already had one. The choropleth's continuous ramp is still a
+  separate problem.
+
+  **The DECISION TREE needed one and had none.** It encodes four meanings — a blue
+  square per decision, an amber circle per chance node, a grey triangle per outcome, and
+  a thick green line along the branch the analysis picked — and explained no part of it.
+  The last is the ANSWER to the whole analysis, carried by a line weight and a hue.
+  Square/circle/triangle is the standard decision-analysis convention, which is exactly
+  why it needed saying: a convention is only obvious to someone who already has it, and
+  the audience here is being taught it.
+
+  Built through the existing layers model, so the legend is draggable, positionable,
+  hideable and its wording editable like every other — nothing new in the UI. One gap had
+  to be closed first: `legendItems` in `core/charts/baked.js` listed `marker?` in its
+  documented shape and dropped it on the next line, so every entry drew a colour square.
+  A key of three identical chips beside a picture of three different shapes is not a key.
+  Markers are a small closed set (square, circle, triangle, line) rather than
+  plugin-supplied SVG, because these are drawn into a figure the host signs its name to.
+  *(was under chart Layer 3b)*
 
 Two chart questions were raised while the baked figures were being standardised
 (2026-10-16). The legend one is above; the other is a first-class item of its own —
