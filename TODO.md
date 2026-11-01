@@ -3187,13 +3187,20 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Open follow-ups attached to completed entries
 
-Seven loose ends live as sub-items under entries that are otherwise **done**, where they
-are easy to miss. One (the legend question) is answered and kept here with its answer,
-because "we looked and the answer was no, except once" is worth more than a deleted line. They stay there because the reasoning around them is the parent entry's;
+Loose ends that live as sub-items under entries that are otherwise **done**, where they
+are easy to miss. Two are now resolved and kept here WITH their answers rather than
+deleted: "we looked and the answer was no, except once" is worth more than a missing
+line, and an index that quietly disagrees with the entry it points at is worse than no
+index — which is exactly what the building-block line was doing. They stay there because the reasoning around them is the parent entry's;
 this is the index.
 
 - **Latent transition analysis** — not built, no longer ruled out. *(under #141, More analyses)*
-- **Building-block eligibility** — unblocked 2026-08-21, not built. *(under Plugin data as first-class citizens, #146)*
+- ~~**Building-block eligibility**~~ — **CLOSED as moot 2026-10-13**, and this index line
+  outlived it by three weeks. The building-block library was removed on 2026-10-02 and
+  `core/copy-to-project.js` replaced it, so there is nothing for a slot to be eligible
+  FOR. The underlying want — reusable boundary sets — is real and survives in the
+  first-class-plugin-data note: plugin records now have no reuse path at all, rather
+  than an incomplete one. *(under Plugin data as first-class citizens, #146)*
 - **A preset file per chapter** an INSTRUCTOR ships with their own course, paired with #185 deployments. Re-scoped 2026-10-23: CrossTab does not write the course. *(under #162)*
 - **Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin note. *(under #162)*
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
