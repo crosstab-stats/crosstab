@@ -774,6 +774,19 @@ body { font: ${TOKENS.font}; color: var(--ct-text); }
    from this class dropped back to 14px and would still zoom iOS on focus — the
    standard's own control defeating the standard's own rule. Measured: bare input
    16px, .ct-field input 14px. */
+/* A FIELD IS THE DEFAULT, not an opt-in.
+   ========================================================================
+   ".ct-field" was a class a plugin had to remember to add, and the audit kept finding
+   places that had not: the Transcripts selects drew the iOS native pill, four inputs in
+   CAQDAS restated these exact declarations under their own names, and each one was a
+   separate chance to get it subtly different.
+   Styling the ELEMENTS means a pane cannot have an unstyled field by accident. The class
+   stays as an explicit marker — useful on a wrapper, and it documents intent — but
+   nothing depends on remembering it.
+   Checkboxes, radios, ranges and colour wells are excluded: a border and 9px of padding
+   around a checkbox is not a tidier checkbox, it is a broken one. */
+input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]),
+select, textarea,
 .ct-field { font-family: inherit; font-size: 16px; padding: 5px 9px;
   border: 1px solid var(--ct-line); border-radius: var(--ct-radius);
   /* BACKGROUND AND COLOUR, stated rather than left to the platform.

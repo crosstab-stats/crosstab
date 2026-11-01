@@ -698,3 +698,88 @@ test('a control does not get a second opinion from its own plugin', () => {
   assert.ok(!/css\(control, \{ fontSize: '16px' \}\)/.test(tx),
     'no inline size override now that the class actually applies');
 });
+
+// ---------------------------------------------------------------------------------------
+// No plugin may define a control the standard already defines
+//
+// The owner: "can we roll them all up so drift is impossible by construction?" This is
+// the "by construction" half. Rolling up what exists today fixes today; a rule that
+// REJECTS the next one fixes tomorrow.
+//
+// It does not look for colours — that was a different sweep. It asks whether a rule
+// DEFINES a control the standard already defines: a button is border + radius + padding
+// + cursor; a field is the same shape on an input, a select or a textarea. Anything
+// matching is a second definition of something that already has one, whatever it is
+// called locally.
+// ---------------------------------------------------------------------------------------
+
+/** Rules a plugin is allowed to keep, each with the reason it is NOT a duplicate. */
+const JUSTIFIED = {
+  '.caqdas__text mark': 'a highlight over coded text — not a control at all; it has a '
+    + 'cursor because clicking opens the coding, which is what tripped the detector',
+  '.caqdas__code': 'a codebook chip: a swatch and a name in a row, no border, and it '
+    + 'carries the code own colour as its background',
+  '.caqdas__menu button': 'a menu item — borderless, full width, left-aligned. A '
+    + '.ct-btn in a dropdown would draw a box around every row',
+  '.caqdas__bookbtn': 'a list row in the codebook manager, same reasoning as the menu item',
+  '.caqdas__cuetime': 'a bare monospace timestamp in a transcript gutter; it is a seek '
+    + 'affordance, and a button border beside every line of speech would be noise',
+  '.caqdas__segrm': 'a borderless danger glyph that sits INSIDE a row it would otherwise '
+    + 'crowd',
+  '.caqdas__retr': 'a clickable card, not a button: it is a block with a title and a '
+    + 'count, and it happens to be activatable',
+  '.caqdas__paint .stop': 'a button on a PAINTED banner whose colour is the user own '
+    + 'code colour, so its border and text are deliberately white-on-whatever rather '
+    + 'than the standard line and text',
+};
+
+test('no plugin defines a control the standard already defines', () => {
+  const sheetOf = (src, name) => {
+    const head = `const ${name} = \``;
+    const a = src.indexOf(head);
+    if (a < 0) return '';
+    return src.slice(a + head.length, src.indexOf('\n`;', a));
+  };
+  const rulesOf = (css) => {
+    const out = [];
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      out.push([m[1].trim().replace(/\s+/g, ' '), m[2].toLowerCase()]);
+    }
+    return out;
+  };
+  const defines = (sel, d) => {
+    const has = (...ps) => ps.every((x) => d.includes(x));
+    if (has('border', 'border-radius', 'padding') && d.includes('cursor')) return 'BUTTON';
+    if (has('border', 'border-radius', 'padding') && /input|select|textarea|field/i.test(sel)) return 'FIELD';
+    if (d.includes('display: flex') && d.includes('flex-wrap: wrap') && d.includes('gap')) return 'ROW';
+    return null;
+  };
+
+  const offences = [];
+  for (const [src, name, who] of [
+    [caqdas, 'STYLES', 'builtin-caqdas'],
+    [decisions, 'STYLES', 'builtin-decisions'],
+  ]) {
+    for (const [sel, decl] of rulesOf(sheetOf(src, name))) {
+      if (sel.startsWith('@') || sel.startsWith(':root')) continue;
+      const kind = defines(sel, decl);
+      if (!kind) continue;
+      if (JUSTIFIED[sel]) continue;
+      offences.push(`${who}: ${sel} re-defines a ${kind}`);
+    }
+  }
+  assert.deepEqual(offences, [],
+    'use .ct-btn / .ct-field / .ct-row, or add the selector to JUSTIFIED with the reason '
+    + `it genuinely differs:\n  ${offences.join('\n  ')}`);
+});
+
+test('every justified exception is still present and still justified', () => {
+  // An allow-list that outlives the thing it allowed is how an exception becomes a
+  // precedent. If a rule is gone, its entry goes with it.
+  const stale = Object.keys(JUSTIFIED).filter((sel) => !caqdas.includes(sel));
+  assert.deepEqual(stale, [], `JUSTIFIED names rules that no longer exist: ${stale.join(', ')}`);
+  for (const [sel, why] of Object.entries(JUSTIFIED)) {
+    assert.ok(why.length > 40, `${sel}: the reason has to be a reason, not a label`);
+  }
+});

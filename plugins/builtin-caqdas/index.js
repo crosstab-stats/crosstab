@@ -291,7 +291,8 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__cue.is-now .caqdas__cuetime { color: var(--ct-accent); font-weight: 600; }
 .caqdas__segtools { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
 .caqdas__segwarn { padding: 4px 0; font-size: 12px; color: #8a6d3b; }
-.caqdas__bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft); flex-wrap: wrap; }
+/* .ct-row supplies the flex, the gap and the wrap. What is local is the chrome. */
+.caqdas__bar { gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ct-line-soft); }
 .caqdas__bar label { color: var(--ct-muted); }
 /* NOT the font shorthand on the select. The same trap the standard's own .ct-field fell
    into: "font: inherit" resets font-SIZE, and a class selector outranks the bare
@@ -343,12 +344,13 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__code .ct { color: var(--ct-muted); font-size: 12px; }
 .caqdas__code .x { cursor: pointer; color: var(--ct-danger); border: 0; background: none; font: inherit; padding: 0 4px; }
 .caqdas__newcode { display: flex; gap: 6px; padding: 8px 6px; }
-.caqdas__newcode input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: 6px; }
+/* These inputs carry .ct-field; only the flex behaviour is local. */
+.caqdas__newcode input { flex: 1; min-width: 0; }
 .caqdas__menu { position: absolute; z-index: 20; background: var(--ct-surface); border: 1px solid var(--ct-line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 6px; min-width: 270px; max-width: 340px; max-height: 340px; overflow: auto; }
 .caqdas__menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
 .caqdas__menu button:hover { background: var(--ct-accent-wash); }
 .caqdas__menu .row { display: flex; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid var(--ct-line-soft); margin-top: 4px; }
-.caqdas__menu .row input { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--ct-line); border-radius: 6px; }
+.caqdas__menu .row input { flex: 1; min-width: 0; }
 /* --- codebook manager: a real modal overlay, this plugin's first ------------------
    Everything else here is a positioned div dismissed by a document click, which is fine
    for a six-item menu and hopeless for a panel with a multi-select list, a paste area
@@ -362,7 +364,7 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__mgrbody { display: flex; min-height: 0; flex: 1; }
 .caqdas__mgrside { width: 210px; border-right: 1px solid var(--ct-line-soft); padding: 10px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .caqdas__mgrmain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.caqdas__mgrbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--ct-line-soft); }
+.caqdas__mgrbar { gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--ct-line-soft); }
 .caqdas__mgrlist { flex: 1; overflow: auto; padding: 4px 0; min-height: 220px; }
 .caqdas__mgrfoot { padding: 10px 14px; border-top: 1px solid var(--ct-line-soft); display: flex; gap: 8px; align-items: center; }
 .caqdas__bookbtn { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: none; font: inherit; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
@@ -371,7 +373,7 @@ html[data-screen="small"], html[data-screen="small"] body { height: auto; }
 .caqdas__bookn { margin-left: auto; color: var(--ct-muted); font-size: 11px; font-weight: 400; }
 .caqdas__mgrrow { display: flex; align-items: center; gap: 8px; padding: 5px 12px; }
 .caqdas__mgrrow:hover { background: var(--ct-panel); }
-.caqdas__mgrrow input[type=text] { font: inherit; padding: 4px 7px; border: 1px solid var(--ct-line); border-radius: 6px; min-width: 0; }
+.caqdas__mgrrow input[type=text] { min-width: 0; }
 .caqdas__mgrname { flex: 2 1 0; }
 .caqdas__mgrtheme { flex: 1 1 0; }
 .caqdas__mgrcount { width: 46px; text-align: right; color: var(--ct-muted); font-size: 11px; }
@@ -413,7 +415,9 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__notedel { flex: none; border: 0; background: none; color: var(--ct-danger); cursor: pointer; font-size: 11px; padding: 0 2px; }
 .caqdas__notebody { font-size: 12px; color: var(--ct-text); white-space: pre-wrap; word-break: break-word; }
 .caqdas__noteadd { display: flex; flex-direction: column; gap: 4px; }
-.caqdas__noteinput { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px 8px; border: 1px solid var(--ct-line); border-radius: 6px; resize: vertical; }
+/* A textarea is a standard field by default now. What is local: it fills its row,
+   sets smaller type for a memo, and may be dragged taller. */
+.caqdas__noteinput { width: 100%; box-sizing: border-box; font-size: 12px; resize: vertical; }
 .caqdas__noteadd .caqdas__btn { align-self: flex-end; font-size: 12px; padding: 3px 10px; }
 /* --- media (image) coding --- */
 .caqdas__imgwrap { position: relative; display: inline-block; max-width: 100%; margin: 0 auto; line-height: 0; }
@@ -443,7 +447,7 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
 .caqdas__h-s { left: 50%; bottom: -6px; margin-left: -6px; cursor: ns-resize; }
 .caqdas__h-e { right: -6px; top: 50%; margin-top: -6px; cursor: ew-resize; }
 .caqdas__h-w { left: -6px; top: 50%; margin-top: -6px; cursor: ew-resize; }
-.caqdas__tracktb { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px 0; }
+.caqdas__tracktb { padding: 8px 20px 0; }
 .caqdas__tracklabel { font-size: 12px; font-weight: 600; }
 .caqdas__tracktb .caqdas__btn { font-size: 12px; padding: 3px 8px; }
 .caqdas__lanebar.is-track { box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); border-radius: 5px; }
@@ -461,10 +465,12 @@ mark.has-memo { box-shadow: inset 0 -2px 0 rgba(0,0,0,.35); }
    there is nothing for sticky to stick to and it would just occupy space. */
 [data-screen="small"] .caqdas__nowplaying { position: static; margin: 0; padding-left: 0; padding-right: 0; }
 .caqdas__speedlabel { font-size: 12px; color: var(--ct-muted); margin-right: 2px; }
-.caqdas__speedbtn { font: inherit; font-size: 12px; padding: 2px 8px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); cursor: pointer; }
+/* .ct-btn supplies border, radius, background and cursor. Only the tighter type and
+   padding are this control bar's own. */
+.caqdas__speedbtn { font-size: 12px; padding: 2px 8px; }
 .caqdas__speedbtn.is-on { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
-.caqdas__transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 20px; background: var(--ct-panel); border-top: 1px solid var(--ct-line-soft); border-bottom: 1px solid var(--ct-line-soft); }
-.caqdas__ctlbtn { font: inherit; font-size: 12px; padding: 3px 9px; border: 1px solid var(--ct-line); border-radius: 6px; background: var(--ct-surface); cursor: pointer; }
+.caqdas__transport { gap: 8px; padding: 8px 20px; background: var(--ct-panel); border-top: 1px solid var(--ct-line-soft); border-bottom: 1px solid var(--ct-line-soft); }
+.caqdas__ctlbtn { font-size: 12px; padding: 3px 9px; }
 .caqdas__ctlbtn.is-on { background: var(--ct-accent); color: #fff; border-color: var(--ct-accent); }
 .caqdas__playbtn { min-width: 40px; font-size: 12px; }
 .caqdas__regionbtn { margin-left: auto; }
@@ -706,7 +712,7 @@ export const workspace = {
     }
     const wrap = el('div', { class: 'caqdas' });
 
-    const bar = el('div', { class: 'caqdas__bar' });
+    const bar = el('div', { class: 'ct-row caqdas__bar' });
     const colLabel = el('label'); colLabel.textContent = 'Documents column:';
     const colSel = el('select', { class: 'ct-field' });
     const labelLabel = el('label'); labelLabel.textContent = 'Label by:';
@@ -1306,9 +1312,9 @@ export const workspace = {
       // Transport bar — a clear off-frame strip (play/pause for video + speed [+ ✎ Region]).
       // For video it sits right above the ruler so the whole frame is free for drawing;
       // for audio it's a plain speed row alongside the native controls.
-      const ctrl = el('div', { class: isVideo ? 'caqdas__transport' : 'caqdas__mediactrl' });
+      const ctrl = el('div', { class: isVideo ? 'ct-row caqdas__transport' : 'ct-row caqdas__mediactrl' });
       if (isVideo) {
-        const playBtn = el('button', { class: 'caqdas__ctlbtn caqdas__playbtn' }); playBtn.textContent = '▶'; playBtn.title = 'Play / pause';
+        const playBtn = el('button', { class: 'ct-btn caqdas__ctlbtn caqdas__playbtn' }); playBtn.textContent = '▶'; playBtn.title = 'Play / pause';
         const syncPlay = () => { playBtn.textContent = mediaEl.paused ? '▶' : '⏸'; };
         playBtn.addEventListener('click', () => { if (mediaEl.paused) mediaEl.play(); else mediaEl.pause(); });
         mediaEl.addEventListener('play', syncPlay);
@@ -1321,14 +1327,14 @@ export const workspace = {
       ctrl.append(sl);
       const speedBtns = [];
       for (const rate of [0.5, 1, 1.5, 2]) {
-        const b = el('button', { class: 'caqdas__ctlbtn caqdas__speedbtn' + (rate === 1 ? ' is-on' : '') });
+        const b = el('button', { class: 'ct-btn caqdas__ctlbtn caqdas__speedbtn' + (rate === 1 ? ' is-on' : '') });
         b.textContent = rate + '×';
         b.addEventListener('click', () => { mediaEl.playbackRate = rate; speedBtns.forEach((x) => x.classList.toggle('is-on', x === b)); });
         speedBtns.push(b); ctrl.append(b);
       }
       if (isVideo) {
         // Volume / mute (lost with the native controls).
-        const volBtn = el('button', { class: 'caqdas__ctlbtn' }); volBtn.title = 'Mute / unmute';
+        const volBtn = el('button', { class: 'ct-btn caqdas__ctlbtn' }); volBtn.title = 'Mute / unmute';
         const vol = el('input', { class: 'caqdas__vol' }); vol.type = 'range'; vol.min = '0'; vol.max = '1'; vol.step = '0.05'; vol.value = '1'; vol.title = 'Volume';
         const syncVol = () => { volBtn.textContent = mediaEl.muted || mediaEl.volume === 0 ? '🔇' : '🔊'; };
         volBtn.addEventListener('click', () => {
@@ -1341,7 +1347,7 @@ export const workspace = {
         ctrl.append(volBtn, vol);
         // "Region" mode: while on, the overlay captures drawing; while off, the frame
         // plays normally (click to play/pause) and the overlay just shows tracked boxes.
-        const dt = el('button', { class: 'caqdas__ctlbtn caqdas__regionbtn' }); dt.textContent = '✎ Region';
+        const dt = el('button', { class: 'ct-btn caqdas__ctlbtn caqdas__regionbtn' }); dt.textContent = '✎ Region';
         dt.title = 'Draw region-over-time boxes on the frame';
         dt.addEventListener('click', () => dt.classList.toggle('is-on', overlay.classList.toggle('is-drawing')));
         ctrl.append(dt);
@@ -1352,7 +1358,7 @@ export const workspace = {
         ? 'Play/scrub with the controls below the frame (or click the frame to play/pause; drag the ruler thumb to scrub). Time coding: drag the ruler → pick a code. Region-over-time: turn on ✎ Region, draw a box on a subject, pick a code, then scrub and drag/resize the box (or ⦿ Auto-track) to add keyframes — nudge a drifted box back on target with its handles.'
         : 'Drag on the timeline to select a span, then click a code to tag it (right-click, or 🖌 to paint). Click a coding bar to memo/remove; click the ruler to seek.';
 
-      const trackToolbar = el('div', { class: 'caqdas__tracktb' }); trackToolbar.style.display = 'none';
+      const trackToolbar = el('div', { class: 'ct-row caqdas__tracktb' }); trackToolbar.style.display = 'none';
       trackToolbarEl = trackToolbar;
 
       const timeline = el('div', { class: 'caqdas__timeline' });
@@ -2019,7 +2025,7 @@ export const workspace = {
       const bodyEl = el('div', { class: 'caqdas__mgrbody' });
       const side = el('div', { class: 'caqdas__mgrside' });
       const main = el('div', { class: 'caqdas__mgrmain' });
-      const bar = el('div', { class: 'caqdas__mgrbar' });
+      const bar = el('div', { class: 'ct-row caqdas__mgrbar' });
       const list = el('div', { class: 'caqdas__mgrlist' });
       const foot = el('div', { class: 'caqdas__mgrfoot' });
       main.append(bar, list, foot);
