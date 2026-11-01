@@ -3071,8 +3071,15 @@ bottom; they are the project's memory and are not summarised away.
 
 
 - [~] **#184 — a comprehensive how-to guide (owner, 2026-09-21). SCOPE DECIDED and
-      PHASE 1 SHIPPED 2026-10-23: a task reference. Courses come later, one per
-      discipline.**
+      PHASE 1 SHIPPED 2026-10-23: a task reference. Discipline courses are OUT OF SCOPE,
+      permanently — see the owner's words below.**
+
+      **This header used to end "Courses come later, one per discipline", which flatly
+      contradicted the decision recorded nine lines further down (2026-11-01).** The body
+      has said "ruled OUT OF SCOPE entirely — not deferred" since the day it was written.
+      A summary line is what gets read before anyone reaches the reasoning, so this one
+      was an invitation to start writing exactly the thing the owner forbade — and it
+      survived a re-scope of the #162 preset item that cited the same decision correctly.
 
       **The scope question, and the owner settled it against my recommendation — rightly.**
       Task-oriented ("how do I recode a variable", "how do I run a crosstab with weights")
