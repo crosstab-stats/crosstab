@@ -60,6 +60,11 @@ test('the built-in CDN hosts are recognised, and unrelated hosts are not', () =>
     'https://repo.r-wasm.org/bin/emscripten/contrib/4.4/lavaan_0.6-19.tgz',
     'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm',
     'https://esm.sh/hyparquet@1',
+    // Whisper weights (#201). These were the one runtime payload the cache could not
+    // hold — not even on first use, because caching is gated by host — so transcription
+    // could start offline and then fail fetching its own model.
+    'https://huggingface.co/onnx-community/whisper-base/resolve/main/onnx/encoder_model_quantized.onnx',
+    'https://cdn-lfs.huggingface.co/repos/ab/cd/model.onnx',
   ]) assert.equal(isRuntimeAsset(url), true, url);
 
   // The reason this is an allow-list at all: a plugin's own fetches (FRED, Wikipedia) and

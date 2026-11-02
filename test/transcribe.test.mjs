@@ -943,7 +943,11 @@ test('any word from the worker counts as proof of life', () => {
   // tightest moment of the run. The first draft of this test only looked at one of them
   // and found detection had no watchdog at all.
   const handlers = [...src.matchAll(/worker\.onmessage/g)].map((m) => m.index);
-  assert.equal(handlers.length, 2, 'detection and transcription each have a worker');
+  // THREE since #201 added `preloadModel` — detection, transcription, and the offline
+  // cache's model prefetch. Updated deliberately: the count is here so a new worker
+  // cannot arrive without someone confirming it has a watchdog, and the prefetch is the
+  // case that needs one most (its whole job is the long download).
+  assert.equal(handlers.length, 3, 'detection, transcription and the offline prefetch');
   for (const at of handlers) {
     const body = src.slice(at, at + 400);
     assert.ok(body.includes('lastSignal = Date.now()'), 'the clock resets on every message');

@@ -402,6 +402,71 @@ export function summariseDetection(perWindow = [], windows = []) {
 }
 
 /**
+ * Fetch a model's weights without transcribing anything — the offline cache's prefetch
+ * step (#201).
+ *
+ * **Why it loads the pipeline instead of listing files.** Which ONNX files a Whisper
+ * model needs is transformers.js's business and changes between versions and dtypes, so
+ * any hardcoded list here would be wrong on the next bump and wrong silently — the user
+ * would tick "available offline" and discover the gap on a plane. Asking for the model
+ * and letting the service worker cache whatever it fetches is the same strategy
+ * `OfflineManager` already uses for WebR (restart, then `preload()`) and DuckDB.
+ *
+ * Returns the number of bytes the loader reported, for the caller's progress line. That
+ * is the download as transformers.js sees it, which is the honest figure: `MODEL_SIZES`
+ * carries a human estimate for the picker and the two do not have to agree.
+ *
+ * @param {object} [opts]
+ * @param {'base'|'small'} [opts.size='base']
+ * @param {(text: string) => void} [opts.onProgress]
+ * @param {number} [opts.watchdogMs] a cold model load on a slow link is the longest
+ *   single fetch in the app; this is deliberately far more generous than a segment's.
+ * @returns {Promise<{size: string, bytes: number}>}
+ */
+export function preloadModel({ size = 'base', onProgress = null, watchdogMs = 15 * 60 * 1000 } = {}) {
+  const worker = new Worker(new URL('./transcribe-worker.js', import.meta.url), { type: 'module' });
+  return new Promise((resolve, reject) => {
+    let lastSignal = Date.now();
+    let bytes = 0;
+    let timer = null;
+    const stop = () => { if (timer !== null) { clearInterval(timer); timer = null; } };
+    const close = () => { stop(); worker.terminate(); };
+    // A watchdog on the same reasoning as the transcription one (#194): a worker the
+    // device killed reports nothing, so silence is the only symptom there is.
+    timer = setInterval(() => {
+      if (Date.now() - lastSignal < watchdogMs) return;
+      close();
+      reject(new Error('The model download stopped responding.'));
+    }, 5000);
+
+    worker.onmessage = (e) => {
+      // ANY word from the worker is proof of life — the same rule as the other two
+      // handlers here, and it matters most of all for this one: a model download IS the
+      // long wait, so a budget that only accepted a terminal message would kill exactly
+      // the operation it is supposed to protect.
+      lastSignal = Date.now();
+      const m = e.data ?? {};
+      if (m.type === 'progress' || m.type === 'stage') {
+        if (m.total) bytes = Math.max(bytes, m.loaded || 0);
+        const pct = m.total ? Math.round(((m.loaded || 0) / m.total) * 100) : 0;
+        onProgress?.(m.total ? `Caching the transcription model… ${pct}%` : 'Caching the transcription model…');
+        return;
+      }
+      if (m.type === 'done') { close(); resolve({ size, bytes }); return; }
+      if (m.type === 'failed') { close(); reject(new Error(m.error || 'model download failed')); }
+    };
+    worker.onerror = (err) => {
+      close();
+      reject(new Error(err?.message || 'the model worker failed'));
+    };
+
+    const libUrl = getAssets()?.transformersUrl;
+    if (libUrl) worker.postMessage({ type: 'config', libUrl });
+    worker.postMessage({ type: 'preload', id: 'preload', size, device: 'wasm', dtype: 'q8' });
+  });
+}
+
+/**
  * Identify the language of a recording. Resolves to what `summariseDetection` returns.
  *
  * Done ONCE per file, in the service, rather than per segment — otherwise a 40-minute

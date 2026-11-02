@@ -18,7 +18,8 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [ ] **#201 — the Whisper weights are not cached like everything else.** Owner, 2026-11-02:
+- [~] **#201 — the Whisper weights are not cached like everything else. THE OFFLINE
+      TOGGLE HALF IS BUILT 2026-11-02; the air-gap vendoring half is below.** Owner, 2026-11-02:
       *"whisper cached same as everything else."* Found while auditing the board: the Whisper
       epic's own "what the spike did not do" list was four-fifths stale, and this was the
       item that survived.
@@ -57,6 +58,67 @@ bottom; they are the project's memory and are not summarised away.
 
       Replaces the one open line left in the Whisper entry under *Deferred features*, which
       now points here.
+
+      ---
+
+      **BUILT 2026-11-02 — and the blocker was not the prefetch.** `sw.js` gates caching by
+      HOST, and `huggingface.co` was not on the list. So the weights could not be cached
+      **even opportunistically on first use** — while the transformers.js library *was*
+      already covered by `cdn.jsdelivr.net`. That combination produced the most confusing
+      possible version of the bug: transcription could *start* offline and then fail
+      fetching its own model. The host allowance is the fix; the prefetch is the
+      improvement on top of it. Added the LFS redirect targets too, because a cached
+      redirect to an uncacheable destination looks present and fails at read time.
+
+      **The prefetch asks for the model instead of listing files.** Which ONNX files a
+      Whisper model needs is transformers.js's business and changes between versions and
+      dtypes, so a hardcoded list would be wrong at the next bump and wrong *silently* —
+      the user would tick the toggle and discover the gap on a plane. `preloadModel()`
+      spins a worker, sends a new `preload` message, and the worker calls the real
+      `getAsr()` and nothing else: no audio, no inference. Whatever it fetches, the SW
+      caches. That is exactly the strategy the WebR step (restart, then `preload()`) and
+      the DuckDB step already use, so there is now one pattern for all three runtimes.
+
+      **Three corrections to this entry's own numbers and claims:**
+      - **The size was wrong.** This entry said ~39 MB, quoting the spike. That is `tiny`,
+        which is deliberately NOT offered (it collapses into repetition loops). The real
+        figures are **73 MB for `base`** and **238 MB for `small`**.
+      - **So "which weights" answers itself differently.** The default only. Caching both
+        would triple the download for a choice most users never change; caching neither
+        was the bug. `small` now caches on first use, which is the same weaker guarantee
+        the R packages had before their closures were pre-fetched — and it is only possible
+        at all because of the host allowance.
+      - **The speaker-diarisation embedder** is a second model this entry never mentioned.
+        Not pre-fetched: it is downloaded only when someone asks for speakers, and it now
+        caches on first use like `small`.
+
+      **A model failure does not take the warm down.** It runs last, after the shell, both
+      runtimes and the R packages, and is logged and reported rather than thrown — an
+      offline app that cannot transcribe beats an all-or-nothing warm that cached nothing
+      because of an optional model. It says so in the progress line rather than claiming
+      "Offline ready."
+
+      A test also caught the new worker: the watchdog invariant is asserted against every
+      `worker.onmessage` in `core/transcribe.js` and the count was pinned at 2, so a third
+      worker could not arrive without someone confirming it has a watchdog. It does, and
+      it needs one more than the others — a model download reports progress and nothing
+      else for minutes, so a budget that only accepted a terminal message would kill
+      precisely the operation it protects.
+
+  - [ ] **The air-gap half: the weights are not vendorable.** `scripts/vendor-assets.mjs`
+        has named targets (`webr duckdb arrow hyparquet packages`) mirroring
+        `core/assets.js` LOCAL mode, and adding a `whisper` target is the obvious shape —
+        but it is **not** the same change as the above and was deliberately not bundled
+        with it. transformers.js resolves a repo id against `env.remoteHost`; a vendored
+        build needs `env.localModelPath` + `allowLocalModels` plumbed into
+        `core/transcribe-worker.js`, which currently sets no `env` at all and only accepts
+        a `libUrl` override. Plus 73–238 MB landing under `vendor/`.
+
+        So today: **"Make available offline" covers transcription; `?assets=local` does
+        not.** `docs/OFFLINE.md` is accurate for the toggle and silent about the model,
+        which is the honest state rather than a claim either way. Worth doing — the
+        air-gap user is the same field researcher this whole feature was built for — and
+        worth doing as its own change.
 
 - [ ] **#202 — inter-coder reliability: surface the DISAGREEMENTS, not just the coefficient.**
       Owner, 2026-11-02: *"disagreements for inter-coder reliability."* The other half of

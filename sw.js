@@ -125,6 +125,17 @@ const RUNTIME_HOSTS = [
   'repo.r-wasm.org', // WebR R-package binaries
   'cdn.jsdelivr.net', // DuckDB-WASM, Arrow, hyparquet-writer
   'esm.sh', // codec libs (hyparquet) + esm.sh bundles
+  // Whisper model weights (#201). transformers.js resolves a repo id against its default
+  // `HF_HUB_URL`, and the worker sets no `env` override, so this is where the ONNX files
+  // actually come from. Without it the weights were the one runtime payload the offline
+  // cache could not hold — not even opportunistically, because `isRuntimeAsset` gates
+  // caching by host. The library itself was already covered by cdn.jsdelivr.net above,
+  // which is why transcription could *start* offline and then fail fetching its model.
+  'huggingface.co',
+  // The CDN huggingface.co redirects large files to. A cached redirect to an uncacheable
+  // target is worse than no cache: it looks present and fails at read time.
+  'cdn-lfs.huggingface.co',
+  'cdn-lfs-us-1.huggingface.co',
 ];
 
 /**

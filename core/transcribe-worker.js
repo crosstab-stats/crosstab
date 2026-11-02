@@ -247,6 +247,26 @@ self.onmessage = async (e) => {
 
   if (type === 'cancel') { cancelled = true; return; }
   if (type === 'config') { LIB_URL = e.data.libUrl || LIB_URL; return; }
+  // Fetch the model and nothing else (#201). The offline cache cannot enumerate which
+  // ONNX files a model needs — that is transformers.js's business and changes between
+  // versions — so the only honest prefetch is to ASK FOR THE MODEL and let the service
+  // worker cache whatever gets fetched. Exactly how the WebR and DuckDB steps work.
+  //
+  // No audio, no inference: `getAsr` resolving means every weight file is through the
+  // SW. The pipeline is left in `asr` because this worker is terminated straight after
+  // and discarding it here would only make a second preload in the same worker re-fetch.
+  if (type === 'preload') {
+    cancelled = false;
+    try {
+      const { size, device, dtype } = e.data;
+      await getAsr({ size, device, dtype });
+      post('stage', { id, stage: 'ready' });
+      post('done', { id });
+    } catch (err) {
+      post('failed', { id, error: String(err?.message || err) });
+    }
+    return;
+  }
   // Scoring only. WHERE to sample is a product decision and lives in the service, which
   // sends the windows it chose — so an hour of audio is not transferred to answer a
   // question that thirty seconds of it can answer.

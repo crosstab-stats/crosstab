@@ -54,6 +54,13 @@ const RESUME_KEY = 'crosstab.offline.resume';
 // build — keep in sync with scripts/vendor-assets.mjs R_VERSION_DIR.
 const PKG_REPO = 'https://repo.r-wasm.org/bin/emscripten/contrib/4.6';
 
+/**
+ * Transcription-model prefetch (#201). Imported lazily inside the step rather than at
+ * module scope: `core/transcribe.js` is a large module that most sessions never touch,
+ * and the offline manager is constructed during boot.
+ */
+const loadTranscribe = () => import('./transcribe.js');
+
 export class OfflineManager {
   #webr;
   #duckdb;
@@ -295,7 +302,50 @@ export class OfflineManager {
     // single WebR session.
     await this.#cachePackages(wantedPackages, onProgress);
 
+    // 5) The transcription model (#201). Last because it is optional and the largest
+    // single file after the R runtime: if it fails, everything above is already cached
+    // and the user has a working offline app minus transcription, which is strictly
+    // better than an all-or-nothing warm.
+    await this.#cacheTranscriptionModel(onProgress);
+
     onProgress('Offline ready.');
+  }
+
+  /**
+   * Pre-fetch the Whisper weights so transcription works offline (#201).
+   *
+   * **Why this was missing and why it mattered.** `core/offline.js` knew nothing about
+   * transcription, so the weights were the one runtime payload outside both this cache and
+   * the air-gap vendoring step — while the R packages were inside both. A user ticking
+   * "available offline" got their analyses and not their transcription, and found out at
+   * the point of use. For the field worker this feature was built for, that is the worst
+   * possible moment.
+   *
+   * **Which model.** The DEFAULT only (`base`, ~73 MB). Caching both would add ~238 MB
+   * for a choice most users never change, and caching neither was the bug. A user who
+   * switches to `small` gets it cached opportunistically on first use, which is now
+   * possible at all because `huggingface.co` became a runtime host in `sw.js` — that was
+   * the actual blocker, and it means the weaker guarantee is "run it once online", the
+   * same one the R packages had before closures were pre-fetched.
+   *
+   * **Not fatal.** A failure here is reported and swallowed: the app shell, both runtimes
+   * and the R packages are already cached by this point, and taking the whole warm down
+   * over an optional model would be a worse answer than an offline app that cannot
+   * transcribe.
+   *
+   * The speaker-diarisation embedder is deliberately NOT pre-fetched — it is only
+   * downloaded when someone asks for speakers, and now caches on first use like `small`.
+   */
+  async #cacheTranscriptionModel(onProgress) {
+    onProgress('Caching the transcription model…');
+    try {
+      const { preloadModel } = await loadTranscribe();
+      await preloadModel({ size: 'base', onProgress });
+    } catch (err) {
+      // Named, not silent: "offline ready" must not claim something this did not do.
+      console.warn('[offline] transcription model not cached', err);
+      onProgress('Transcription model not cached — transcription will need a connection.');
+    }
   }
 
   /** Cache the dependency closure of `wanted` R packages from the WebR binary repo,
