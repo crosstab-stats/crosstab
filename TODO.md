@@ -18,7 +18,7 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
+- [x] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
       shipped the project manager and is closed; these rode along inside its entry and
       would have been closed with it. None blocks anything — they are the difference
       between "the File menu stopped multiplying" and "the File menu is finished".
@@ -156,9 +156,25 @@ bottom; they are the project's memory and are not summarised away.
         equal billing. A bundle also cannot be ENUMERATED (there is no index of
         `.crosstab` files on a disk), so the provider declares `enumerable: false` and
         the pane says what it is instead of reporting an empty list. 3 tests.
-  - [ ] **Can the project manager be redesigned so the shared row becomes reasonable?
-        (owner's question, 2026-10-26.)** Deliberately a question about the MANAGER, not
-        about `project-list.js`.
+  - [x] **Can the project manager be redesigned so the shared row becomes reasonable?
+        ANSWERED by the owner 2026-11-02: no, and it does not need to be.** *"the manager
+        justified its independent rendering due to unique workflow needs."*
+
+        Which answers the question as asked rather than deferring it. The analysis below
+        kept arriving at the same place from the other direction — the row is shareable
+        *because* it is opinion-free, and the manager's five modes each carry an opinion
+        about what a click does — and treated that as a tension to resolve. It is not one.
+        Two renderings of one LIST would be drift; two renderings serving two jobs is a
+        difference in the jobs.
+
+        The redesign sketch below is **not** retired, because it was never really about
+        sharing the row: "are these five tabs fewer surfaces than they look" is a question
+        about the manager's own usability, and it stands or falls on that. It is just no
+        longer owed to anybody as a prerequisite. The trigger named at the end still
+        applies — a sixth mode would be evidence the tabs are doing too much.
+
+        Original question and analysis follow. Deliberately a question about the MANAGER,
+        not about `project-list.js`.
 
         The row is shareable because it is opinion-free — it draws name, location, date and
         size, and holds no view about what a click does. The manager is a `<dialog>` with
@@ -185,30 +201,32 @@ bottom; they are the project's memory and are not summarised away.
         shared (`projectMetaLine`, in `project-meta.js`). Worth revisiting if the manager
         grows a sixth mode, which would be evidence the tabs are doing too much.
 
-  - [ ] **STILL OPEN — and NOT a menu move.** *(Flagged 2026-09-21: the other two
-        sub-items were "move some menu items" and took an afternoon. This one is a
-        refactor and should not be waved through on the same estimate.)*
-        **SUPERSEDED 2026-10-26 — this paragraph described the opposite of the code, and
-        the task it warns about was already done.** It said: `project-manager.js` is a
-        `<dialog>` resolving a promise on close, the launcher needs the same rail inline,
-        so reusing it means first extracting the rail from the dialog shell. In fact
-        `core/project-list.js` IS that extracted row and **the launcher already uses it**
-        (`launcher.js:18`), alongside the sidebar (`app.js:63`); the manager is the surface
-        that never adopted it. The direction was inverted, which would have sent whoever
-        picked this up to do the harder half of a job already finished.
+  - [x] **CLOSED by the owner, 2026-11-02:** *"done. launcher and manager both are using
+        the same underlying list component but the manager justified its independent
+        rendering due to unique workflow needs."*
 
-        Resolved by deciding that the manager keeps its own rendering — see the cluster note
-        and the redesign question above. Kept here because the lesson is reusable: a
-        warning about effort is a claim about the code, and it rots like any other.
+        That settles a question this sub-item had been asking in two directions at once,
+        and the contradiction is worth keeping because of how it got there. The entry
+        ended with a paragraph titled **"The launcher should reuse the manager component
+        instead of its own rail"** — and three paragraphs above it, a 2026-10-26 note
+        saying that description was backwards: `core/project-list.js` is the shared row
+        component, **the launcher already uses it** (`launcher.js:18`) alongside the
+        sidebar (`app.js:63`), and the manager is the surface that never adopted it. So
+        the item simultaneously recorded that the work was done in the other direction and
+        still instructed a reader to do it in this one. A correction appended ABOVE a
+        stale conclusion does not retire it; the conclusion is what gets read and acted
+        on.
 
-        **The launcher should reuse the manager component instead of its own rail.**
-        `core/launcher.js` builds its own saved-project list, remembered folders and
-        source buttons; `core/project-manager.js` now does the same job properly, with
-        the backend registry and the verbs. Two renderings of one list is the drift
-        `var-toolbar.js` was written to end, one layer up. **Overlaps [[#167]]** ("the
-        launcher should INCLUDE project management") and #161 ("clicking a
-        source/project should just go") — do these together or the launcher gets rebuilt
-        twice.
+        The owner's answer resolves it on the merits rather than the bookkeeping: the
+        shared component is in use by both, and the manager's own rendering is not drift
+        but a response to workflow the launcher does not have — it opens, moves, exports
+        and deletes, with a backend registry and per-row verbs, where the launcher picks
+        one project and goes. Two renderings of one LIST would be drift; two renderings
+        for two jobs is not.
+
+        **[[#167]]** ("the launcher should INCLUDE project management") and **#161**
+        ("clicking a source/project should just go") no longer have a dependency here.
+        Whatever they ask for stands on its own.
 
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
@@ -380,6 +398,24 @@ bottom; they are the project's memory and are not summarised away.
         blind would be picking the study's method for it. It is also the only reading
         where a media file's duration is the natural exposure. Decidable with a real
         continuously-coded study in hand, and not before.
+
+        **DEFERRED LONG-TERM by the owner, 2026-11-02**, with the condition stated:
+        *"needs to remain long-term un-built until we get a user who needs it and can
+        demonstrate the best path. or until we have so little else left that we can
+        justify devoting the time to building out support for all options (as i suspect we
+        will wind up doing at some point, but that's a large enough job with no current
+        demand so it can wait)."*
+
+        Two exits, and naming both is what keeps this from being re-litigated. The first
+        is a user who can **demonstrate** the path — not merely request the feature, since
+        the whole difficulty is that momentary, partial-interval and whole-interval
+        recording answer different questions and picking one blind picks the study's
+        method for them. The second is building **all** of the options rather than
+        choosing between them, which dissolves the problem instead of solving it and is
+        the likely eventual answer — it is just a large job against no demand.
+
+        So this is not "blocked pending a decision": the decision is made, and it is to
+        wait. It needs no further triage until one of those two conditions is met.
   - [x] **A host read surface for coding records — BUILT 2026-11-01 as #196.** This said
         "two callers in search of one surface; build it when the second is real", and the
         owner made the first one real by reframing the question: not "should another dev
