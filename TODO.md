@@ -1990,186 +1990,6 @@ bottom; they are the project's memory and are not summarised away.
 
 ### More analyses (each is just another plugin)
 
-- [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
-      `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
-      got no live controls, no palette, no re-editability. Reviewed to find out why.
-      **Now 8 sites across 7 plugins** — box, wordcloud (×2), steps, forest, the three
-      diagnostic scatters, the cost-effectiveness plane and both sensitivity figures have
-      been migrated, and builtin-plots, builtin-survival, builtin-meta, builtin-regression
-      and builtin-assumptions each dropped `svglite`. The JS-drawn half of this review is
-      CLOSED: the only figure a plugin still draws itself is the decision tree,
-      deliberately (see below).
-
-      **Re-counted against the code 2026-11-01**, because this header had drifted twice
-      over. It said "11 sites across 9 plugins, and every one of them is R-drawn": the
-      count was the one from before the three figures flagged below migrated on
-      2026-10-16, and "every one of them is R-drawn" was contradicted by the "1 is
-      produced in JavaScript" bullet two lines under it. Measured now — 8 `appendPlot`
-      sites in 7 plugins, one figure each except ordination's two, of which 7 are R-drawn
-      and the eighth is the decision tree. The residue paragraph further down already read
-      "8 across 7" and was right: 8 was the HARD residue, 11 was that residue plus the
-      three flagged items. **Those three are now done, so the two numbers coincide** —
-      which is itself the signal that the ranked sub-list below is finished.
-
-      **The dividing line is not difficulty — it is who holds the numbers.**
-
-      - **7 are R-produced** (svglite): impulse-response, CA biplot, MDS map, NMDS,
-        network graph, choropleth, STL decomposition. *(Conditional volatility, the Lorenz
-        curve and the ARIMA forecast were on this list until 2026-10-16 and are items 5–7
-        below.)* These share a property: the coordinates do not
-        exist until R has fitted something. But that is a DATA-EXTRACTION choice, not a
-        barrier — `survfit` already yields time/surv/lower/upper vectors; we ask R for a
-        picture instead of those numbers.
-      - **1 is produced in JavaScript by the plugin itself**: builtin-decisions' decision
-        tree, which is staying that way on purpose — see the end of this entry. The other
-        two JS-drawn figures (the cost-effectiveness plane, the sensitivity pair) were the
-        tell this line was written about — the plugin already held every number and was
-        hand-drawing SVG anyway — and both are migrated.
-
-      **Rule to apply going forward: ask R for NUMBERS, not pictures.** A plugin should
-      return fitted geometry and let the host draw it. Baking stays legitimate where the
-      geometry is the hard part and is not ours — force-directed network layouts, real
-      map projections, biplot arrow fields.
-
-      Ranked follow-ups, each a self-contained kind — **all four now DONE**:
-      1. ~~**`box`**~~ — done (04e5a7e); builtin-plots needs no R at all now.
-      2. ~~**`wordcloud`**~~ — done (7c24206); the two hand-rolled clouds became one
-         kind, and it established that **some colours are data, not style**.
-      3. ~~**`steps`**~~ — done (f841b1c); Kaplan–Meier, reusable for any step function
-         + CI band. Validated against local R 4.6.0.
-      4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
-
-      What is left is the genuinely hard residue, and it is the right residue: the **8
-      remaining sites across 7 plugins** (re-counted 2026-10-15 — this line used to say 16,
-      the figure from before the four migrations above; the Lorenz curve went on the 16th)
-      are mostly cases where **the
-      geometry is the hard part and is not ours** — force-directed network layout, map
-      projections, biplot arrow fields, ordination configurations. Each of those needs the
-      numbers extracting from R first, which is a per-plugin data question rather than a
-      chart-layer one.
-
-      5. ~~**Lorenz curve**~~ — done 2026-10-16, the first of the three the re-count
-         flagged. `Lc()` already returns the two vectors the curve IS; the plugin drew
-         them and discarded the numbers. Now a `scatter` model with `line: true` and the
-         45° line as `reference` — which is what that field is for: a reference is what
-         the plot MEANS, as against a trend, which is a finding. **svglite dropped from
-         the plugin entirely**, so Inequality installs one R package instead of two.
-
-      6. ~~**Conditional volatility**~~ — done 2026-10-16. `fit@sigma.t` is one number per
-         observation and `plot(vol, type = "l")` was drawing it; now a `scatter` model with
-         `line: true`. **svglite dropped from builtin-cointegration entirely** — it was
-         that plugin's only figure.
-
-      7. ~~**ARIMA forecast**~~ — **done 2026-10-16 on the new `band` kind; this item was
-         never struck and its paragraph stayed on the board for a fortnight saying the
-         opposite of the code.** Verified 2026-11-01: `band` is registered in BOTH the
-         manifest `kinds` list and `chartKinds()` (`plugins/builtin-charts/index.js:97`
-         and `:1510`), and `builtin-timeseries/index.js:265` emits `kind: 'band'` for the
-         forecast. `svglite` stays in that plugin for the STL panels, which are a
-         different figure and are still on the residue list.
-
-         **Why it needed a new kind rather than an option on an old one** — the reusable
-         half, kept so it is not re-decided. `scatter` draws a connected line but has no
-         band, and a forecast figure without its interval has lost the point of being a
-         forecast. `steps` has exactly the right band but is deliberately a STAIRCASE:
-         joining two estimates with a straight line claims a gradual change between them,
-         which is what a Kaplan–Meier curve denies and what a forecast mean asserts.
-         Borrowing either would have made a false statistical claim in one direction or
-         the other — so the two kinds share one `curveKind` factory parameterised by
-         exactly the two functions that differ (how the curve joins its points, how the
-         ribbon follows it), because that difference IS the claim. Reusable well beyond
-         ARIMA: fitted curves with CIs, smoothed trends, growth trajectories.
-
-         The warning this paragraph used to carry is still worth keeping: adding a kind
-         means registering it in BOTH places, and the harness asserts that now, after
-         `tornado` shipped in only one of them.
-
-      5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
-         *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
-         *Q–Q plot*, are chart models now. They needed no new kind: `scatter` gained a
-         `reference` field, which is the guide line a plot's MEANING requires (zero
-         residual, the normal line) as opposed to `trend`, which reports a finding — so
-         a reference is grey, dashed and prints no equation, because `Y = 0 + 1(X)`
-         beside a Q–Q plot is a tautology. Both plugins' `rPackages` are now empty,
-         which matters beyond tidiness: the offline cache pre-fetches the R packages of
-         every enabled plugin, so a stale entry is a download nobody uses.
-
-         Two things the migration turned up, neither blocking:
-         - The assumptions plugin returns every variable's Q–Q points in ONE
-           concatenated vector plus a 1-based index, because per-variable results are
-           ragged and a ragged list does not survive the flat marshalling. Any future
-           plugin returning per-group geometry hits the same wall.
-         - A view value has THREE possible sources, and they are not interchangeable:
-           `SHARED_DEFAULTS` → the kind's `baseView` → the saved `model.view`
-           (`viewFromSpec`), with a control descriptor's own `default` consulted only by
-           `controlValue`, and only for a key none of those three set. So pie's
-           `valueLabels: true` and forest's `gridlines: false` are not bugs even though
-           they contradict the shared descriptors — that is a kind overriding a shared
-           default, which is the mechanism working. (First read of this looked like three
-           bugs; two of them were the design.) Scatter's `trendLine` was the real one: a
-           kind-local descriptor saying `false` six lines from the `baseView` that sets
-           it `true`. Made to agree — dead either way, but not a trap any more.
-
-         **The defect this shipped with, and how it got past a green suite
-         (2026-09-28).** All three charts passed `xTitle`/`yTitle` at the top of the
-         model. The scatter kind reads `axes.x.title`. So every field was present and
-         correct and not one axis was labelled — a silent loss against the old baked
-         plots, which got their axis names from `qqnorm` for free. The test asserted
-         `model.xTitle === 'Theoretical quantiles'`, which was true, so it passed. **A
-         chart test that never renders the chart is testing the caller's spelling.**
-         Every axis assertion in the chart tests now draws the SVG and looks for the
-         text.
-
-      6. ~~**builtin-decisions' figures**~~ — done (2026-09-28). The *cost-effectiveness
-         plane* and both *sensitivity* figures are chart models. This closes the JS-drawn
-         half of the review; what is left is the R-drawn residue below.
-
-         The plane needed **point labels** on `scatter`: a CE plane of anonymous dots is
-         useless, and no kind could name a point. They are identities rather than
-         decoration, so they default to on when the model supplies them and a scatter of
-         ordinary observations neither draws them nor offers the control. Status became a
-         **group** rather than the hard-coded green/red it was — a legend the reader had to
-         infer, in the two colours a colourblind reader cannot separate.
-
-         The sweep needed a **connected scatter** (`model.line`: 61 samples of one
-         continuous function read as a cloud otherwise, and the shape IS the finding;
-         drawn in x order, because a polyline follows the order it is handed) and
-         **`guides`** — named, switchable, axis-aligned lines for the break-even crossing
-         and each point where the recommendation flips, which were hard-coded green and
-         amber before. A guide whose value falls off-scale is skipped rather than pinned
-         to the frame, because a line on the frame claims the crossing happens there.
-
-         The tornado got its **own kind**. Reusing `forest` was considered and rejected:
-         the geometry nearly matches, but the panel would then talk about studies, weights
-         and log scales, and the rows would be markers-with-whiskers rather than bars.
-         Widest-swing-first is enforced *in the kind*, not trusted to the caller — that
-         funnel outline is the only reason the chart reads at a glance, so a model in input
-         order would draw a correct chart of the wrong kind. `swing` is computed there too,
-         from |hi − lo|, so the ordering can never disagree with the bars it orders.
-
-         **What deliberately was NOT migrated: the live in-panel previews.** The same two
-         figures appear in the plugin's own panel, redrawing on every slider frame with a
-         marker for where the parameter currently sits. Routing that through the host
-         renderer would put a postMessage round-trip inside a drag handler, and a snapshot
-         of a pointer means nothing to a later reader. So the panel keeps its own drawing
-         and Output gets a model: two artefacts with different jobs, not one thing drawn
-         twice. The alternative — a `charts.render(model)` broker verb so a plugin could
-         preview with the host's renderer — is the right answer *if* a plugin ever wants a
-         non-interactive preview, and is worth building then rather than now.
-
-      **The decision tree stays baked, and that is the end state, not a backlog item.**
-      `builtin-decisions`' tree is a node-link diagram: a recursive layout, three node
-      shapes, probabilities on the edges and the optimal path picked out. Nothing in the
-      chart vocabulary applies to it — no axes, no scales, no palette, no legend — so a
-      `tree` kind would be a chart kind in name only, for exactly one caller. It already
-      has the one thing the frame gives ('opts.title' makes the title editable), and the
-      optimal branch is marked by stroke WIDTH as well as colour, so it is not colour-only.
-      This is the same judgement as the network graph and the map projections: the geometry
-      is the artefact.
-
-> These three were captured during the college tour and lived only in the memory
-> notes, so this section read as complete when it was not (spotted 2026-08-05).
-
 - [~] **Linear regression** (`plugins/builtin-regression/`) — `lm()`, SPSS-style
       Model Summary + Coefficients; factor IVs dummy-coded; honours missingValues.
       *R/stats verified; two-dialog UI click-through NOT auto-confirmed* (harness
@@ -10509,6 +10329,225 @@ The record of what shipped and why. Kept in full, in the original sections.
     tie-in); a clear/reset-session action.
 
 ### More analyses (each is just another plugin)
+
+- [x] **Baked-chart review — COMPLETE. The lesson from #140 (2026-08-05); closed
+      2026-11-02 when the owner pointed out it had been finished for a fortnight.** Originally 21
+      `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
+      got no live controls, no palette, no re-editability. Reviewed to find out why.
+      **Now 8 sites across 7 plugins** — box, wordcloud (×2), steps, forest, the three
+      diagnostic scatters, the cost-effectiveness plane and both sensitivity figures have
+      been migrated, and builtin-plots, builtin-survival, builtin-meta, builtin-regression
+      and builtin-assumptions each dropped `svglite`. The JS-drawn half of this review is
+      CLOSED: the only figure a plugin still draws itself is the decision tree,
+      deliberately (see below).
+
+      **Re-counted against the code 2026-11-01**, because this header had drifted twice
+      over. It said "11 sites across 9 plugins, and every one of them is R-drawn": the
+      count was the one from before the three figures flagged below migrated on
+      2026-10-16, and "every one of them is R-drawn" was contradicted by the "1 is
+      produced in JavaScript" bullet two lines under it. Measured now — 8 `appendPlot`
+      sites in 7 plugins, one figure each except ordination's two, of which 7 are R-drawn
+      and the eighth is the decision tree. The residue paragraph further down already read
+      "8 across 7" and was right: 8 was the HARD residue, 11 was that residue plus the
+      three flagged items. **Those three are now done, so the two numbers coincide** —
+      which is itself the signal that the ranked sub-list below is finished.
+
+      **The dividing line is not difficulty — it is who holds the numbers.**
+
+      - **7 are R-produced** (svglite): impulse-response, CA biplot, MDS map, NMDS,
+        network graph, choropleth, STL decomposition. *(Conditional volatility, the Lorenz
+        curve and the ARIMA forecast were on this list until 2026-10-16 and are items 5–7
+        below.)* These share a property: the coordinates do not
+        exist until R has fitted something. But that is a DATA-EXTRACTION choice, not a
+        barrier — `survfit` already yields time/surv/lower/upper vectors; we ask R for a
+        picture instead of those numbers.
+      - **1 is produced in JavaScript by the plugin itself**: builtin-decisions' decision
+        tree, which is staying that way on purpose — see the end of this entry. The other
+        two JS-drawn figures (the cost-effectiveness plane, the sensitivity pair) were the
+        tell this line was written about — the plugin already held every number and was
+        hand-drawing SVG anyway — and both are migrated.
+
+      **Rule to apply going forward: ask R for NUMBERS, not pictures.** A plugin should
+      return fitted geometry and let the host draw it. Baking stays legitimate where the
+      geometry is the hard part and is not ours — force-directed network layouts, real
+      map projections, biplot arrow fields.
+
+      Read as guidance for a NEW figure, which is all it ever was. It is not a standing
+      instruction to migrate the ones already baked: those compose into the layer model and
+      are done (see below). The rule earns its keep when a plugin is about to hand over a
+      picture of numbers it is already holding — which is what the three JS-drawn figures
+      were doing, and why migrating them was right.
+
+      Ranked follow-ups, each a self-contained kind — **all four now DONE**:
+      1. ~~**`box`**~~ — done (04e5a7e); builtin-plots needs no R at all now.
+      2. ~~**`wordcloud`**~~ — done (7c24206); the two hand-rolled clouds became one
+         kind, and it established that **some colours are data, not style**.
+      3. ~~**`steps`**~~ — done (f841b1c); Kaplan–Meier, reusable for any step function
+         + CI band. Validated against local R 4.6.0.
+      4. ~~**`forest`**~~ — done (f841b1c); effect + CI + weight, summary diamond.
+
+      **The 8 that remain are FINISHED, not pending — and this paragraph said the
+      opposite until 2026-11-02.** The owner caught it: *"I thought we decided to let those
+      stand as they are, with R exporting svg, and just incorporate the baked svg as a
+      graphic layer under other elements (such as title, legend) which we can edit live?"*
+
+      That is exactly what was decided and exactly what is built. Verified rather than
+      recalled: `results.appendPlot` (core/results-pane.js:573) builds a chart of the core
+      `baked` kind via `bakedModel`, so every one of the 8 sites gets the ⚙ options panel,
+      draggable layers, a live title/caption/legend, `plotSize`, persistence and SVG/PNG
+      export — the same code path a scatter plot uses, not a parallel one. `baked.js` says
+      so in its own header, citing the owner's 2026-10-16 call: *"the goal is to
+      standardize as much as possible how a user interacts with charts/plots/graphs."* And
+      it states the conclusion this paragraph was contradicting: those figures *"are not
+      going to become chart models, and that is the right outcome."*
+
+      Original text, which is the error worth keeping: *"What is left is the genuinely hard
+      residue… **8 remaining sites across 7 plugins** … are mostly cases where **the
+      geometry is the hard part and is not ours** — force-directed network layout, map
+      projections, biplot arrow fields, ordination configurations. Each of those needs the
+      numbers extracting from R first, which is a per-plugin data question rather than a
+      chart-layer one."* (The 8-across-7 count was re-checked on 2026-10-15 and again on
+      2026-11-01, and is correct.)
+
+      **How it survived two re-counts is the lesson.** On 2026-11-01 this entry was audited
+      against the code and four stale passages were corrected — the site count, the
+      R-produced list, item 7's "BLOCKED", and a bad index line. Every one of those was a
+      NUMBER or a status flag. The premise underneath them — that the remaining figures are
+      awaiting migration — was carried forward untouched, because an audit that asks "are
+      these counts right" never asks "is this still the plan". The counts were right. The
+      plan had changed a fortnight earlier, in a decision recorded in `baked.js` rather
+      than here.
+
+      Which is the same failure shape as the manifest gap in #197 (an audit framed around
+      capability had no row for evidence) and as the two stale pointers in the follow-ups
+      index. **Verifying the details of a claim is not verifying the claim.**
+
+      So the only thing the 8 still cannot do is change the PANEL — a different k, another
+      distance metric, a new projection — because that needs R to redraw. `baked.js` calls
+      that boundary "the point rather than a shortfall", and it is where this entry should
+      have ended all along.
+
+      5. ~~**Lorenz curve**~~ — done 2026-10-16, the first of the three the re-count
+         flagged. `Lc()` already returns the two vectors the curve IS; the plugin drew
+         them and discarded the numbers. Now a `scatter` model with `line: true` and the
+         45° line as `reference` — which is what that field is for: a reference is what
+         the plot MEANS, as against a trend, which is a finding. **svglite dropped from
+         the plugin entirely**, so Inequality installs one R package instead of two.
+
+      6. ~~**Conditional volatility**~~ — done 2026-10-16. `fit@sigma.t` is one number per
+         observation and `plot(vol, type = "l")` was drawing it; now a `scatter` model with
+         `line: true`. **svglite dropped from builtin-cointegration entirely** — it was
+         that plugin's only figure.
+
+      7. ~~**ARIMA forecast**~~ — **done 2026-10-16 on the new `band` kind; this item was
+         never struck and its paragraph stayed on the board for a fortnight saying the
+         opposite of the code.** Verified 2026-11-01: `band` is registered in BOTH the
+         manifest `kinds` list and `chartKinds()` (`plugins/builtin-charts/index.js:97`
+         and `:1510`), and `builtin-timeseries/index.js:265` emits `kind: 'band'` for the
+         forecast. `svglite` stays in that plugin for the STL panels, which are a
+         different figure and are still on the residue list.
+
+         **Why it needed a new kind rather than an option on an old one** — the reusable
+         half, kept so it is not re-decided. `scatter` draws a connected line but has no
+         band, and a forecast figure without its interval has lost the point of being a
+         forecast. `steps` has exactly the right band but is deliberately a STAIRCASE:
+         joining two estimates with a straight line claims a gradual change between them,
+         which is what a Kaplan–Meier curve denies and what a forecast mean asserts.
+         Borrowing either would have made a false statistical claim in one direction or
+         the other — so the two kinds share one `curveKind` factory parameterised by
+         exactly the two functions that differ (how the curve joins its points, how the
+         ribbon follows it), because that difference IS the claim. Reusable well beyond
+         ARIMA: fitted curves with CIs, smoothed trends, growth trajectories.
+
+         The warning this paragraph used to carry is still worth keeping: adding a kind
+         means registering it in BOTH places, and the harness asserts that now, after
+         `tornado` shipped in only one of them.
+
+      5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
+         *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
+         *Q–Q plot*, are chart models now. They needed no new kind: `scatter` gained a
+         `reference` field, which is the guide line a plot's MEANING requires (zero
+         residual, the normal line) as opposed to `trend`, which reports a finding — so
+         a reference is grey, dashed and prints no equation, because `Y = 0 + 1(X)`
+         beside a Q–Q plot is a tautology. Both plugins' `rPackages` are now empty,
+         which matters beyond tidiness: the offline cache pre-fetches the R packages of
+         every enabled plugin, so a stale entry is a download nobody uses.
+
+         Two things the migration turned up, neither blocking:
+         - The assumptions plugin returns every variable's Q–Q points in ONE
+           concatenated vector plus a 1-based index, because per-variable results are
+           ragged and a ragged list does not survive the flat marshalling. Any future
+           plugin returning per-group geometry hits the same wall.
+         - A view value has THREE possible sources, and they are not interchangeable:
+           `SHARED_DEFAULTS` → the kind's `baseView` → the saved `model.view`
+           (`viewFromSpec`), with a control descriptor's own `default` consulted only by
+           `controlValue`, and only for a key none of those three set. So pie's
+           `valueLabels: true` and forest's `gridlines: false` are not bugs even though
+           they contradict the shared descriptors — that is a kind overriding a shared
+           default, which is the mechanism working. (First read of this looked like three
+           bugs; two of them were the design.) Scatter's `trendLine` was the real one: a
+           kind-local descriptor saying `false` six lines from the `baseView` that sets
+           it `true`. Made to agree — dead either way, but not a trap any more.
+
+         **The defect this shipped with, and how it got past a green suite
+         (2026-09-28).** All three charts passed `xTitle`/`yTitle` at the top of the
+         model. The scatter kind reads `axes.x.title`. So every field was present and
+         correct and not one axis was labelled — a silent loss against the old baked
+         plots, which got their axis names from `qqnorm` for free. The test asserted
+         `model.xTitle === 'Theoretical quantiles'`, which was true, so it passed. **A
+         chart test that never renders the chart is testing the caller's spelling.**
+         Every axis assertion in the chart tests now draws the SVG and looks for the
+         text.
+
+      6. ~~**builtin-decisions' figures**~~ — done (2026-09-28). The *cost-effectiveness
+         plane* and both *sensitivity* figures are chart models. This closes the JS-drawn
+         half of the review; what is left is the R-drawn residue below.
+
+         The plane needed **point labels** on `scatter`: a CE plane of anonymous dots is
+         useless, and no kind could name a point. They are identities rather than
+         decoration, so they default to on when the model supplies them and a scatter of
+         ordinary observations neither draws them nor offers the control. Status became a
+         **group** rather than the hard-coded green/red it was — a legend the reader had to
+         infer, in the two colours a colourblind reader cannot separate.
+
+         The sweep needed a **connected scatter** (`model.line`: 61 samples of one
+         continuous function read as a cloud otherwise, and the shape IS the finding;
+         drawn in x order, because a polyline follows the order it is handed) and
+         **`guides`** — named, switchable, axis-aligned lines for the break-even crossing
+         and each point where the recommendation flips, which were hard-coded green and
+         amber before. A guide whose value falls off-scale is skipped rather than pinned
+         to the frame, because a line on the frame claims the crossing happens there.
+
+         The tornado got its **own kind**. Reusing `forest` was considered and rejected:
+         the geometry nearly matches, but the panel would then talk about studies, weights
+         and log scales, and the rows would be markers-with-whiskers rather than bars.
+         Widest-swing-first is enforced *in the kind*, not trusted to the caller — that
+         funnel outline is the only reason the chart reads at a glance, so a model in input
+         order would draw a correct chart of the wrong kind. `swing` is computed there too,
+         from |hi − lo|, so the ordering can never disagree with the bars it orders.
+
+         **What deliberately was NOT migrated: the live in-panel previews.** The same two
+         figures appear in the plugin's own panel, redrawing on every slider frame with a
+         marker for where the parameter currently sits. Routing that through the host
+         renderer would put a postMessage round-trip inside a drag handler, and a snapshot
+         of a pointer means nothing to a later reader. So the panel keeps its own drawing
+         and Output gets a model: two artefacts with different jobs, not one thing drawn
+         twice. The alternative — a `charts.render(model)` broker verb so a plugin could
+         preview with the host's renderer — is the right answer *if* a plugin ever wants a
+         non-interactive preview, and is worth building then rather than now.
+
+      **The decision tree stays baked, and that is the end state, not a backlog item.**
+      `builtin-decisions`' tree is a node-link diagram: a recursive layout, three node
+      shapes, probabilities on the edges and the optimal path picked out. Nothing in the
+      chart vocabulary applies to it — no axes, no scales, no palette, no legend — so a
+      `tree` kind would be a chart kind in name only, for exactly one caller. It already
+      has the one thing the frame gives ('opts.title' makes the title editable), and the
+      optimal branch is marked by stroke WIDTH as well as colour, so it is not colour-only.
+      This is the same judgement as the network graph and the map projections: the geometry
+      is the artefact.
+
+> These three were captured during the college tour and lived only in the memory
+> notes, so this section read as complete when it was not (spotted 2026-08-05).
 
 - [x] **A NUL in an imported column name reaches R as a raw byte (found 2026-10-17).**
       `rStr` escapes backslash, quote, LF and CR, and passes U+0000 through untouched, so
