@@ -266,8 +266,13 @@ export async function fromCodings(app, { metric = 'nominal' } = {}) {
   const rows = [];
   for (const d of docs) for (const k of codeIds) rows.push(coders.map((c) => (applied.get(c).has(`${d}\0${k}`) ? 1 : 0)));
 
-  await bindMatrix(app, rows, coders.length);
-  const stats = await compute(app, metric, 'unweighted', { bound: true });
+  // ONE round trip, with the matrix as a prelude rather than a previous call. Each
+  // `app.webr.run` is evaluated in a FRESH environment (core/webr-manager.js hands
+  // `captureR` an `env` built per call), so an assignment in one call is gone by the
+  // next — which is why this used to bind `vars` and then not find it. See `matrixSource`.
+  const stats = await compute(app, metric, 'unweighted', {
+    prelude: matrixSource(rows, coders.length),
+  });
   await render(app, stats, {
     caption: 'Inter-coder Agreement (from codings)',
     units: `${docs.length} document${docs.length === 1 ? '' : 's'} × ${codeIds.length} code${codeIds.length === 1 ? '' : 's'}`,
@@ -282,14 +287,31 @@ export async function fromCodings(app, { metric = 'nominal' } = {}) {
   });
 }
 
-/** Bind a plain rows×raters matrix into R as `vars` (the shape `compute` expects). */
-async function bindMatrix(app, rows, nRaters) {
+/**
+ * R source binding a plain rows×raters matrix as `vars` — the shape {@link compute} wants.
+ *
+ * **Returns source rather than running it, and that is the bug fix (#200).** This used to
+ * be `await app.webr.run('vars <- …')` followed by a separate `compute` call that
+ * referenced `vars`, and it could never have worked: `core/webr-manager.js` evaluates every
+ * run with `shelter.captureR(prelude + code, { env })` where `env` is built fresh per
+ * call, so an `<-` assignment does not outlive the call that made it. The symptom was
+ * `Error in eval(expr, env): object 'vars' not found`, and `compute` even took a
+ * `{ bound: true }` flag that it discarded with `void bound` — the contract was described
+ * and never plumbed.
+ *
+ * The variables path never hit this because its data arrives as a host-built PRELUDE
+ * inside the same evaluation. So this makes the codings path work the same way instead of
+ * relying on cross-call state that does not exist.
+ *
+ * Found by browser-testing #196, and confirmed pre-existing by running the identical
+ * scenario against the pre-#196 plugin, which failed the same way. It needs two coders to
+ * reach, which is why nobody had.
+ */
+function matrixSource(rows, nRaters) {
   const flatVals = [];
   for (let c = 0; c < nRaters; c++) for (const r of rows) flatVals.push(r[c]);
-  await app.webr.run(
-    `vars <- as.data.frame(matrix(c(${flatVals.join(',')}), nrow = ${rows.length}, ncol = ${nRaters}), `
-    + 'stringsAsFactors = FALSE)',
-  );
+  return `vars <- as.data.frame(matrix(c(${flatVals.join(',')}), nrow = ${rows.length}, ncol = ${nRaters}), `
+    + 'stringsAsFactors = FALSE)\n';
 }
 
 // --- shared computation + rendering -------------------------------------------
@@ -297,11 +319,11 @@ async function bindMatrix(app, rows, nRaters) {
 /**
  * Every coefficient in one R round-trip.
  *
- * `vars` is already bound — by the host for the variables path, by `bindMatrix` for the
+ * `vars` is bound inside THIS call — by the host's injected prelude for the variables
+ * path, by `matrixSource` for the
  * codings path — so both paths share one implementation and cannot drift.
  */
-async function compute(app, metric, weight, { bound = false } = {}) {
-  void bound;
+async function compute(app, metric, weight, { prelude = '' } = {}) {
   const rCode = `
     d <- as.data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     d <- d[stats::complete.cases(d), , drop = FALSE]   # listwise: a unit only counts if every rater scored it
@@ -324,7 +346,9 @@ async function compute(app, metric, weight, { bound = false } = {}) {
       kappaName = if (is.null(kap)) "" else as.character(kap$method),
       alpha = if (is.null(al)) NA_real_ else as.numeric(al$value)
     )`;
-  const { result } = await app.webr.run(rCode);
+  // The prelude goes in the SAME call: see `matrixSource` for why a prior call cannot
+  // leave anything behind. Empty for the variables path, whose `vars` the host injects.
+  const { result } = await app.webr.run(prelude + rCode);
   if (!result) throw new Error('R returned no result');
   return flat(result);
 }

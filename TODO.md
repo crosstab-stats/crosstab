@@ -2599,6 +2599,45 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#200 — `builtin-agreement.fromCodings` could never finish: `vars` bound in one R
+      call and read in the next. FIXED 2026-11-02.** Found by the #196 browser pass, which
+      is the only reason it was found: the run got past the coder check and R answered
+      `Error in eval(expr, env): object 'vars' not found`.
+
+      **Confirmed pre-existing before changing anything**, because #196 had just touched
+      this function and the honest question was whether I had broken it. Checked out the
+      plugin as it was at `e8e7c6d~1`, reloaded, ran the identical scenario: it failed the
+      same way. So this path had never worked.
+
+      **Why it could not have.** `core/webr-manager.js` evaluates every run as
+      `shelter.captureR(prelude + code, { env })` with `env` built **fresh per call**, so
+      an `<-` assignment does not outlive the call that made it. `bindMatrix` did
+      `app.webr.run('vars <- …')` and `compute` then referenced `vars` in a *separate*
+      run. The variables path was fine because the host injects its data as a prelude
+      inside the same evaluation — only the codings path tried to carry state across a
+      boundary that carries none.
+
+      **The tell was in the signature.** `compute` took `{ bound = false }` and
+      immediately did `void bound`. A flag that is documented, passed by a caller, and
+      then discarded reads as a contract honoured somewhere else, which is the most
+      expensive kind of dead code: it answers the question a reader would otherwise ask.
+
+      Fixed by making the binding a **prelude in the same call** — `bindMatrix` became
+      `matrixSource`, a pure function returning R source — so there is no cross-call state
+      to lose rather than a more careful attempt to preserve it.
+
+      **Why two years of tests never saw it:** the defect lives in the boundary *between*
+      two `webr.run` calls, not in either side's logic, and reaching it needs two coders
+      in one project — which nobody had, because the feature it gates had never been
+      exercised. This is the clearest case yet for the browser pass being a different
+      instrument from the suite, not a slower one.
+
+      6 tests pinning the shape (the arithmetic is `irr`'s job), including one asserting
+      the per-call `env` in `webr-manager` so the *justification* fails loudly if runs ever
+      start sharing an environment. One of them needed a comment-stripped copy of the
+      source: the fix's own doc comment names the old shape, so an absence check against
+      the raw file failed on the explanation of why the thing is absent.
+
 - [x] **#199 — anchor resolution outside a workspace mount. BUILT 2026-11-02.** The
       half #196 left behind, found the day after shipping it while answering the owner's
       "is there any open work left for you": a third-party plugin could now READ another
@@ -3018,9 +3057,27 @@ The record of what shipped and why. Kept in full, in the original sections.
       literal invisible characters: a file about invisible characters that contains them
       invisibly is hostile to the next reader, so all 25 are `\u` escapes.
 
-      **Not browser-tested yet** — the owner's pass: the picker still lists all sixty
-      built-ins with their names and categories, and adding a plugin from a file still
-      works.
+      **BROWSER PASS DONE 2026-11-02** (by me, in the owner's Chrome against the dev
+      server). The catalogue re-probed under the `CATALOG_VERSION` bump, so
+      `#recordCatalog` ran `identityText` over every built-in: **65** of them (not "sixty"
+      — I had been rounding) all still carry a name and a category, 0 blank, 0 null ids,
+      29 categories, and the picker rendered 65 rows.
+
+      Then an authored plugin with a hostile manifest, through the real install path:
+      - name `Freq⟨U+202E⟩uencies\nSAFE TO INSTALL␠␠␠` → stored as **`Frequencies SAFE TO
+        INSTALL`**. Override deleted, newline swept to a space, padding trimmed.
+      - category `Ot⟨U+200B⟩her` → stored as **`Other`**. Worth stating because the
+        consequence is one I had not: a zero-width space in a category produces a group
+        heading that looks identical to an existing one and is a SEPARATE group.
+      - ids `ct/probe-b`, `ct\nprobe-c`, `ct:probe-d`, `ct-café` — **all four refused**,
+        with the plugin failing in isolation and the app unaffected.
+      - and the refusal messages read `ct?probe-c` and `ct-caf?`: `idPreview` neutralising
+        the newline and the é, so the complaint cannot forge dialog lines in the very
+        `confirm()` the id was going to abuse. That was the subtlest part of the change and
+        it is confirmed working live.
+
+      Every probe plugin and record was removed afterwards; a reload shows 65 plugins, 0
+      datasets, 0 item records.
 
 - [x] **#196 — can a plugin read data written by another developer's plugin? DONE
       2026-11-01, and the default turned out not to be what anyone thought.** Raised by
@@ -3122,8 +3179,26 @@ The record of what shipped and why. Kept in full, in the original sections.
       `cross-plugin-reads` includes an owner-only collection that must stay shut, without
       which the suite would pass on a policy that returned true always.
 
-      **Not browser-tested yet** — the owner's pass: activate Agreement on a demo-qual
-      project with two coders and confirm κ/α still computes through `listFrom`.
+      **BROWSER PASS DONE 2026-11-02** (by me), and it found a separate pre-existing bug
+      — see #200.
+
+      Service level: `itemsPublic()` returned exactly the three CAQDAS collections and
+      nothing else. Then an authored plugin, whose owner token is **not** `builtin`, read
+      `builtin/segments` and got both codings with their quotes and the `dsId` field.
+
+      **The negative control is the part that matters:** the same caller asking for
+      `builtin/boundarySets` — the SAME owner token, differing only in the `read` flag —
+      got **0 records**, as did an undeclared collection name. So it is the declaration
+      doing the work and not the owner, which is the whole claim.
+
+      End to end through the real plugin sandbox: with codings from two fabricated coders,
+      `builtin-agreement.fromCodings` computed **66.7% agreement, Cohen's κ = 0.333,
+      Krippendorff's α = 0.389** — reaching that at all requires `readPublic` →
+      `publicCollections()` → `listFrom()` to have returned records inside the sandbox,
+      not merely in the host service. The numbers were checked independently rather than
+      accepted because they looked plausible: 3 docs × 2 codes = 6 units, agreement on 4
+      of 6 = 66.7%, and with both coders at 3 ones and 3 zeros, p_e = 0.5 gives
+      κ = (0.667 − 0.5)/0.5 = 0.333 exactly.
 
 - [x] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
       **BUILT 2026-10-14** (H1–H6). The CONTENT it was built for is done too — #184
