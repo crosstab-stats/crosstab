@@ -18,6 +18,122 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
+- [ ] **#201 — the Whisper weights are not cached like everything else.** Owner, 2026-11-02:
+      *"whisper cached same as everything else."* Found while auditing the board: the Whisper
+      epic's own "what the spike did not do" list was four-fifths stale, and this was the
+      item that survived.
+
+      `core/offline.js` mentions neither transcription nor whisper. So the model weights are
+      outside **"Make available offline"** and outside the air-gap vendoring step (#71),
+      while the R packages are inside both. The asymmetry is the bug: a user who ticks
+      "available offline", closes the laptop and opens it on a plane gets their analyses and
+      not their transcription — and finds out at the point of use, which for a field worker
+      is the worst possible moment.
+
+      **The shape is already settled**, which is why this is small. The Whisper entry
+      recorded the decision when the spike reported: *the numbers now favour the established
+      pattern — pinned CDN pull, cached by "make available offline", vendorable for air-gap
+      (#71) — because 39 MB is the same order as the R packages already fetched on demand,
+      and an explicit size-gated prompt would be heavier than the thing it guards.* So this
+      is wiring an existing mechanism to an existing asset, not designing a new one.
+
+      **What to work out, in rough order of difficulty:**
+      - **Which weights.** The shipping configuration is WASM q8 at ~39 MB
+        (`onnx-community/whisper-{base,small}`), and `core/transcribe*.js` can choose a
+        model. Caching every option would multiply the download; caching only the default
+        leaves a user who changed it worse off than before. The honest answer is probably
+        "whatever is currently selected, plus whatever has already been downloaded", which
+        is also the one that needs no new UI.
+      - **Where the prefetch belongs.** `core/offline.js` already resolves an R-package
+        CLOSURE before fetching (see the offline-caching work), so it has the shape for
+        "resolve a set, then fetch it". The model files are a set of URLs under a pinned CDN
+        path — simpler than the R closure, not harder.
+      - **Size reporting.** The offline toggle tells the user what it is about to download.
+        39 MB against the R packages is not nothing and must appear in that figure, or the
+        toggle lies about its own cost.
+      - **The air-gap script.** `scripts/vendor-assets.mjs` is the local-mode vendoring
+        path; the weights need to be vendorable the same way or `docs/OFFLINE.md` is wrong
+        for anyone transcribing.
+
+      Replaces the one open line left in the Whisper entry under *Deferred features*, which
+      now points here.
+
+- [ ] **#202 — inter-coder reliability: surface the DISAGREEMENTS, not just the coefficient.**
+      Owner, 2026-11-02: *"disagreements for inter-coder reliability."* The other half of
+      #148's item 4, which has carried the reasoning since 2026-10-20 and now points here.
+
+      A coefficient says **how much** two coders agree. It does not say **where** they
+      differed, and the where is the thing a team acts on: it is the input to a
+      coding-scheme revision, and κ alone cannot start that conversation. `grep -i disagree`
+      over `builtin-agreement` finds one sentence of prose in its own how-to and no code.
+
+      **The data exists and needs no new storage.** `fromCodings` already builds the
+      (document × code) × coder presence matrix — the disagreeing units are exactly the rows
+      where the coders differ. What is missing is a view.
+
+      **Newly reachable.** Until #200 (2026-11-02) `fromCodings` could not complete at all —
+      it bound `vars` in one R call and read it in the next. So this was not merely unbuilt,
+      it was unreachable: there was no coefficient to sit beside. Worth saying because the
+      entry has read as "a nice-to-have alongside a working feature" for a fortnight.
+
+      **What to work out:**
+      - **The unit to show.** The matrix row is (document × code), so a disagreement is
+        "coder A applied *Waiting* to document 7 and coder B did not". That is already
+        readable without any further joining.
+      - **Reaching the passage.** A coding carries an `anchor`, and resolving it from outside
+        a workspace is possible as of #199 — so a disagreement row can offer the text, with
+        drift reported honestly rather than cached offsets. This is the first real consumer
+        of that surface, which is also how it finally gets browser-tested.
+      - **Asymmetry is information.** "A coded it, B did not" is not the same finding as "A
+        and B chose different codes for the same passage", and collapsing them into
+        "disagreement" would throw away the distinction a scheme revision needs.
+      - **Where it renders.** Probably a table under the coefficients in the same analysis,
+        rather than a separate run: the coefficient is the reason anyone looks, and a
+        separate menu item would make the useful half the harder one to find.
+
+- [ ] **#203 — parameter controls for R-baked plots, where reasonable.** Owner, 2026-11-02:
+      *"the controls for r-baked plots where reasonable."* The last open piece of chart
+      Layer 3b, which now points here.
+
+      **"Where reasonable" is already drawn, and the 2026-10-15 investigation drew it.** Two
+      kinds of control, one defensible and one not:
+      - **Appearance** — title, caption, legend text and position, layer placement, plot
+        size. These are **already live and need no R**, because a baked figure is a chart
+        whose plot layer holds a foreign SVG (`core/charts/baked.js`, shipped 2026-10-16).
+        Nothing to do here, and this is the half most users actually edit.
+      - **Parameters** — a different k, another distance metric, a new projection, a
+        forecast horizon. These necessarily re-invoke R, and that is acceptable precisely
+        because the user expects a recompute when they change one. The investigation's own
+        test: *"a legend dropdown that takes three seconds and spins up R is worse than no
+        dropdown"* — which argues against appearance controls and FOR parameter ones.
+
+      So the scope is: a plugin declares the parameters its figure supports
+      (`controls: [{id, label, type, options}]`), the host renders them in the ⚙ panel
+      alongside the furniture controls that already exist, and a change calls back into the
+      plugin to redraw. The kind-level `controls` mechanism is already there
+      (`core/charts/runtime.js` resolves `kd.controls(model)`); what does not exist is a
+      channel for a PLUGIN to declare one on a figure it baked, and a re-invocation path.
+
+      **The constituency is five figures**, re-counted 2026-10-23 and unchanged: `sna`
+      network (force-directed layout), `spatial` choropleth (projection), `ordination` CA
+      biplot (arrow field) and MDS map, `ecology` NMDS. These are the ones whose geometry
+      genuinely is not ours.
+
+      **What to work out:**
+      - **Which parameters, per figure.** This is the real work and it is per-plugin
+        judgement, not a chart-layer question — "what would a reader of an NMDS plot
+        plausibly want to change" is an ecology question. Starting with one figure and one
+        parameter is better than five figures and a framework.
+      - **The re-invocation path.** `plotSize` already round-trips through the plugin, so
+        there is a precedent for "the host asks the plugin for a new figure". A parameter
+        change is the same shape with a different payload.
+      - **Honest latency.** An STL decomposition or an MDS ordination is seconds of compute.
+        A control that silently takes four seconds reads as a broken control; it needs the
+        busy state the rest of the app already uses.
+      - **What persists.** A reopened chart must either remember the parameter and the figure
+        it produced, or say it cannot redraw — the same rule as *output outlives its maker*.
+
+
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
       let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
@@ -1235,6 +1351,10 @@ bottom; they are the project's memory and are not summarised away.
         of that matrix where the coders differ. What it needs is a view — the units, who
         applied the code and who did not, and a way to reach the passage.
 
+        **Now tracked as [[#202]]** (owner asked for it 2026-11-02), scoped under *Now /
+        near-term*. The reasoning above stays here as the parent entry's; the plan lives
+        there, in one place.
+
   - [x] **5. Presence chips in the top bar. DONE — two-window verified during #156.** Live editors shown by initials/colour. Cheap
     add-on, but coupled to **live P2P** (`core/presence.js` broadcasts peers) — lands WITH
     the live co-authoring chunk, not before. The self-chip built in step 1 is its seed.
@@ -1742,12 +1862,12 @@ bottom; they are the project's memory and are not summarised away.
         cancellation are in both, and model choice is in all three of
         `core/transcribe{,-pool,-worker}.js`.
 
-        **The fifth is real and is the only open piece: the cache/offline integration.**
-        `core/offline.js` mentions neither transcription nor whisper, so the model weights
-        are not part of "Make available offline" and do not come along for an air-gap
-        install (#71) — while the R packages do. That gap matters more than its size
-        suggests: it is the difference between a field worker's offline device being able
-        to transcribe and silently not being able to.
+        **The fifth is real and is now tracked as [[#201]]** — the cache/offline
+        integration. `core/offline.js` mentions neither transcription nor whisper, so the
+        weights are outside "Make available offline" and outside the air-gap step (#71)
+        while the R packages are inside both. Scoped under *Now / near-term*; not repeated
+        here, because two descriptions of one job is how this file came to disagree with
+        itself four times in a week.
 
         The feasibility question was closed by the spike; the effort question is now closed
         too, except for that one item.
@@ -2075,7 +2195,15 @@ bottom; they are the project's memory and are not summarised away.
       unused. **No further Layer-2 migrations planned** — the remaining charts are either
       fine on the Layer 1 frame or need a new glyph; their optional body-interactivity is
       deferred to Layer 3 (below), not forced into the model.
-    - [ ] **Layer 3b — host-mediated controls for BAKED plots.** *(Distinct from Layer
+    - [~] **Layer 3b — host-mediated controls for BAKED plots. The LAYER half shipped
+      2026-10-16; the PARAMETER controls are now [[#203]]** (owner asked for them
+      2026-11-02, "where reasonable"). Appearance editing — title, caption, legend text and
+      position, layer placement, plot size — is live and needs no R, because a baked figure
+      is a chart whose plot layer holds a foreign SVG. What remains is a plugin-declared
+      parameter channel plus a re-invocation path, scoped under *Now / near-term*. The
+      investigation below is what drew the appearance/parameter line and stays here.
+
+      *(Distinct from Layer
       3a, which shipped 2026-08-06: that one is plugin-supplied model-driven KINDS. This
       is the story for figures whose geometry only R can produce — the 8 remaining
       `appendPlot` sites (re-counted 2026-10-24; asserted by
