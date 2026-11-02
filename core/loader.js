@@ -634,6 +634,13 @@ export class PluginLoader {
       list: (collection) => this.#services.itemsRead?.(ctx.id, collection) ?? [],
       put: (collection, id, fields) => this.#services.itemsWrite?.(ctx.id, collection, id, fields) ?? null,
       remove: (collection, id) => this.#services.itemsRemove?.(ctx.id, collection, id),
+      // Read a collection ANOTHER plugin declared `read: 'public'` (#196). The host
+      // decides; this is a pass-through with the caller's id stamped on it, exactly like
+      // the three above. Returns [] for a collection that is undeclared or owner-only —
+      // the same answer either way, so this cannot be used to enumerate what is installed.
+      listFrom: (owner, collection) => this.#services.itemsReadFrom?.(ctx.id, owner, collection) ?? [],
+      // What is readable at all, so a consumer need not hard-code an owner token.
+      publicCollections: () => this.#services.itemsPublic?.() ?? [],
     };
     const selection = {
       get: (collection) => this.#services.selectionRead?.get(ctx.id, collection) ?? null,

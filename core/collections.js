@@ -115,6 +115,25 @@ export function normalizeCollection(raw) {
       ? { collection: raw.parent.collection, field: raw.parent.field }
       : null,
     onConcurrentEdit: raw.onConcurrentEdit === 'surface' ? 'surface' : 'lww',
+    // Who may READ these records. Default restrictive, like `portable` above and for the
+    // same reason: a collection that says nothing must not be publishing anything.
+    //
+    // 'owner'  — only plugins in the declaring plugin's own data domain (see
+    //            {@link module:core/workspace-store~ownerToken}).
+    // 'public' — any ACTIVATED plugin may read them. An offer, not a transfer: writes
+    //            stay owner-only, so a public collection has exactly one author and any
+    //            number of readers.
+    //
+    // There is deliberately no third value for "readable by a plugin the user grants",
+    // which would need a consent prompt and a persisted grant per (reader, collection)
+    // pair. Nothing is asking for it, and an unused policy branch is a guard around a
+    // state that should not exist.
+    //
+    // 'public' never means readable by LESS than the user. Item records already reach the
+    // user through the timeline's `item:` tier, the sidebar inventory, the asset sweep and
+    // the script surfaces; a plugin cannot declare its data private FROM the person whose
+    // data it is, because that is a lock-in primitive and this project does not ship one.
+    read: raw.read === 'public' ? 'public' : 'owner',
   };
 }
 
@@ -210,6 +229,68 @@ export function assetRefDecls(decls) {
 export function childTravels(decl, rec) {
   if (decl?.scope === 'dataset') return false;
   return rec?.scope?.dsId == null;
+}
+
+/**
+ * Resolve a foreign collection ADDRESS — `(owner, id)` — against the declarations.
+ *
+ * The owner is passed as a separate argument rather than parsed out of one string on
+ * purpose: an owner token can itself contain a colon (`ns:acme.example`, `plugin:a:b`),
+ * so any single-string address form needs a parsing rule, and a parsing rule applied to a
+ * permission check is a place for a mismatch to hide.
+ *
+ * @param {Array<CollectionDecl & {owner: string}>} decls
+ * @param {string} owner
+ * @param {string} id
+ * @returns {(CollectionDecl & {owner: string})|null}
+ */
+export function findCollection(decls, owner, id) {
+  const o = String(owner ?? '');
+  const c = String(id ?? '');
+  if (!o || !c) return null;
+  return (decls ?? []).find((d) => d.owner === o && d.id === c) ?? null;
+}
+
+/**
+ * **The cross-plugin read policy** (#196), in one function.
+ *
+ * May an activated plugin read `(owner, collection)` that it does not own? Only if the
+ * declaring plugin said so. There is no caller argument because the answer does not
+ * depend on WHO is asking: `read: 'public'` is an offer to every activated plugin, which
+ * is the model the owner chose over a per-reader grant.
+ *
+ * Exported and pure so it can be tested against the real manifests. The check itself is
+ * two lines; the reason it lives here rather than inline in `core/app.js` is that
+ * `core/app.js` cannot be imported outside a browser, so a permission check inside it is
+ * one no test can reach — and a permission check nothing tests is a permission check that
+ * drifts.
+ *
+ * An undeclared collection and an owner-only one both answer `false`, deliberately: "no
+ * such collection" and "not yours to read" are indistinguishable to the caller, so this
+ * cannot be used to probe what a user has installed.
+ *
+ * @param {Array<CollectionDecl & {owner: string}>} decls  every declaration, core included
+ * @param {string} owner
+ * @param {string} collection
+ * @returns {boolean}
+ */
+export function canPluginRead(decls, owner, collection) {
+  const decl = findCollection(decls, owner, collection);
+  return !!decl && decl.read === 'public';
+}
+
+/**
+ * The collections any activated plugin may read — the discovery surface for cross-plugin
+ * reads. Without it `read: 'public'` would only be usable by someone who already knew to
+ * hard-code `builtin` and `segments`, which makes a generic consumer (an agreement
+ * plugin, a quantitiser) impossible to write against anything but the built-ins.
+ *
+ * @param {Array<CollectionDecl & {owner: string}>} decls
+ */
+export function publicCollections(decls) {
+  return (decls ?? [])
+    .filter((d) => d.read === 'public')
+    .map((d) => ({ owner: d.owner, collection: d.id, label: d.label, scope: d.scope, pluginId: d.pluginId ?? null }));
 }
 
 /** The collections that want to appear in the sidebar inventory, in declaration order. */

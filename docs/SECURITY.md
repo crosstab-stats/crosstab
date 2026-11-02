@@ -73,6 +73,73 @@ read/corrupt a just-imported blob; that is closed by construction now). Reads ad
 the caller's own owner by default; that is an *addressing* default, not a claimed
 barrier — nothing is promised to be unreadable, so nothing is over-promised.
 
+### Cross-plugin reads are an offer the owner makes, not a wall (#196)
+
+Item records (`app.items.*` — CAQDAS codings, map layers, agreement rater sets) follow
+the same rule as workspace state above, and the owner token that keys them was **fixed**
+in the same pass that wrote this section. Two things changed.
+
+**1. An owner token is an authority, and it was being read off a name.** Every plugin
+resolving to the same token can read *and write* the same records, and the token was
+derived from the qualified plugin id — which `core/loader.js~qualifyId` builds for
+collision avoidance (#102), not as a permission. For a URL plugin the prefix is the host
+out of the URL the user typed, which is evidence. For a file, authored or packaged plugin
+it was `manifest.author`, which the plugin asserts about itself. So a plugin installed
+from a file declaring `author: "Acme Labs"` landed in `ns:acme-labs` — Acme's own token —
+and could **write** their records; and every plugin that omitted the field shared one
+`ns:local` domain. Separately, a **site plugin** sets `builtin` so the manager catalogues
+it and refuses to delete it (#185), and the token tested that flag first, handing
+deployment-provided code the data domain of all sixty built-ins.
+
+The rule now: **verifiable provenance earns a shared namespace, unverifiable provenance
+gets isolation.** Built-in → `builtin`; site → `site:<namespace>`; URL → `ns:<host>`;
+file/authored/packaged → `plugin:<id>`. A developer who wants their own plugins to share
+a domain can serve them from their own host, where the namespace is a fact rather than an
+assertion. `manifest.author` still names and displays; it grants nothing. Pinned by
+`test/plugin-data-domain.test.mjs`, which asserts PAIRS rather than string shapes.
+
+**2. A collection may declare itself readable.** `collections[].read` is `'owner'`
+(default) or `'public'`; `'public'` means **any activated plugin may read it**, with no
+reading-side declaration and no per-reader consent prompt. Decided by the owner
+(2026-11-01) from three options. Writes stay owner-only on every surface — there is
+deliberately no `writeTo`, so a public collection has exactly one author and any number
+of readers, which is what keeps `reads[]` causal edges and `onConcurrentEdit` meaningful.
+The policy is one function, `canPluginRead` in `core/collections.js`, because
+`core/app.js` cannot be imported outside a browser and a permission check inside it is
+one no test can run.
+
+An undeclared collection and an owner-only one return the same empty answer, so this is
+not a way to enumerate what a user has installed.
+
+**CAQDAS codings, codes and codebooks are marked `read: 'public'`.** The case: inter-rater
+agreement and quantitising are legitimately other people's plugins, and until now they
+could read codings only because every built-in shares the `builtin` token — making
+"analyse someone else's codings" a built-in privilege by accident. `builtin-agreement`
+now reads them through the public path on exactly a third party's terms, which is also
+what keeps that path honest: if it breaks, a built-in breaks with it.
+
+#### Accepted residual risk (cross-plugin reads)
+
+- **A coding carries `quote`, a passage of participant speech, and activation discloses
+  nothing about data access.** A user who activates a third-party plugin gets no
+  indication from the manager that it can read coded interview material. A reading-side
+  manifest declaration shown on the plugin card was considered and **not** taken, to keep
+  the model one-sided and promptless.
+- **Scale of the exposure, stated precisely so it is not over- or under-sold.** It is
+  *not* that participant text becomes reachable: `app.data.*` already resolves the whole
+  active dataset for any activated plugin (see *Activated plugins are trusted with the
+  active dataset*), and a transcript lives in a dataset column, so a plugin that wanted
+  the words could always read them. What `read: 'public'` newly exposes is the
+  **analysis** — which passages were coded, under which codes, by which coder. That is
+  the researchers' judgement and their identities, not new participant data.
+- **Consistent with the existing model, not a weakening of it.** This file already states
+  that plugin state is *integrity, not secrecy*, and that codings have no claim to a
+  stronger secrecy class than the dataset they derive from. `read: 'public'` makes that
+  explicit and addressable instead of true-by-accident-of-the-owner-token.
+- **The mitigation that remains is the one that always mattered:** `app.web.get` needs
+  per-site user consent, so a plugin that reads codings still cannot send them off-device
+  without an explicit allow. (WebR egress remains the known gap — see "Deferred", #4.)
+
 ### Opening an untrusted bundle reconciles the active plugin set
 
 Opening a `.crosstab` drives the active plugin set to exactly the bundle's list —

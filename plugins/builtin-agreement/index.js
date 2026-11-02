@@ -159,6 +159,34 @@ export async function run(app, { vars, metric = 'nominal', weight = 'unweighted'
 // --- the CAQDAS path ----------------------------------------------------------
 
 /**
+ * Read a collection somebody else owns, through the cross-plugin read path (#196).
+ *
+ * Finds it by ASKING what is readable rather than naming an owner: `app.items.listFrom`
+ * needs an owner token, and hard-coding `builtin` would re-create the privilege this
+ * plugin just gave up — it would read CAQDAS's codings and no one else's. A second
+ * qualitative plugin that publishes `segments` is then readable on the same terms.
+ *
+ * When more than one owner publishes the same collection name, the first is taken and the
+ * rest are ignored. Deliberately not "merge them": codings from two different plugins are
+ * two different coding schemes, and averaging agreement across them would produce a
+ * number that describes nothing. `owner` is threaded into the follow-up read so the codes
+ * come from the same plugin as the codings.
+ *
+ * @param {object} app
+ * @param {string} collection
+ * @param {string} [owner] skip discovery and read this owner (for a second, paired read)
+ * @returns {Promise<{records: object[], owner: string|null}>}
+ */
+async function readPublic(app, collection, owner) {
+  if (owner) return { records: (await app.items.listFrom(owner, collection)) ?? [], owner };
+  const published = (await app.items.publicCollections?.()) ?? [];
+  const match = published.filter((c) => c.collection === collection);
+  if (!match.length) return { records: [], owner: null };
+  const from = match[0].owner;
+  return { records: (await app.items.listFrom(from, collection)) ?? [], owner: from };
+}
+
+/**
  * Agreement computed from this project's coding records.
  *
  * **The unit model, stated plainly because it is a judgement and not a fact:** one unit
@@ -177,7 +205,21 @@ export async function run(app, { vars, metric = 'nominal', weight = 'unweighted'
  * @param {{metric?: string}} inputs
  */
 export async function fromCodings(app, { metric = 'nominal' } = {}) {
-  const segments = await app.items.list('segments');
+  // Read the codings as ANY plugin would, not as a built-in (#196).
+  //
+  // This used to be `app.items.list('segments')`, which worked for one reason: every
+  // built-in shares the `builtin` owner token, so CAQDAS's records were already "ours".
+  // That made reading somebody else's codings a privilege of being shipped by us — the
+  // opposite of what #185 decided a plugin's standing should be, and it meant a
+  // third-party agreement plugin could not be written at all.
+  //
+  // CAQDAS now declares these collections `read: 'public'`, and this reads them through
+  // the cross-plugin path on exactly the terms a third party gets. So this function is
+  // also the proof that the path works: if `listFrom` ever stops returning codings, the
+  // built-in that needs them stops working too, rather than silently falling back to a
+  // privilege nobody noticed it had.
+  const codings = await readPublic(app, 'segments');
+  const segments = codings.records;
   if (!segments || !segments.length) {
     await app.results.appendError(
       'No codings in this project yet. Code some passages in the Coding workspace first — '
@@ -197,7 +239,12 @@ export async function fromCodings(app, { metric = 'nominal' } = {}) {
     return;
   }
 
-  const codes = new Map((await app.items.list('codes')).map((c) => [c.id, c.fields?.name || c.id]));
+  // Code NAMES come from the same owner as the codings — resolved from the discovery
+  // listing rather than assumed, so a different qualitative plugin publishing `segments`
+  // and `codes` would be read correctly instead of having CAQDAS's owner hard-coded.
+  const codes = new Map(
+    (await readPublic(app, 'codes', codings.owner)).records.map((c) => [c.id, c.fields?.name || c.id]),
+  );
   const docs = [...new Set(segments.map((s) => String(s.fields?.doc ?? '')).filter((d) => d !== ''))].sort();
   const codeIds = [...new Set(segments.map((s) => String(s.fields?.codeId ?? '')).filter(Boolean))].sort();
   if (!docs.length || !codeIds.length) {

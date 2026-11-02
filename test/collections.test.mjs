@@ -27,6 +27,10 @@ test('a full declaration normalises unchanged', () => {
     id: 'boundarySets', label: 'Map layers', labelField: 'fileName',
     summaryField: 'featureCount', sidebar: 'list', assetRefs: ['assetId'], portable: true,
     scope: 'project', rowRefs: [], anchorRefs: [], parent: null, onConcurrentEdit: 'lww',
+    // Cross-plugin reads (#196). Spelled out here rather than omitted so this test keeps
+    // doing its job: it exists to fail when a field is added to the shape, which is how
+    // the new one got reviewed instead of defaulted past.
+    read: 'owner',
   };
   assert.deepEqual(normalizeCollection(full), full);
 });

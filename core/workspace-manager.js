@@ -377,6 +377,16 @@ export class WorkspaceManager {
           return this.#items.list(owner, String(collection), { dsId: dsKey })
             .map((r) => ({ id: r.id, fields: r.fields, author: r.author ?? null }));
         },
+        // Cross-plugin read of a `read: 'public'` collection (#196). Delegated to the
+        // host rather than reading `this.#items` directly, which this mount could easily
+        // do: the permission lives in ONE place (core/app.js services.itemsReadFrom) so a
+        // mount and a compute frame cannot come to different conclusions about who may
+        // read a participant's words. The `reserved` check still applies — a tab claiming
+        // a built-in's id is refused every item operation, not just its own.
+        listFrom: (owner_, collection) => (reserved
+          ? []
+          : this.#services.itemsReadFrom?.(plugin.id, owner_, collection) ?? []),
+        publicCollections: () => this.#services.itemsPublic?.() ?? [],
       },
       // Anchors (#166): build and resolve a reference to a REGION of something the log
       // addresses. Host-owned deliberately — resolution of the standard selector kinds

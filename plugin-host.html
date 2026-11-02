@@ -271,7 +271,11 @@
             // Item records (#152): fine-grained state with real identity — undoable,
             // mergeable per record, and host-visible enough that a declared asset-ref
             // field can be reference-counted. `state.*` remains for config/atomic blobs.
-            items: makeNamespace('items', ['put', 'remove', 'list']),
+            // `listFrom(owner, collection)` reads a collection ANOTHER plugin declared
+            // `read: 'public'` (#196), and `publicCollections()` says which those are so a
+            // consumer need not hard-code an owner token. Reads only — there is no
+            // `writeTo`, so a public collection has one author and many readers.
+            items: makeNamespace('items', ['put', 'remove', 'list', 'listFrom', 'publicCollections']),
             // Anchors (#166): a reference to a REGION of something the log addresses —
             // a passage in a cell, a span of a recording, a rectangle on an image.
             // `text(text, start, end)` and `media(selector, assetId)` build one;

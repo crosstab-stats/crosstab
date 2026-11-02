@@ -169,6 +169,18 @@ export class PluginBroker {
       this.#dispatch['items.put'] = (collection, id, fields) => services.items.put(collection, id, fields);
       this.#dispatch['items.remove'] = (collection, id) => services.items.remove(collection, id);
       this.#dispatch['items.list'] = (collection) => services.items.list(collection);
+      // Cross-plugin reads (#196). `listFrom` names the OWNER as a separate argument
+      // because an owner token can contain a colon, so a single-string address would need
+      // a parsing rule — and a parsing rule in front of a permission check is somewhere
+      // for a mismatch to hide. Guarded individually rather than with the rest: a
+      // workspace mount and a compute frame both supply `items`, and a surface that has
+      // not been taught the cross-plugin methods must not advertise them.
+      if (services.items.listFrom) {
+        this.#dispatch['items.listFrom'] = (owner, collection) => services.items.listFrom(owner, collection);
+      }
+      if (services.items.publicCollections) {
+        this.#dispatch['items.publicCollections'] = () => services.items.publicCollections();
+      }
     }
     // Anchors (#166): build/resolve a reference to a REGION of an addressed thing.
     // Pure and host-owned — see the service in workspace-manager for why resolution

@@ -129,7 +129,11 @@ export const manifest = {
   // dataset and means nothing in another. The workspace-level `scope` flag can only say
   // one thing for both, which is why `collections[].scope` exists (see core/collections.js).
   collections: [
-    { id: 'codebooks', label: 'Codebooks', labelField: 'name', sidebar: 'list', scope: 'project', portable: true },
+    // `read: 'public'` — the coding SCHEME is the least private thing here and the most
+    // reusable: it is already `portable: true` because a codebook is meant to be handed
+    // to other people, and a plugin that reads codings cannot say what a code means
+    // without it.
+    { id: 'codebooks', label: 'Codebooks', labelField: 'name', sidebar: 'list', scope: 'project', portable: true, read: 'public' },
     // A code is COMPOSED INTO its codebook (#166): it travels with the book into the
     // library and dies with it, which is what makes a codebook the dictionary it claims
     // to be rather than a label with a foreign key pointed at it.
@@ -140,6 +144,8 @@ export const manifest = {
       sidebar: 'count',
       scope: 'project',
       parent: { collection: 'codebooks', field: 'codebookId' },
+      // Public with its codebook: a code name without its book is an orphan label.
+      read: 'public',
     },
     // `doc` holds a __ct_rid, so a dataset re-home can carry codings across (#151).
     // Declared, not inferred — the host cannot tell a row id from any other string.
@@ -164,6 +170,26 @@ export const manifest = {
       rowRefs: ['doc'],
       anchorRefs: ['anchor'],
       onConcurrentEdit: 'surface',
+      // `read: 'public'` (#196) — the owner's call, made with the cost stated.
+      //
+      // The CASE: inter-rater agreement and quantitising are legitimately other people's
+      // plugins, and until now they could only read these records because every built-in
+      // shares the `builtin` owner token. That made "analyse someone else's codings" a
+      // built-in privilege by accident, which is the opposite of what #185 decided a
+      // plugin's standing should be. Declaring it public is what makes the privilege
+      // unnecessary: `builtin-agreement` now reads these the same way a third party does.
+      //
+      // The COST, recorded because it is real and was accepted rather than missed: a
+      // coding carries `quote`, a passage of participant speech. Any ACTIVATED plugin can
+      // now read it, and activation discloses nothing about data access — so a user who
+      // installs a third-party plugin has no indication from the manager that it can read
+      // interview transcript. A reading-side declaration shown on the plugin card was
+      // considered and not taken: see docs/SECURITY.md, "Cross-plugin reads".
+      //
+      // What is NOT affected: writes stay owner-only, so no other plugin can alter or
+      // delete a coding, and the codebook-promotion rule above is untouched — a codebook
+      // handed to someone else still never carries codings.
+      read: 'public',
     },
   ],
   workspaces: [{

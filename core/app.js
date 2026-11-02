@@ -41,7 +41,8 @@ import { parseInviteLink } from './live-invite.js';
 import { findOrphans, itemRefSources, refsIn } from './asset-refs.js';
 import { openRehomeDialog } from './rehome-ui.js';
 import { declaredCollections, assetRefDecls, undeclaredItemsGuard, CORE_COLLECTIONS,
-         sidebarCollections, recordLabel, surfacesConflicts } from './collections.js';
+         sidebarCollections, recordLabel, surfacesConflicts, canPluginRead,
+         publicCollections } from './collections.js';
 import { LivePresence } from './live-presence.js';
 import { mergersFor } from './builtin-mergers.js';
 import { OutputExportService } from './output-export.js';
@@ -2108,6 +2109,39 @@ export async function boot(mounts) {
     itemStore.put(ownerToken(p), String(collection), itemId, fields ?? {}, { scope: { dsId } });
     return itemId;
   };
+  // Cross-plugin READS of a collection its owner declared `read: 'public'` (#196).
+  //
+  // The one place the policy is decided. Both item surfaces — the workspace mount and the
+  // compute frame — call this rather than carrying a copy, because two copies of a
+  // permission check is two chances to disagree about who may read a participant's words.
+  //
+  // Asymmetric on purpose: there is no `itemsWriteTo`. A public collection has exactly one
+  // author and any number of readers, which keeps `reads[]` causal edges and
+  // `onConcurrentEdit` meaningful — both assume a record has one writer.
+  services.itemsReadFrom = (pluginId, owner, collection) => {
+    const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
+    if (!p || !owner || !collection) return [];
+    // The policy is `canPluginRead` in core/collections.js, not a condition written out
+    // here: this module cannot be imported outside a browser, so a check inline here is a
+    // check no test can run. Undeclared and owner-only give the same answer there.
+    const allowed = canPluginRead(
+      [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)],
+      String(owner), String(collection),
+    );
+    if (!allowed) return [];
+    // Reading your OWN collection goes through `itemsRead`, which needs no declaration
+    // and no opt-in. Routed here anyway so a plugin can use one call for both.
+    return itemStore.list(String(owner), String(collection))
+      // `dsId` is in the shape here and not in `itemsRead`'s, because a foreign reader
+      // cannot resolve the TARGET's scope declaration for itself: without it, codings
+      // from every dataset arrive in one undifferentiated list and the reader has no way
+      // to tell which belong to the dataset it is analysing.
+      .map((r) => ({ id: r.id, fields: r.fields, author: r.author ?? null, dsId: r.scope?.dsId ?? null }));
+  };
+  // What is readable, so a consumer does not have to hard-code an owner token (#196).
+  services.itemsPublic = () => publicCollections(
+    [...CORE_COLLECTIONS, ...declaredCollections(plugins?.list() ?? [], ownerToken)],
+  );
   services.itemsRemove = (pluginId, collection, id) => {
     const p = plugins ? plugins.list().find((x) => x.id === pluginId) : null;
     if (!p || !collection || !id) return;

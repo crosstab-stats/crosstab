@@ -3021,6 +3021,109 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#196 — can a plugin read data written by another developer's plugin? DONE
+      2026-11-01, and the default turned out not to be what anyone thought.** Raised by
+      the owner while I was pitching a much smaller item ("a host read surface for coding
+      records"), and the reframing is the reason this went anywhere: *"It's not simply
+      'should another dev be able to write a plugin reading caqdas data.' I feel it is
+      more appropriate to rephrase as 'should any dev be able to read data written by
+      another dev?' Or more sharply 'can a plugin declare its data private and not
+      readable by plugins from other devs?' We allowed cross-plugin data sharing when the
+      plugins have the same origin. But we never explicitly answered the question of data
+      sharing between plugins from different sources."*
+
+      **The code already had an answer, and it was wrong in two directions at once.**
+      Every item path binds the owner from the CALLING plugin (`core/app.js`), so a plugin
+      can only reach its own owner token — cross-developer reading was impossible rather
+      than undecided. But the token itself was computed from the qualified plugin id,
+      which `qualifyId` builds for collision avoidance (#102), not as a permission:
+
+      - **`manifest.author` was an unverified authority grant.** A plugin installed from a
+        file declaring `author: "Acme Labs"` got `ns:acme-labs` — the token of Acme's own
+        plugins — and could read **and write** their records.
+      - **Everyone who omitted it shared one domain.** No author tag gives `local:<id>`,
+        hence `ns:local`, so unrelated file-installed plugins read and wrote each other's.
+      - **A site plugin got the built-ins' domain.** It sets `builtin` so the manager
+        catalogues it and will not delete it (#185), and the token tested that flag first.
+        #185 called a site plugin *provided, not privileged*; reading every built-in's
+        records is a privilege.
+
+      So "private by default" was not true for the most common third-party case, and
+      adding a sharing opt-in on top would have been a door in a wall with a hole in it.
+      **Fixed first** (`2fc5d9f`): verifiable provenance earns a shared namespace,
+      unverifiable provenance gets isolation — built-in → `builtin`, site →
+      `site:<namespace>`, URL → `ns:<host>`, file/authored/packaged → `plugin:<id>`. A
+      developer who wants their plugins to share data can serve them from their own host,
+      where the namespace is a fact instead of an assertion. `author` keeps naming and
+      display and grants nothing.
+
+      **What "private" conflates, separated before choosing anything.** Three questions
+      wear the word: who may WRITE (settled, owner-only, and it must stay absolute — the
+      log's causal `reads[]` edges and `onConcurrentEdit` both assume one writer per
+      record); who may READ among plugins (the actual question); and who may read among
+      the USER's own tools (already everything, and it must stay that way). The third is
+      the line worth writing down: **a plugin may not declare its data private from the
+      user.** Item records already reach the user through the timeline's `item:` tier, the
+      sidebar inventory, the asset sweep and the script surfaces. A plugin-enforced
+      private flag would be a lock-in primitive, which is against format-equality and
+      against output-outliving-its-maker. So the only knob a developer gets is "do I
+      publish this as readable" — an offer, never a seal.
+
+      **The owner's decisions**, from three options each:
+      - **Enforcement: the offer alone.** `collections[].read: 'public'` and any ACTIVATED
+        plugin may read. No reading-side declaration, no plugin-card disclosure, no
+        per-reader consent prompt. I recommended the disclosure variant; the owner chose
+        the simpler model and that is what shipped.
+      - **Codings: yes, readable.** Participant quotes included.
+
+      **The risk I raised, and why it reads smaller than I put it.** I flagged that a
+      coding carries a passage of participant speech and that activation discloses nothing
+      about data access. True, and recorded in docs/SECURITY.md. But reading that file
+      afterwards found it already says plugin state is *integrity, not secrecy*, and that
+      `app.data.*` resolves the whole active dataset for any activated plugin — and a
+      transcript IS a dataset column. So the words were always readable by anything the
+      user activated. What `read: 'public'` newly exposes is the **analysis**: which
+      passages were coded, under which codes, by which coder. The researchers' judgement
+      and identities, not new participant data. The decision was consistent with the
+      documented threat model, not a relaxation of it; I had the magnitude wrong, not the
+      direction.
+
+      **Built**: `collections[].read` (default `'owner'`, restrictive like `portable`);
+      `canPluginRead` as the single policy function, exported and pure because
+      `core/app.js` cannot be imported outside a browser and a permission check nothing
+      can test is one that drifts; `items.listFrom(owner, collection)` and
+      `items.publicCollections()` on both plugin surfaces, the mount and the compute
+      frame, each delegating to one host check rather than carrying a copy. The owner is a
+      separate argument, never parsed out of one address string — a token can contain a
+      colon (`ns:acme.example`, `plugin:acme-labs:evil`), and a parsing rule in front of a
+      permission check is somewhere for a mismatch to hide. Three places had to learn the
+      new methods: the service, the broker dispatch table and the in-frame namespace list
+      in `plugin-host.html`, the last of which fails as `undefined is not a function` at
+      the plugin's call site rather than as a thrown error.
+
+      **`builtin-agreement` now reads codings the way a third party would**, by asking
+      `publicCollections()` what is readable instead of naming `builtin`. That is the
+      proof as well as the cleanup: if the public path breaks, a built-in breaks with it
+      instead of silently falling back to a privilege nobody remembered it had.
+
+      **Deliberately not built: a "user grants plugin X access to collection Y" state.**
+      It needs a consent UI and a persisted grant per (reader, collection) pair, and
+      nothing is asking for it. An unused policy branch is a guard around a state that
+      should not exist.
+
+      **BREAKING, pre-release, per the no-migration policy:** records written by a
+      file/authored/packaged plugin under `ns:local` or `ns:<author>`, and a site plugin's
+      records under `builtin`, are not reachable at the new token.
+
+      23 tests across two new files, both negative-controlled — `plugin-data-domain`
+      asserts PAIRS of plugins rather than token spellings (8 of its 12 fail against the
+      old code; the 4 that pass are the intended-sharing cases), and
+      `cross-plugin-reads` includes an owner-only collection that must stay shut, without
+      which the suite would pass on a policy that returned true always.
+
+      **Not browser-tested yet** — the owner's pass: activate Agreement on a demo-qual
+      project with two coders and confirm κ/α still computes through `listFrom`.
+
 - [x] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
       **BUILT 2026-10-14** (H1–H6). The CONTENT it was built for is done too — #184
       closed 2026-11-01 with 173 topics across 64 plugins and core, none of them a stub.
