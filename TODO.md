@@ -18,162 +18,6 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [~] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
-      **BUILT 2026-10-14** (H1–H6). The CONTENT it was built for is done too — #184
-      closed 2026-11-01 with 173 topics across 64 plugins and core, none of them a stub.
-      **What remains is screenshots alone, and they are the OWNER'S to do by hand
-      (owner, 2026-11-01): "I'll have to go through the how-to entries later and
-      create/store screenshots as needed."** Not open engineering work, and not to be
-      picked up as such — capturing an image means deciding which moment of a UI is worth
-      freezing, which is an authoring judgement, and the person writing the topic is the
-      one holding it.
-
-      The mechanism is finished and waiting: `renderHowto` takes
-      `![alt](asset:name.png)`, local declared assets only, never a URL (an external
-      image would fetch the moment a topic opened — a beacon, and a broken box in an
-      air-gapped deployment), with `screen: 'full' | 'small' | 'any'` variants, required
-      alt text and tap-to-enlarge. Nothing in the build is blocked on it.
-      The design settled with the owner before any code. #184 (the comprehensive guide)
-      is the CONTENT; this is the mechanism it and everyone else writes into.
-
-      **The principle.** *"If our Help ▸ How-to list only covered builtin plugins that's
-      a form of privilege. And one North Star of this project is all are equal."* So there
-      is ONE contributor API and core is just another client of it — the `menus.register`
-      pattern. Core's "how do I import an SPSS file" reaches the index through exactly the
-      two manifest fields a third-party plugin uses. Equality that lives in the mechanism
-      cannot erode the first time it is inconvenient.
-
-      **Index in the manifest, body in a sidecar.** The owner's call, and it is right:
-      *"it does no good to tell an air-gap user how to use a plugin they can't get to."*
-      Docs ship WITH the plugin, resolved through the existing `loader.resolveAsset` path
-      (the plugin's own `.ctplugin` bundle, or a same-origin sibling), so doc availability
-      tracks plugin availability by construction. The manifest carries only
-      `howtoIndex: [{id, title, category, keywords[], needs[], file?}]` plus `howtoFile`.
-
-      Measured before deciding (the owner asked for the pathological case): 85 plugins
-      × 7 topics + 5 × 50 = **845 topics, 192 KiB, 0.9 ms to parse, 14 ms to render,
-      1.9 ms to search**, no quota error against the ~5 MB localStorage ceiling (current
-      real usage 263 KiB). 4,500 topics still opens in ~120 ms. **So NO CAP** — naive
-      rendering holds to roughly 5,000 topics, and past that the answer is virtualisation
-      (the data grid already does it), not a limit on what authors may write.
-
-      **Decisions, all the owner's:**
-      - Body is markdown; the sidecar's `--- id: <topic>` delimiter MUST match a declared
-        index id, and a mismatch is surfaced to the author rather than silently dropped.
-      - One file per plugin by default, with an optional per-topic `file` override — so a
-        50-topic chart plugin can split without forcing a 3-topic plugin to. Keep an eye on
-        latency here; a packaged plugin fetches nothing, but a URL plugin on cellular pays
-        a round trip.
-      - Search covers titles/categories/keywords ONLY, and says so. Full-text over bodies
-        would mean fetching every sidecar, which defeats the split. Authors are encouraged
-        to be *"a tad spammy"* with keywords.
-      - `needs: [pluginId]` renders as an inline **Enable** button — *"an excellent way to
-        let the user go from 'huh, that wasn't the one I wanted' to 'ah, there's the one I
-        meant to use'"*.
-      - Attribution ("from *Survival Analysis*") on every row; sorted by category and
-        title, NEVER by origin. Attribution is not privilege; ordering would be.
-      - Failure is visible and specific — a missing bundle, an unreadable sidecar and an
-        unmatched delimiter each say which. A blank panel reads as "no documentation".
-
-      **Links and images.** This is the first time plugin-authored content may point
-      anywhere: `renderMiniMarkdown` has no link grammar and `sanitize-html` allows no
-      `<a>` and strips every URL-bearing attribute. The sanitiser **stays closed** — the
-      how-to renderer builds the anchor element directly instead of emitting HTML to be
-      sanitised, and it is a SEPARATE renderer so link support cannot leak into the plugin
-      result notes that share `renderMiniMarkdown`. Rules: `http:`/`https:` only (the owner:
-      *"not everyone is using https"*), anything else rendered as plain text;
-      `rel="noopener noreferrer"`; and the destination host shown in the link text, which
-      is what actually defeats phishing — a link captioned "SPSS documentation" pointing at
-      `evil.tld` indicts itself.
-
-      Images are **local declared assets only, never a remote URL**: an external link is
-      user-initiated, an external image fetches the moment the topic opens — a beacon, and
-      a broken box in an air-gapped deployment. Screen-awareness means more than scaling,
-      because small-screen mode is not a narrower desktop (the menubar becomes a hamburger),
-      so a desktop screenshot shows a UI a phone user does not have: each image declares
-      `screen: 'full' | 'small' | 'any'` and the host picks the best match. Alt text
-      required. Tap to enlarge. **Screenshots rot** — nothing in the build will say so — so
-      favour prose where prose works.
-
-      **Navigation (the owner's spec, browser-history semantics).** A top bar always
-      visible: Index · Back · the topic being viewed · Close. Index PUSHES rather than
-      clears, so `Index→A→B→Index→C` then Back three times lands on A. Consecutive Index
-      entries collapse. Close preserves state so the reader can act on a step and come
-      back to where they were; a reload starts at the index.
-
-      **Entry points:** Help ▸ How to…, the ⓘ in the plugin list, and the same ⓘ inside
-      an analysis dialog — help where the question is actually asked.
-
-      **The Syntax guide is rebuilt on this, not kept beside it** (owner's defect list):
-      it opens fully expanded instead of as an index; has no top bar; puts the core syntax
-      reference ABOVE the filter box; shows one card per PLUGIN so the pie chart's entry
-      carries bar-chart notes; is not small-screen aware (*"close button is so small I
-      missed tapping it five times in a row"*); and cannot cross-link. The command
-      reference becomes core-owned topics in the same index, and each runnable menu ITEM
-      gets its own topic carrying its call form — which is what kills the mixed-topic
-      problem rather than reformatting it.
-
-      **Sweep included:** that close button is 16×19px because it is styled INLINE, which
-      is also why no small-screen rule could reach it — the third instance of this exact
-      pattern (the workspace "Restart" at 22px, the Syntax editor's font, now this). Six
-      inline-styled controls remain in `core/` (2 in data-views.js, 2 in app.js, 1 each in
-      syntax-guide.js and r-script.js). Close the class, not the instance.
-      See [[accessibility-baseline]].
-
-      **Shipped.** `core/howto.js` (index + sidecar contract + the reader's position),
-      `howto-render.js` (the link boundary), `howto-library.js` (fetch/cache/failure),
-      `howto-ui.js` (the overlay), `howto-core.js` + `docs/howto-core.md` (the host's own
-      topics, declared the way a plugin's are). Suite 1834 → 1881.
-
-      **92 topics on first open**, measured in the app: 15 syntax commands migrated out of
-      the old dialog, 10 authored core topics, 3 authored for `builtin-frequencies` as the
-      reference implementation, and the rest bridged automatically from the one-line
-      `howto` strings 64 built-ins already carried. That bridge is what makes the guide
-      useful on day one instead of after a 64-manifest rewrite; writing a real
-      `howtoIndex` supersedes it.
-
-      **All three entry points are in:** Help ▸ How to…, the ⓘ beside a plugin (launcher
-      AND plugin manager, through one shared bundle of ambient deps — see below), and the ⓘ
-      on an analysis dialog, which resolves the menu item's declared `howto` or falls back
-      to the plugin's entry page through the SAME function the plugin row uses.
-
-      **Every built-in is now documented (2026-10-14).** 64 plugins, 135 authored topics,
-      one page per MENU ITEM — so Plots' eleven charts, Bootstrap's five methods and Text
-      analytics' seven tools each have their own page and their own dialog ⓘ instead of
-      sharing one note. With core's 26, the index holds **161 topics**. The legacy
-      one-line bridge is therefore no longer load-bearing for the built-ins; it remains for
-      third-party plugins that have not written an index.
-
-      Measured in the app after the final batch: catalogue **109.7 KiB**, parsed in
-      **0.47 ms** on every boot — well inside the budget the owner's pathological test
-      established, and a third of what the synthetic 845-topic run cost.
-
-      **The one-file-per-plugin question, answered with numbers.** Plots is the worst case
-      at twelve sections in one sidecar: the cold open (fetch + parse the whole file) is
-      **7.2 ms**, and the other eleven topics then cost **7.1 ms between them** from cache.
-      All twelve sections parse distinct — no bleed — which is the defect this replaced
-      (the pie chart's entry used to carry bar-chart notes). The per-topic `file` override
-      stays available if a plugin ever outgrows one file.
-
-      **Not to do — the owner's, by hand (2026-11-01).** Screenshots: the renderer
-      handles `![alt](asset:name.png)` with `.small` variants and no topic uses one yet.
-      This is deliberately not on anyone's build list. They rot the moment a dialog
-      changes, so they are worth adding only where prose genuinely fails — a timeline
-      drag, a region box, a queue mid-run — and that call belongs to whoever is writing
-      the topic.
-
-      **A drift the owner caught, worth keeping.** The launcher's ⓘ was inert while the
-      plugin manager's worked, and their question was the right one: *"I thought we unified
-      these to avoid this kind of drift."* #177 HAD unified the rendering — deleting the
-      About dialog fixed both screens at once. What stayed duplicated was the WIRING: each
-      site assembled its own options object, so the picker's arguments were two kinds that
-      looked alike, **ambient** (`plugins`, `onHowto` — identical everywhere) and
-      **per-site** (`mode`, `selected`, `headLead`). Passing the ambient kind per site means
-      each new one must be remembered N times, and N had become 2 without anything marking
-      the moment. One `pluginPickerHost` bundle now, spread at both sites; the tests pin the
-      SHAPE of the call rather than the dependency that happened to drift.
-
-
 - [~] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
       shipped the project manager and is closed; these rode along inside its entry and
       would have been closed with it. None blocks anything — they are the difference
@@ -3141,6 +2985,173 @@ forecast is waiting on.
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
+      **BUILT 2026-10-14** (H1–H6). The CONTENT it was built for is done too — #184
+      closed 2026-11-01 with 173 topics across 64 plugins and core, none of them a stub.
+      **What remains is screenshots alone, and they are the OWNER'S to do by hand
+      (owner, 2026-11-01): "I'll have to go through the how-to entries later and
+      create/store screenshots as needed."** Not open engineering work, and not to be
+      picked up as such — capturing an image means deciding which moment of a UI is worth
+      freezing, which is an authoring judgement, and the person writing the topic is the
+      one holding it.
+
+      The mechanism is finished and waiting: `renderHowto` takes
+      `![alt](asset:name.png)`, local declared assets only, never a URL (an external
+      image would fetch the moment a topic opened — a beacon, and a broken box in an
+      air-gapped deployment), with `screen: 'full' | 'small' | 'any'` variants, required
+      alt text and tap-to-enlarge. Nothing in the build is blocked on it.
+      The design settled with the owner before any code. #184 (the comprehensive guide)
+      is the CONTENT; this is the mechanism it and everyone else writes into.
+
+      **The principle.** *"If our Help ▸ How-to list only covered builtin plugins that's
+      a form of privilege. And one North Star of this project is all are equal."* So there
+      is ONE contributor API and core is just another client of it — the `menus.register`
+      pattern. Core's "how do I import an SPSS file" reaches the index through exactly the
+      two manifest fields a third-party plugin uses. Equality that lives in the mechanism
+      cannot erode the first time it is inconvenient.
+
+      **Index in the manifest, body in a sidecar.** The owner's call, and it is right:
+      *"it does no good to tell an air-gap user how to use a plugin they can't get to."*
+      Docs ship WITH the plugin, resolved through the existing `loader.resolveAsset` path
+      (the plugin's own `.ctplugin` bundle, or a same-origin sibling), so doc availability
+      tracks plugin availability by construction. The manifest carries only
+      `howtoIndex: [{id, title, category, keywords[], needs[], file?}]` plus `howtoFile`.
+
+      Measured before deciding (the owner asked for the pathological case): 85 plugins
+      × 7 topics + 5 × 50 = **845 topics, 192 KiB, 0.9 ms to parse, 14 ms to render,
+      1.9 ms to search**, no quota error against the ~5 MB localStorage ceiling (current
+      real usage 263 KiB). 4,500 topics still opens in ~120 ms. **So NO CAP** — naive
+      rendering holds to roughly 5,000 topics, and past that the answer is virtualisation
+      (the data grid already does it), not a limit on what authors may write.
+
+      **Decisions, all the owner's:**
+      - Body is markdown; the sidecar's `--- id: <topic>` delimiter MUST match a declared
+        index id, and a mismatch is surfaced to the author rather than silently dropped.
+      - One file per plugin by default, with an optional per-topic `file` override — so a
+        50-topic chart plugin can split without forcing a 3-topic plugin to. Keep an eye on
+        latency here; a packaged plugin fetches nothing, but a URL plugin on cellular pays
+        a round trip.
+      - Search covers titles/categories/keywords ONLY, and says so. Full-text over bodies
+        would mean fetching every sidecar, which defeats the split. Authors are encouraged
+        to be *"a tad spammy"* with keywords.
+      - `needs: [pluginId]` renders as an inline **Enable** button — *"an excellent way to
+        let the user go from 'huh, that wasn't the one I wanted' to 'ah, there's the one I
+        meant to use'"*.
+      - Attribution ("from *Survival Analysis*") on every row; sorted by category and
+        title, NEVER by origin. Attribution is not privilege; ordering would be.
+      - Failure is visible and specific — a missing bundle, an unreadable sidecar and an
+        unmatched delimiter each say which. A blank panel reads as "no documentation".
+
+      **Links and images.** This is the first time plugin-authored content may point
+      anywhere: `renderMiniMarkdown` has no link grammar and `sanitize-html` allows no
+      `<a>` and strips every URL-bearing attribute. The sanitiser **stays closed** — the
+      how-to renderer builds the anchor element directly instead of emitting HTML to be
+      sanitised, and it is a SEPARATE renderer so link support cannot leak into the plugin
+      result notes that share `renderMiniMarkdown`. Rules: `http:`/`https:` only (the owner:
+      *"not everyone is using https"*), anything else rendered as plain text;
+      `rel="noopener noreferrer"`; and the destination host shown in the link text, which
+      is what actually defeats phishing — a link captioned "SPSS documentation" pointing at
+      `evil.tld` indicts itself.
+
+      Images are **local declared assets only, never a remote URL**: an external link is
+      user-initiated, an external image fetches the moment the topic opens — a beacon, and
+      a broken box in an air-gapped deployment. Screen-awareness means more than scaling,
+      because small-screen mode is not a narrower desktop (the menubar becomes a hamburger),
+      so a desktop screenshot shows a UI a phone user does not have: each image declares
+      `screen: 'full' | 'small' | 'any'` and the host picks the best match. Alt text
+      required. Tap to enlarge. **Screenshots rot** — nothing in the build will say so — so
+      favour prose where prose works.
+
+      **Navigation (the owner's spec, browser-history semantics).** A top bar always
+      visible: Index · Back · the topic being viewed · Close. Index PUSHES rather than
+      clears, so `Index→A→B→Index→C` then Back three times lands on A. Consecutive Index
+      entries collapse. Close preserves state so the reader can act on a step and come
+      back to where they were; a reload starts at the index.
+
+      **Entry points:** Help ▸ How to…, the ⓘ in the plugin list, and the same ⓘ inside
+      an analysis dialog — help where the question is actually asked.
+
+      **The Syntax guide is rebuilt on this, not kept beside it** (owner's defect list):
+      it opens fully expanded instead of as an index; has no top bar; puts the core syntax
+      reference ABOVE the filter box; shows one card per PLUGIN so the pie chart's entry
+      carries bar-chart notes; is not small-screen aware (*"close button is so small I
+      missed tapping it five times in a row"*); and cannot cross-link. The command
+      reference becomes core-owned topics in the same index, and each runnable menu ITEM
+      gets its own topic carrying its call form — which is what kills the mixed-topic
+      problem rather than reformatting it.
+
+      **Sweep included:** that close button is 16×19px because it is styled INLINE, which
+      is also why no small-screen rule could reach it — the third instance of this exact
+      pattern (the workspace "Restart" at 22px, the Syntax editor's font, now this). Six
+      inline-styled controls remain in `core/` (2 in data-views.js, 2 in app.js, 1 each in
+      syntax-guide.js and r-script.js). Close the class, not the instance.
+      See [[accessibility-baseline]].
+
+      **Shipped.** `core/howto.js` (index + sidecar contract + the reader's position),
+      `howto-render.js` (the link boundary), `howto-library.js` (fetch/cache/failure),
+      `howto-ui.js` (the overlay), `howto-core.js` + `docs/howto-core.md` (the host's own
+      topics, declared the way a plugin's are). Suite 1834 → 1881.
+
+      **92 topics on first open**, measured in the app: 15 syntax commands migrated out of
+      the old dialog, 10 authored core topics, 3 authored for `builtin-frequencies` as the
+      reference implementation, and the rest bridged automatically from the one-line
+      `howto` strings 64 built-ins already carried. That bridge is what makes the guide
+      useful on day one instead of after a 64-manifest rewrite; writing a real
+      `howtoIndex` supersedes it.
+
+      **All three entry points are in:** Help ▸ How to…, the ⓘ beside a plugin (launcher
+      AND plugin manager, through one shared bundle of ambient deps — see below), and the ⓘ
+      on an analysis dialog, which resolves the menu item's declared `howto` or falls back
+      to the plugin's entry page through the SAME function the plugin row uses.
+
+      **Every built-in is now documented (2026-10-14).** 64 plugins, 135 authored topics,
+      one page per MENU ITEM — so Plots' eleven charts, Bootstrap's five methods and Text
+      analytics' seven tools each have their own page and their own dialog ⓘ instead of
+      sharing one note. With core's 26, the index holds **161 topics**. The legacy
+      one-line bridge is therefore no longer load-bearing for the built-ins; it remains for
+      third-party plugins that have not written an index.
+
+      Measured in the app after the final batch: catalogue **109.7 KiB**, parsed in
+      **0.47 ms** on every boot — well inside the budget the owner's pathological test
+      established, and a third of what the synthetic 845-topic run cost.
+
+      **The one-file-per-plugin question, answered with numbers.** Plots is the worst case
+      at twelve sections in one sidecar: the cold open (fetch + parse the whole file) is
+      **7.2 ms**, and the other eleven topics then cost **7.1 ms between them** from cache.
+      All twelve sections parse distinct — no bleed — which is the defect this replaced
+      (the pie chart's entry used to carry bar-chart notes). The per-topic `file` override
+      stays available if a plugin ever outgrows one file.
+
+      **Not to do — the owner's, by hand (2026-11-01).** Screenshots: the renderer
+      handles `![alt](asset:name.png)` with `.small` variants and no topic uses one yet.
+      This is deliberately not on anyone's build list. They rot the moment a dialog
+      changes, so they are worth adding only where prose genuinely fails — a timeline
+      drag, a region box, a queue mid-run — and that call belongs to whoever is writing
+      the topic.
+
+      **A drift the owner caught, worth keeping.** The launcher's ⓘ was inert while the
+      plugin manager's worked, and their question was the right one: *"I thought we unified
+      these to avoid this kind of drift."* #177 HAD unified the rendering — deleting the
+      About dialog fixed both screens at once. What stayed duplicated was the WIRING: each
+      site assembled its own options object, so the picker's arguments were two kinds that
+      looked alike, **ambient** (`plugins`, `onHowto` — identical everywhere) and
+      **per-site** (`mode`, `selected`, `headLead`). Passing the ambient kind per site means
+      each new one must be remembered N times, and N had become 2 without anything marking
+      the moment. One `pluginPickerHost` bundle now, spread at both sites; the tests pin the
+      SHAPE of the call rather than the dependency that happened to drift.
+
+      **CLOSED 2026-11-01.** Mechanism shipped 2026-10-14; the content it was built for
+      closed with #184 the same day this did. Measured rather than asserted before
+      closing: 64 of 64 plugins carry a `howtoIndex`, 173 topics across plugins and core,
+      ~17k words, ZERO topics indexed without prose, zero stubs under 180 characters,
+      zero prose sections nothing indexes.
+
+      **The only thing left is screenshots, and they are the owner's to do by hand** —
+      not open engineering work, recorded above with their reasoning. The renderer has
+      supported `![alt](asset:name.png)` since the day this shipped and no topic uses
+      one; what is missing is a judgement about which moment of a UI is worth freezing,
+      which belongs to whoever writes the topic. Nothing is blocked on it.
 
 - [x] **#194 — a transcription worker that dies silently stalls its job forever. BUILT
       2026-10-29**, at the owner's request: *"I can see some field worker trying this on a
