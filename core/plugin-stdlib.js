@@ -120,6 +120,42 @@ export function slug(s, { max = 60, fallback = 'crosstab-output' } = {}) {
 }
 
 /**
+ * Strip the two things a JavaScript string can hold that the rest of the pipeline cannot.
+ *
+ * Not a sanitiser in the security sense — it removes nothing for being rude, only for
+ * being unrepresentable. Everything else is left exactly as the user or the file gave it,
+ * because altering data to make it tidy is how you lose the thing you were asked to keep.
+ *
+ * **U+0000.** An R character string cannot contain a NUL at all; there is no escape to
+ * emit, so `rStr` had nothing it could do and emitted a raw byte that R's parser then
+ * rejected. Found 2026-10-17 in an imported column name, where a NUL means the file is
+ * damaged or binary. The failure was loud, which is why it was recorded rather than
+ * patched — but it was loud in the WRONG PLACE: an R parse error about generated source,
+ * minutes later, naming nothing the user recognises.
+ *
+ * **Lone surrogates.** The worse of the two, and the one nobody had filed. A string
+ * holding an unpaired `\uD800` survives `JSON.stringify`, `JSON.parse` and
+ * `structuredClone` intact — so it rides through a save, through IndexedDB and across a
+ * sync to a peer, looking fine the whole way. Then the first thing that UTF-8 encodes it
+ * — writing a file, posting to WebR, any `TextEncoder` — silently replaces it with
+ * U+FFFD. Measured, both ways round. That is two peers disagreeing about a value with
+ * nothing anywhere reporting a problem, which is the failure mode this project treats as
+ * worse than a crash.
+ *
+ * Control characters other than NUL are deliberately KEPT: they are legal in both UTF-8
+ * and an R string, `rStr` already escapes the ones that would break a line, and a tab
+ * inside a label is data rather than damage.
+ */
+export function safeText(s) {
+  return String(s ?? '')
+    // eslint-disable-next-line no-control-regex -- the point is the control character
+    .replace(/\u0000/g, '')
+    // A surrogate NOT part of a valid pair, from either side.
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '\uFFFD')
+    .replace(/(^|[^\uD800-\uDBFF])([\uDC00-\uDFFF])/g, '$1\uFFFD');
+}
+
+/**
  * A user-typed DISPLAY name, bounded and free of control characters.
  *
  * Not {@link slug}: that makes a filename, lowercasing and dashing everything. This
@@ -136,10 +172,15 @@ export function slug(s, { max = 60, fallback = 'crosstab-output' } = {}) {
  * stray newline do not weld together.
  */
 export function cleanName(s, { max = 200, fallback = '' } = {}) {
-  const cleaned = String(s ?? '')
+  // Order matters. The control-character sweep runs FIRST, so a NUL becomes a SPACE like
+  // every other control character — `safeText` would delete it outright and weld the
+  // words either side together, which is the one thing this function exists to prevent.
+  // `safeText` then takes the surrogates, which are not a formatting problem and have no
+  // "either side" to protect.
+  const cleaned = safeText(String(s ?? '')
     // C0, DEL + C1, and the two Unicode line separators — which are not line breaks to
     // `split('\n')` but are whitespace to a regex, so they break tokenisers quietly.
-    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, ' '))
     .replace(/\s+/g, ' ')
     .trim();
   return (cleaned.length > max ? cleaned.slice(0, max).trim() : cleaned) || fallback;
@@ -412,7 +453,12 @@ export function metaMap(meta) {
  * taste: twenty-eight plugins were missing a fix that two had already made locally.
  */
 export function rStr(s) {
-  return `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}"`;
+  // `safeText` FIRST, because the rest of this function is escaping — and a NUL has no
+  // escape. R cannot hold one, so emitting it produced source R's own parser rejected:
+  // loud, but minutes downstream and naming generated code rather than the column it
+  // came from. There is no faithful encoding to choose between here; the only options
+  // were "drop it" and "emit a file R cannot read".
+  return `"${safeText(String(s)).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}"`;
 }
 
 // =============================================================================

@@ -44,6 +44,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
+import { safeText } from './plugin-stdlib.js';
 import { quoteIdent } from './duckdb-manager.js';
 import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
@@ -684,13 +685,41 @@ export class DataStore {
       if (lengths.some((len) => len !== rowCount)) {
         throw new Error('DataStore: all columns must have equal length');
       }
+      // THE INGRESS FOR COLUMN NAMES, and the reason it is here rather than in the
+      // importer: every route that puts data in a dataset comes through this function —
+      // a file import, a plugin calling `data.create`, and a sync op replayed from a
+      // peer. Cleaning in the CSV parser would have left the other two open.
+      //
+      // Only the unrepresentable goes: a NUL (which R cannot hold at all, and which
+      // reached its parser as a raw byte) and a lone surrogate (which survives JSON,
+      // IndexedDB and a sync hop, then silently becomes U+FFFD the first time anything
+      // UTF-8 encodes it). A name is otherwise taken exactly as the file gave it —
+      // bounding or slugging it here would rename people's columns to suit us.
       const coerced = {};
-      for (const meta of variables) coerced[meta.name] = coerceColumn(meta, cols[meta.name] ?? []);
+      const renamed = [];
+      for (const meta of variables) {
+        const safe = safeText(meta.name);
+        if (safe !== meta.name) renamed.push([meta.name, safe]);
+        coerced[safe] = coerceColumn(meta, cols[meta.name] ?? []);
+      }
+      if (renamed.length) {
+        // Not silent. A column whose name changed under the user is exactly the kind of
+        // thing that is impossible to diagnose later, and a NUL in a header means the
+        // file is damaged — worth saying so even if the import succeeds.
+        console.warn('[data] column names carried characters that cannot be stored, and were cleaned:',
+          renamed.map(([from, to]) => `${JSON.stringify(from)} -> ${JSON.stringify(to)}`).join(', '));
+      }
       await this.#duckdb.replaceTable(table, coerced);
     }
     this.#sourceTables.add(table);
     this.#noteRowidBase(await this.#ensureRowId(table, seq));
-    return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
+    // The meta carries the SAME names the table now has, or every later lookup by name
+    // would miss the column it just wrote.
+    return {
+      table,
+      meta: variables.map((m) => ({ ...m, name: safeText(m.name) })),
+      label: source ?? null,
+    };
   }
 
   /**
@@ -708,7 +737,13 @@ export class DataStore {
     await this.#duckdb.query(`CREATE OR REPLACE TABLE ${quoteIdent(table)} AS ${selectSql}`);
     this.#sourceTables.add(table);
     this.#noteRowidBase(await this.#ensureRowId(table, seq));
-    return { table, meta: variables.map((m) => ({ ...m })), label: source ?? null };
+    // The meta carries the SAME names the table now has, or every later lookup by name
+    // would miss the column it just wrote.
+    return {
+      table,
+      meta: variables.map((m) => ({ ...m, name: safeText(m.name) })),
+      label: source ?? null,
+    };
   }
 
   /** Restore a wide source from its persisted Parquet bytes: write the file back to
@@ -2536,8 +2571,28 @@ function coerceColumn(meta, raw) {
     }
     return out;
   }
-  return raw.map((v) => (v === null || v === undefined ? null : String(v)));
+  return raw.map((v) => {
+    if (v === null || v === undefined) return null;
+    const str = String(v);
+    // A VALUE is data and is not tidied here — a tab, a newline, a NUL inside a cell are
+    // all things a file may legitimately contain, and a store that quietly edits them is
+    // a store you cannot trust with the thing you gave it.
+    //
+    // A LONE SURROGATE is the exception, and it is not tidying: an unpaired code unit is
+    // not representable in UTF-8 at all, so it is already broken. Left alone it survives
+    // JSON, IndexedDB and a sync hop looking fine, then becomes U+FFFD the first time
+    // anything encodes it — a file export, a post to WebR — which means two peers can
+    // hold different values with nothing reporting a problem. Repairing it HERE makes
+    // that substitution deterministic and in one place instead of arbitrary and late.
+    //
+    // The guard is what keeps this free: almost no string contains a surrogate code unit
+    // at all, and the ones that do are usually emoji, which pass as valid pairs.
+    return SURROGATE.test(str) ? safeText(str) : str;
+  });
 }
+
+/** Any surrogate code unit — the cheap pre-test before the real pairing check. */
+const SURROGATE = /[\uD800-\uDFFF]/;
 
 /**
  * Map a DuckDB SQL type string to the bridge category that decides how a column

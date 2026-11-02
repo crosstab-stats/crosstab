@@ -47,6 +47,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { rStr, safeText } from '../core/plugin-stdlib.js';
 import {
   addressPart, decodeAddressPart, readAncestors, unresolvedReads, staleReaders,
 } from '../core/op-log.js';
@@ -203,17 +204,58 @@ test('there is ONE rStr, and it escapes the newlines the local copy missed', asy
   assert.match(script, /import \{ el, rStr \} from '\.\/plugin-stdlib\.js'/);
 });
 
-test('U+0000 is still passed through, which is a deliberate limit', async () => {
-  // The original report, and the reason it stays open rather than being patched: an R
-  // character string cannot hold a NUL at all, so there is no escape to emit. The failure
-  // is R's parser rejecting the source — loud, and a NUL in a CSV header means the file is
-  // damaged. Asserted so that "we pass it through" is a recorded decision and not an
-  // oversight someone later fixes by inventing an escape that does not exist.
-  const { rStr } = await import('../core/plugin-stdlib.js');
-  assert.equal(rStr(('a' + String.fromCharCode(0) + 'b')), ('"a' + String.fromCharCode(0) + 'b"'), 'unescaped, by design');
+test('U+0000 is REMOVED on the way into R, because R cannot hold one', () => {
+  // This test used to assert the opposite, and said so deliberately: "unescaped, by
+  // design", on the grounds that an R string cannot hold a NUL so there is no escape to
+  // emit, and that R's parser rejecting the source is a loud failure.
+  //
+  // The first half is still true and is exactly why dropping it is the only option. The
+  // second half was wrong about WHERE the loudness lands: the user who imported a damaged
+  // CSV got an R parse error about generated source, minutes later, naming nothing they
+  // recognised. That is not a loud failure, it is an unattributable one.
+  //
+  // Changed on the owner's instruction (2026-11-01) to resolve the open entry. There is
+  // no faithful encoding to choose between here — the options were "drop it" and "emit a
+  // file R cannot read".
+  const nul = 'a' + String.fromCharCode(0) + 'b';
+  assert.equal(rStr(nul), '"ab"', 'no NUL reaches the generated source');
 
-  // But it is NOT a problem for an address: a NUL is not a delimiter, so it cannot
-  // address another column the way a colon could.
-  assert.equal(addressPart(('a' + String.fromCharCode(0) + 'b')), ('a' + String.fromCharCode(0) + 'b'));
-  assert.ok(!readAncestors(`ds:7/cell:${addressPart(('a' + String.fromCharCode(0) + 'b'))}:3`).includes('ds:7/cell:a'));
+  // And it never gets that far anyway: a column name is cleaned at the DataStore ingress
+  // that every route shares — file import, a plugin calling data.create, and a sync op
+  // replayed from a peer.
+  assert.equal(safeText(nul), 'ab');
+
+  // A NUL remains harmless in an ADDRESS, which is what the rest of this file is about:
+  // it is not a delimiter, so it cannot address another column the way a colon could.
+  assert.equal(addressPart(nul), nul);
+  assert.ok(!readAncestors(`ds:7/cell:${addressPart(nul)}:3`).includes('ds:7/cell:a'));
+});
+
+test('a LONE SURROGATE is replaced, which is the one that was corrupting silently', () => {
+  // Not in the original report, and worse than what was. An unpaired \uD800 survives
+  // JSON.stringify, JSON.parse and structuredClone intact — so it rides through a save,
+  // through IndexedDB and across a sync hop looking perfectly fine — and then the first
+  // thing that UTF-8 encodes it (writing a file, posting to WebR, any TextEncoder)
+  // silently turns it into U+FFFD. Measured both ways round before this was written.
+  //
+  // That is two peers holding different strings with nothing reporting a problem, which
+  // this project treats as worse than a crash.
+  assert.equal(safeText('a\uD800b'), 'a\uFFFDb', 'an unpaired high surrogate');
+  assert.equal(safeText('a\uDC00b'), 'a\uFFFDb', 'and an unpaired low one');
+
+  // A VALID pair is ordinary data and must survive untouched — an emoji in a label is
+  // not damage.
+  assert.equal(safeText('a\uD83D\uDE00b'), 'a\uD83D\uDE00b');
+});
+
+test('safeText removes only the unrepresentable, never the merely untidy', () => {
+  // The line this draws matters: a sanitiser that tidies data is a sanitiser that loses
+  // it. Tabs, newlines and other control characters are legal in both UTF-8 and an R
+  // string — rStr already escapes the ones that would break a line — and a tab inside a
+  // label is data.
+  assert.equal(safeText('a\tb'), 'a\tb');
+  assert.equal(safeText('a\nb'), 'a\nb');
+  assert.equal(safeText('a\u0001b'), 'a\u0001b', 'a C0 control is legal in UTF-8');
+  assert.equal(safeText('a\u202Eb'), 'a\u202Eb', 'an RTL override is a display concern, not a storage one');
+  assert.equal(safeText('café'), 'café');
 });

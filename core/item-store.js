@@ -62,6 +62,7 @@
 
 import { CoreEvents } from './event-bus.js';
 import { liveOps } from './op-log.js';
+import { safeText } from './plugin-stdlib.js';
 
 /** Tier prefix. Deliberately NOT `ws:` — items are not workspace blobs, and
  * `collab-sync`'s leaf folding keys off `ws:`. */
@@ -168,6 +169,39 @@ export const ITEMS = {
   fold: foldItems,
 };
 
+/** Any surrogate code unit — the cheap pre-test before the real pairing check. */
+const SURROGATE = /[\uD800-\uDFFF]/;
+
+/**
+ * Repair field strings that cannot survive being encoded.
+ *
+ * Applied where a record's fields land from BOTH directions — a local write and an op
+ * folded in from a peer — rather than at the plugin API, because a memo that reaches us
+ * from a collaborator has crossed a transport but not necessarily an encoder.
+ *
+ * Only lone surrogates, and only because they are not representable in UTF-8 at all: one
+ * survives JSON, IndexedDB and the sync hop intact, then silently becomes U+FFFD the
+ * first time anything writes it to a file. Two collaborators would hold different text
+ * for the same memo with nothing anywhere saying so.
+ *
+ * Deliberately SHALLOW. Most fields are flat — a name, a theme, a memo — and walking into
+ * a nested blob would mean rewriting structures this store does not own and cannot
+ * validate. A plugin that nests its own JSON owns what it puts there; what this
+ * guarantees is that the fields the store itself reads and shows are sound.
+ */
+function repairFields(fields) {
+  if (!fields || typeof fields !== 'object') return fields;
+  let out = null;
+  for (const [k, v] of Object.entries(fields)) {
+    if (typeof v !== 'string' || !SURROGATE.test(v)) continue;
+    const fixed = safeText(v);
+    if (fixed === v) continue;
+    out = out || { ...fields };
+    out[k] = fixed;
+  }
+  return out || fields;
+}
+
 export class ItemStore {
   /** Fold CACHE (the log is the source of truth). owner → collection → id → record. */
   #cache = new Map();
@@ -235,6 +269,9 @@ export class ItemStore {
   }
 
   #applyPut(owner, collection, id, payload, author, target) {
+    // Both directions come through here: a local `put` write-through, and an op folded
+    // in from a peer via `loadFromLog`.
+    if (payload && payload.fields) payload = { ...payload, fields: repairFields(payload.fields) };
     let byColl = this.#cache.get(owner);
     if (!byColl) { byColl = new Map(); this.#cache.set(owner, byColl); }
     let byId = byColl.get(collection);

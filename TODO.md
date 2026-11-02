@@ -2139,26 +2139,6 @@ bottom; they are the project's memory and are not summarised away.
 
 ### More analyses (each is just another plugin)
 
-- [ ] **A NUL in an imported column name reaches R as a raw byte (found 2026-10-17).**
-      `rStr` escapes backslash, quote, LF and CR, and passes U+0000 through untouched, so
-      `vars[["a\0b"]]` goes into R source with a literal NUL. R's parser rejects that —
-      and cannot be made to accept it, because an R character string cannot hold a NUL at
-      all. So this is not a quoting bug to fix in `rStr`; there is no escape to emit.
-
-      **Reachability is the open question.** Names typed in the UI are strictly validated
-      (`varNameError`: must start with a letter, then letters/digits/`_`/`.`), so this is
-      only reachable through IMPORT, where column names are taken as the file gives them.
-      A NUL in a CSV header means the file is damaged or binary. The failure is loud (an R
-      error) rather than silent, which is why it is recorded rather than patched.
-
-      **The decision to make** is whether the import boundary should clean column names
-      at all, and that is a policy question rather than a bug fix: stripping control
-      characters would make a damaged file import quietly instead of failing, which is not
-      obviously the kinder outcome. Related: `cleanName` now bounds PROJECT and DATASET
-      names (2026-10-17) because those become ops in the log; variable names deliberately
-      did not change.
-
-
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
       `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
       got no live controls, no palette, no re-editability. Reviewed to find out why.
@@ -10245,6 +10225,73 @@ The record of what shipped and why. Kept in full, in the original sections.
     tie-in); a clear/reset-session action.
 
 ### More analyses (each is just another plugin)
+
+- [x] **A NUL in an imported column name reaches R as a raw byte (found 2026-10-17).**
+      `rStr` escapes backslash, quote, LF and CR, and passes U+0000 through untouched, so
+      `vars[["a\0b"]]` goes into R source with a literal NUL. R's parser rejects that —
+      and cannot be made to accept it, because an R character string cannot hold a NUL at
+      all. So this is not a quoting bug to fix in `rStr`; there is no escape to emit.
+
+      **Reachability is the open question.** Names typed in the UI are strictly validated
+      (`varNameError`: must start with a letter, then letters/digits/`_`/`.`), so this is
+      only reachable through IMPORT, where column names are taken as the file gives them.
+      A NUL in a CSV header means the file is damaged or binary. The failure is loud (an R
+      error) rather than silent, which is why it is recorded rather than patched.
+
+      **The decision to make** is whether the import boundary should clean column names
+      at all, and that is a policy question rather than a bug fix: stripping control
+      characters would make a damaged file import quietly instead of failing, which is not
+      obviously the kinder outcome. Related: `cleanName` now bounds PROJECT and DATASET
+      names (2026-10-17) because those become ops in the log; variable names deliberately
+      did not change.
+
+      **RESOLVED 2026-11-01, and the sweep found something worse than the thing filed.**
+      The owner asked for it fixed and for a check of every other way a malformed string
+      gets in — typed, read from a file, or arriving through sync.
+
+      **The policy question answers itself once you ask WHERE the loudness lands.** The
+      entry defended passing a NUL through on the grounds that R's parser rejecting the
+      source is a loud failure. It is loud; it is also minutes downstream, phrased as a
+      parse error about generated code, naming nothing the user recognises. That is not a
+      loud failure, it is an unattributable one. And there was never a faithful option to
+      preserve: an R string cannot hold a NUL, so the choice was "drop it" or "emit a file
+      R cannot read".
+
+      **The lone surrogate was not in the report and is the more dangerous of the two.**
+      Measured both ways round: an unpaired `\uD800` survives `JSON.stringify`,
+      `JSON.parse` and `structuredClone` intact — so it rides a save, an IndexedDB write
+      and a sync hop looking perfectly fine — and then silently becomes U+FFFD the first
+      time anything UTF-8 encodes it (a file export, a post to WebR, any `TextEncoder`).
+      Two collaborators holding different text for the same memo, with nothing anywhere
+      reporting a problem. The NUL at least failed.
+
+      **`safeText` removes the unrepresentable and nothing else**, which is the line that
+      matters: a tab in a label is data, a control character is legal in both UTF-8 and an
+      R string, and a valid surrogate pair is an emoji. A sanitiser that tidies data is one
+      you cannot trust with the thing you handed it. Applied at four places, chosen because
+      each is where several routes MEET rather than where one of them starts:
+
+      - `#createSource` (core/data-store.js) — every column name, from a file import, a
+        plugin's `data.create`, or a sync op replayed from a peer. Cleaning in the CSV
+        parser would have left the other two open, which is what the original report
+        assumed was the whole surface. A changed name is reported, not silently swapped.
+      - `coerceColumn` — text VALUES, lone surrogates only, behind a cheap pre-test so
+        ordinary strings pay nothing. A NUL in a value is left alone: it survives JSON and
+        UTF-8, and only `rStr` ever had a problem with one.
+      - `#applyPut` (core/item-store.js) — record fields, which is where a local write and
+        an op folded in from a COLLABORATOR both land. Deliberately shallow: a plugin that
+        nests its own JSON owns what it puts there.
+      - `rStr` and `cleanName` — the generation and display boundaries. `cleanName` keeps
+        its documented order (control characters to spaces first, so words either side of a
+        stray newline do not weld; surrogates after), and `rStr` keeps `String(s)` so
+        `rStr(null)` is still `"null"` — both caught by existing tests when the first
+        version of this change broke them.
+
+      Verified in the running app, not only in Node: a dataset imported with the column
+      names `"a\0b"` and `"c\uD800d"` stores them as `ab` and `c\uFFFDd`, with the rows
+      intact. 6 new tests in `test/string-ingress.test.mjs`, plus the old
+      `address-escaping` test rewritten — it had asserted the pass-through as deliberate,
+      so it now records why the decision changed rather than quietly flipping.
 
 - [x] **The Wikipedia importer is tested, and it now follows a redirect by ASKING —
       2026-10-26.** Picked up directly from the FRED removal: the `web` source kind was
