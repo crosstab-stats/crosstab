@@ -21,10 +21,18 @@ bottom; they are the project's memory and are not summarised away.
 - [~] **#192 — the how-to system, extensible by any plugin author (owner, 2026-10-14).**
       **BUILT 2026-10-14** (H1–H6). The CONTENT it was built for is done too — #184
       closed 2026-11-01 with 173 topics across 64 plugins and core, none of them a stub.
-      **What remains is screenshots alone**, which the renderer supports and nothing has
-      ever used, and which wants a decision before it wants work: an image dates the
-      moment the dialog it shows changes, so a few for genuinely spatial topics is worth
-      the upkeep where a sweep across 173 would not be.
+      **What remains is screenshots alone, and they are the OWNER'S to do by hand
+      (owner, 2026-11-01): "I'll have to go through the how-to entries later and
+      create/store screenshots as needed."** Not open engineering work, and not to be
+      picked up as such — capturing an image means deciding which moment of a UI is worth
+      freezing, which is an authoring judgement, and the person writing the topic is the
+      one holding it.
+
+      The mechanism is finished and waiting: `renderHowto` takes
+      `![alt](asset:name.png)`, local declared assets only, never a URL (an external
+      image would fetch the moment a topic opened — a beacon, and a broken box in an
+      air-gapped deployment), with `screen: 'full' | 'small' | 'any'` variants, required
+      alt text and tap-to-enlarge. Nothing in the build is blocked on it.
       The design settled with the owner before any code. #184 (the comprehensive guide)
       is the CONTENT; this is the mechanism it and everyone else writes into.
 
@@ -147,8 +155,12 @@ bottom; they are the project's memory and are not summarised away.
       (the pie chart's entry used to carry bar-chart notes). The per-topic `file` override
       stays available if a plugin ever outgrows one file.
 
-      **Still to do:** screenshots (the renderer handles `![alt](asset:name.png)` with
-      `.small` variants, but no topic uses one yet — and they rot, so use them sparingly).
+      **Not to do — the owner's, by hand (2026-11-01).** Screenshots: the renderer
+      handles `![alt](asset:name.png)` with `.small` variants and no topic uses one yet.
+      This is deliberately not on anyone's build list. They rot the moment a dialog
+      changes, so they are worth adding only where prose genuinely fails — a timeline
+      drag, a region box, a queue mid-run — and that call belongs to whoever is writing
+      the topic.
 
       **A drift the owner caught, worth keeping.** The launcher's ⓘ was inert while the
       plugin manager's worked, and their question was the right one: *"I thought we unified
@@ -11266,10 +11278,13 @@ The record of what shipped and why. Kept in full, in the original sections.
       **The one gap found while measuring is NOT this entry's and does not close with
       it:** no topic uses a screenshot. `renderHowto` supports `![alt](asset:name.png)`
       (local declared assets only, never a URL — an external image would fetch the moment
-      a topic opened) and nothing has ever used it. That belongs to #192, which names it
-      already, and it wants a decision before it wants work: a screenshot dates the moment
-      a dialog changes, so a handful for genuinely spatial topics — timeline coding,
-      region drawing, the Transcripts queue — is worth the upkeep and a sweep is not.
+      a topic opened) and nothing has ever used it.
+
+      **That is the OWNER'S to do by hand and is not open engineering work** (owner,
+      2026-11-01: *"I'll have to go through the how-to entries later and create/store
+      screenshots as needed."*). Recorded under #192 so it is not rediscovered as a task:
+      the mechanism is finished, nothing is blocked on it, and which moment of a UI is
+      worth freezing is an authoring judgement belonging to whoever writes the topic.
 
 - [x] **The grid selection is per AUTHOR — a co-author's selection cannot move your
       grid. 2026-10-23.** The owner's challenge to the recency rule below: *"so if two
