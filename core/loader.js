@@ -23,6 +23,7 @@ import { PluginBroker } from './plugin-broker.js';
 import { attachSandbox } from './plugin-sandbox.js';
 import { collectModuleClosure } from './plugin-modules.js';
 import { scopedAssetList } from './asset-store.js';
+import { textRef, mediaRef, resolveAnchor, needsAttention } from './anchors.js';
 import { assetRefDecls, declaredCollections } from './collections.js';
 
 /**
@@ -712,6 +713,38 @@ export class PluginLoader {
       get: (collection) => this.#services.selectionRead?.get(ctx.id, collection) ?? null,
       dataset: () => this.#services.selectionRead?.dataset() ?? null,
     };
+    // Anchors (#166), on the compute frame as well as the workspace mount (#199).
+    //
+    // #196 let any activated plugin READ another's codings, and left this behind: a
+    // coding's `anchor` field arrived with no way to ask where that region is NOW, because
+    // `anchors` existed only if you were a mounted workspace. The options that leaves a
+    // consumer are both bad — cache the offsets, which is the exact rot the anchor model
+    // exists to prevent, or re-implement selector resolution, after which the host can no
+    // longer report drift for records it did not resolve.
+    //
+    // Nothing is granted by exposing it. These are PURE functions over arguments the
+    // caller supplies, including the subject: the mount is itself only a pass-through
+    // (core/workspace-manager.js), so a compute frame is not getting a weaker version of
+    // something a mount had earned. Host-owned so that resolution does not depend on the
+    // plugin being activated — a deactivated plugin's records must still be reportable as
+    // stale, which is why this never lived in plugin code.
+    //
+    // The subject is reachable from here too, which is what makes this complete rather
+    // than ornamental: a coding's `doc` is a `__ct_rid`, and `app.data.getRows({
+    // includeRowId: true })` returns rows keyed by it. Read the codings, read the column,
+    // resolve.
+    const anchors = {
+      text: (text, start, end) => textRef(text, start, end),
+      media: (selector, assetId) => mediaRef(selector, assetId),
+      // A BATCH, so a consumer resolving a whole document's codings pays one round trip
+      // rather than one per coding. Same signature as the mount's, deliberately: a plugin
+      // that works in a workspace must work in a verb without being rewritten.
+      resolve: (refs, subject) => (Array.isArray(refs) ? refs : [refs]).map((r) => resolveAnchor(r, subject)),
+      // Which resolutions to flag. Exposed rather than left for the caller to derive from
+      // `status`, because deriving it means hard-coding the confidence vocabulary — and
+      // then a new status is silently treated as fine by every plugin that guessed.
+      needsAttention: (res) => needsAttention(res),
+    };
     // `assets.list()`, scoped to this plugin's own refs (#150). It existed only on the
     // workspace mount, so an exporter or importer holding item records could load and
     // put bytes but never ask what it was holding. Same scoping either way: the refs
@@ -727,7 +760,7 @@ export class PluginLoader {
         }),
       }
       : this.#services.assets;
-    return Object.freeze({ ...this.#services, web, stateRead, stateWrite, items, selection, assets });
+    return Object.freeze({ ...this.#services, web, stateRead, stateWrite, items, selection, anchors, assets });
   }
 
   /**

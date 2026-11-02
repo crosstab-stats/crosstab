@@ -282,7 +282,11 @@
             // `resolve(refs, subject)` takes a BATCH and returns where each region is
             // NOW plus how confident that is. Resolution never repairs anything: it is
             // a view, and only a user action writes a correction back.
-            anchors: makeNamespace('anchors', ['text', 'media', 'resolve']),
+            // `needsAttention(res)` asks whether a resolution should be flagged, instead
+            // of each plugin hard-coding the confidence vocabulary and silently treating a
+            // new status as fine. Available on the compute frame as well as a workspace
+            // mount since #199.
+            anchors: makeNamespace('anchors', ['text', 'media', 'resolve', 'needsAttention']),
             // Anchored notes (#152). Host-owned: `add({kind, target, ref?}, text)` writes
             // into the project's single memo collection, not a per-plugin one.
             memos: makeNamespace('memos', ['add', 'list', 'setText', 'remove']),

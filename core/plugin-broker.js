@@ -189,6 +189,11 @@ export class PluginBroker {
       this.#dispatch['anchors.text'] = (text, start, end) => services.anchors.text(text, start, end);
       this.#dispatch['anchors.media'] = (selector, assetId) => services.anchors.media(selector, assetId);
       this.#dispatch['anchors.resolve'] = (refs, subject) => services.anchors.resolve(refs, subject);
+      // Guarded individually: both the mount and the compute frame supply `anchors`, and a
+      // surface that has not been taught this one must not advertise it.
+      if (services.anchors.needsAttention) {
+        this.#dispatch['anchors.needsAttention'] = (res) => services.anchors.needsAttention(res);
+      }
     }
     // Codec plugins (#98): the streaming format-codec surface — random source-byte
     // access + streaming ingest on read, output-byte emit on write, and

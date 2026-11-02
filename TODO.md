@@ -220,10 +220,12 @@ bottom; they are the project's memory and are not summarised away.
         quantitising sidestepping this via datasets meant nothing was blocked, and right
         not to build speculatively. What changed was not the cost but the demand.
 
-  - [ ] **The SECOND caller is still open, and #196 made it sharper rather than
-        answering it: RESOLVING an anchor from outside a workspace mount.** Verified
-        2026-11-02 — `anchors` is on the mount API only (`core/workspace-manager.js:396`)
-        and does not exist on the compute-frame API in `core/loader.js`.
+  - [x] **The SECOND caller — RESOLVING an anchor from outside a workspace mount —
+        BUILT 2026-11-02 as #199.** Both callers this entry was waiting for are now real
+        and both are served, which closes the whole "two callers in search of one surface"
+        question. Diagnosis as filed: `anchors` was on the mount API only
+        (`core/workspace-manager.js:396`) and absent from the compute-frame API in
+        `core/loader.js`.
 
         So the read surface shipped half a capability. A third-party plugin can now read a
         coding and gets its `anchor` field, and has **no way to ask where that region is
@@ -2596,6 +2598,59 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#199 — anchor resolution outside a workspace mount. BUILT 2026-11-02.** The
+      half #196 left behind, found the day after shipping it while answering the owner's
+      "is there any open work left for you": a third-party plugin could now READ another
+      plugin's codings and got each one's `anchor` field with no way to ask where that
+      region is **now**, because `anchors` existed only if you were a mounted workspace.
+
+      **Why that is worse than a missing convenience.** The two things a consumer could do
+      instead are the two things the anchor model exists to prevent. Cache the offsets —
+      and a stored start/end is wrong after the next edit with nothing reporting it. Or
+      re-implement selector resolution — after which the host can no longer report drift
+      for records it did not resolve, which is the whole reason resolution is host-owned:
+      a **deactivated** plugin's records must still be reportable as stale.
+
+      **The design question I raised did not exist.** I had flagged "what does `subject`
+      mean off a mount, where there is no document being shown?" as the one real
+      uncertainty. Reading the mount settled it in a line: the mount is itself a pure
+      pass-through, and the **plugin** supplies the subject there too
+      (`resolve: (refs, subject) => …map((r) => resolveAnchor(r, subject))`). So these are
+      pure functions over caller-supplied arguments in both places and a compute frame is
+      not getting a weaker version of something a mount had earned. Exposing it grants
+      nothing. Another instance of the thing this week keeps teaching: I had read the
+      mount's *doc comment* and not its *body*.
+
+      **What makes it complete rather than ornamental** is that the subject is reachable
+      from a compute frame: a coding's `doc` is a `__ct_rid`, and
+      `app.data.getRows({ includeRowId: true })` returns rows keyed by it. So the chain
+      runs end to end without a workspace — `publicCollections()` → `listFrom()` →
+      `getRows({includeRowId:true})` → `resolve()` — and a test walks exactly that with
+      the real resolver rather than asserting the surface exists.
+
+      **`needsAttention` added to BOTH surfaces, not just the new one.** A consumer that
+      can resolve needs to know which resolutions to flag, and deriving that from `status`
+      means hard-coding the confidence vocabulary — after which a new status is silently
+      treated as fine by every plugin that guessed. Putting it on the compute frame alone
+      would have left two anchor APIs differing by one function, which is the drift a
+      shared surface exists to prevent; a plugin should not have to discover which half it
+      is running in. A test compares the two surfaces' function lists directly.
+
+      Three places had to learn it, the same three as #196: the service, the broker
+      dispatch table, and the in-frame namespace list in `plugin-host.html` — where an
+      omission fails as `undefined is not a function` at the plugin's call site rather
+      than as a thrown error.
+
+      7 tests. One of them was wrong before the code was: the end-to-end test hand-counted
+      a character offset and asserted "three hours" against a ref covering "aited three ",
+      so it failed while the resolver was correct. Offsets now come from `indexOf` — a
+      literal offset in a test about offsets is one more thing that can be wrong than the
+      code it checks.
+
+      **Not browser-tested** — nothing in the app calls the new surface yet, so there is
+      nothing to click. It becomes testable the first time a plugin resolves an anchor
+      outside a mount, which is the point at which it should be re-checked.
 
 - [x] **#198 — the Settings screen. BUILT 2026-11-02.** The owner's call, and the
       reasoning is the entry: *"I suppose it can't hurt. rather than set some benchmark

@@ -22,7 +22,7 @@ import { Lifecycle, advisory } from './plugin-lifecycle.js';
 import { ownerToken, DEFAULT_SLOT, NO_DS } from './workspace-store.js';
 import { newItemId } from './item-store.js';
 import { declaredCollections, assetRefDecls } from './collections.js';
-import { textRef, mediaRef, resolveAnchor } from './anchors.js';
+import { textRef, mediaRef, resolveAnchor, needsAttention } from './anchors.js';
 import { scopedAssetList } from './asset-store.js';
 import { debug } from './debug.js';
 import { currentScreenMode, onScreenModeChange } from './screen-mode.js';
@@ -397,6 +397,10 @@ export class WorkspaceManager {
         text: (text, start, end) => textRef(text, start, end),
         media: (selector, assetId) => mediaRef(selector, assetId),
         resolve: (refs, subject) => (Array.isArray(refs) ? refs : [refs]).map((r) => resolveAnchor(r, subject)),
+        // Added with the compute-frame surface (#199) rather than only there: two
+        // anchor APIs that differ by one function is the drift a shared surface exists to
+        // prevent, and a plugin should not discover which half it is running in.
+        needsAttention: (res) => needsAttention(res),
       },
       // The selection, bound to this plugin so it reads its OWN collections (#153).
       selection: {
