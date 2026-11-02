@@ -35,6 +35,7 @@ import { isAuthError } from './storage-driver.js';
 import { showConflictDialog } from './conflict-ui.js';
 import { FolderBackend, OpfsBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
+import { showSettings } from './settings-screen.js';
 import {
   assetIdsOf, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice,
   ownerPluginOp, recordSlice, travellingChildren, unionById, reidentifyLog } from './copy-to-project.js';
@@ -596,6 +597,21 @@ export class ProjectSync {
     // reproducibility wants and the form a building block could not take.
     this.#menus.register({ id: 'core:proj-copy-ds', path: ['File'], label: 'Copy dataset…', order: 20, command: () => this.copyPrompt({ kind: 'dataset' }) });
     this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 8, command: () => void showEncryptionSettings({ projects: this }) });
+    // Settings (#198). Registered HERE, beside the encryption item, because this is the
+    // module that already holds both the menu registry and the `projects` handle the
+    // encryption opener needs — wiring it from app.js would mean threading one of those
+    // across a module boundary to save nothing. `openers` is how a routed setting reaches
+    // its real editor without the declaring module importing a dialog (which would be a
+    // cycle: encryption-settings.js imports at-rest.js).
+    this.#menus.register({
+      id: 'core:settings',
+      path: ['File'],
+      label: 'Settings…',
+      order: 9,
+      command: () => void showSettings({
+        openers: { 'privacy.encryption': () => void showEncryptionSettings({ projects: this, tab: 'defaults' }) },
+      }),
+    });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));
     this.#bus.on(DATASETS_CHANGED, () => this.#onChange(null));
     this.#bus.on(CoreEvents.PLUGINS_CHANGED, () => this.#onPluginsChanged());

@@ -57,6 +57,22 @@ const modeSetting = defineSetting({
   group: 'Appearance',
   hint: 'Small-screen mode, or the full layout. Unset lets the window size decide.',
   options: [['small', 'Small screen'], ['full', 'Full layout']],
+  // The layout must change when the setting does, and `applyScreenMode` is already the
+  // function that makes that happen — it sets the root attribute and notifies the
+  // surfaces that measure themselves. `persist: false` because the registry has just
+  // written the value; this is the half that takes effect.
+  //
+  // A cleared setting arrives here as null, which is not a mode. Null means "let the
+  // viewport decide", so the apply resolves it the way a fresh load does rather than
+  // picking one — otherwise clearing the preference would silently pin the layout to
+  // whatever was showing.
+  apply: (mode) => {
+    const resolved = mode || resolveScreenMode({
+      stored: null,
+      narrowViewport: (globalThis.innerWidth || 0) <= SMALL_MAX_PX,
+    });
+    applyScreenMode(resolved, { persist: false });
+  },
 });
 
 /** Dismissal of the "this was turned on for you" note, so it is said once and not again. */

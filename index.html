@@ -781,6 +781,27 @@
       .ct-join__manual-head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ct-muted); margin: 4px 0; }
       .ct-join__manual-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
       .ct-join__manual-row button { border: 0; background: none; cursor: pointer; color: var(--ct-danger); font-size: 13px; }
+      /* The Settings screen (#198): a scrolling list of label/control rows, grouped.
+         Tokens only — no literal colours outside :root, per the theme audit. */
+      .ct-settings__body { max-height: 60vh; overflow-y: auto; margin: 0 0 12px; }
+      .ct-settings__group {
+        margin: 16px 0 6px; font-size: 11px; text-transform: uppercase;
+        letter-spacing: .05em; color: var(--ct-muted);
+      }
+      .ct-settings__group:first-child { margin-top: 0; }
+      .ct-settings__row {
+        display: flex; gap: 12px; align-items: flex-start; justify-content: space-between;
+        padding: 10px 0; border-top: 1px solid var(--ct-line); flex-wrap: wrap;
+      }
+      .ct-settings__label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 220px; }
+      .ct-settings__hint { color: var(--ct-muted); font-size: 12px; line-height: 1.4; }
+      .ct-settings__control { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .ct-settings__value { color: var(--ct-muted); }
+      .ct-settings__lines { min-width: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      /* Stacks on a narrow screen rather than squeezing the control (1.4.10 reflow). */
+      @media (max-width: 520px) {
+        .ct-settings__row { flex-direction: column; align-items: stretch; }
+      }
       .ct-dialog__form { padding: 20px; }
       .ct-dialog__title { margin: 0 0 4px; font-size: 18px; }
       .ct-dialog__hint { margin: 0 0 12px; color: var(--ct-muted); }

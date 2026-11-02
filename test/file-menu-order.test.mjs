@@ -51,7 +51,11 @@ function fileItems() {
 
 test('the import/export items form one contiguous block at the end of File', () => {
   const items = fileItems();
-  assert.equal(items.length, 13, 'File gained or lost an item — update this test deliberately');
+  // 14 since #198 added `Settings…` at order 9 — between `Encryption settings…` (8) and
+  // `Copy dataset…` (20), so it sits with the other app-level items and well clear of the
+  // in/out block this test is really about. Updated deliberately, which is what the
+  // message below asks for: the count exists so a new item cannot arrive unnoticed.
+  assert.equal(items.length, 14, 'File gained or lost an item — update this test deliberately');
   const io = items.filter((i) => /^(Import|Export)\b/.test(i.label));
   assert.equal(io.length, 4, io.map((i) => i.label).join(', '));
   const first = items.findIndex((i) => i === io[0]);

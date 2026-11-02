@@ -66,6 +66,10 @@ const policySetting = defineSetting({
   },
   fallback: () => ({ ...DEFAULTS }),
   label: 'Encrypt at rest',
+  // `encryption-settings.js` imports THIS module, so naming the dialog here rather than
+  // importing it is not laziness — the reverse import is a cycle. The Settings screen is
+  // given an opener for this id by `core/app.js`, which already imports both.
+  editedAt: 'File ▸ Encryption settings…',
   group: 'Privacy',
   hint: 'Which targets are encrypted: exports and synced folders by default, local storage on request.',
 });

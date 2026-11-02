@@ -18,216 +18,6 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [x] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
-      shipped the project manager and is closed; these rode along inside its entry and
-      would have been closed with it. None blocks anything — they are the difference
-      between "the File menu stopped multiplying" and "the File menu is finished".
-
-      **Two of the three BUILT (2026-09-21), both menu moves; the third is not a menu
-      move and is still open — see below.** File is down to **two** project items:
-      `New project` and `Encryption settings…`. 840 tests (10 new).
-
-      **Browser pass: looked over by the owner on the deployed build (2026-09-21) — "looks
-      good from what I can see", no problems seen — and the **no-project-open** case
-      confirmed separately.** That was the one worth checking by hand: it is the state
-      #158 made real, it is unreachable from the menu of an open project, and getting it
-      wrong would have meant a dead first tab. The dialog lands on *New projects* with
-      the project tab saying why.
-
-      Still only covered as a function call: the **bundle round-trip** — Export ▸ the
-      `.crosstab` bundle, then Open ▸ Project bundle on the file it wrote. The two halves
-      used to be adjacent menu items and are now reached from two different tabs, so the
-      seam between them is new even though neither body changed.
-  - [x] **DONE (2026-09-21) — one per-project encryption modal, NOT a project-manager
-        tab (decided by the owner).** Four File items became one: `Encryption settings…`
-        opens `core/encryption-settings.js`, rewritten as a two-tab dialog — **This
-        project** (default) and **New projects**. `projectEncryptionOffer(state)` is the
-        extracted rule and decides what the project tab shows, so an unprotected project
-        is offered only *Set a passphrase…* and a protected one only *Change passphrase…*
-        / *Remove protection…*; the three `if (already protected) appendError` guards in
-        `project-sync.js` are now backstops for a direct call rather than the thing
-        standing between the user and a wrong state. `ProjectSync#protectionState()` is
-        the new read-only accessor — deliberately NOT `#settle()`ing, since settling only
-        writes when a binding already exists and so cannot change the answer, and saving
-        as a side effect of opening a dialog to *look* at a setting is a surprise. Both
-        empty states are distinguished and shown: `none` (no project open — real since
-        #158) and `unsaved` (exists, never written), with the dialog landing on the
-        defaults tab when there is nothing to act on. The defaults tab carries an
-        explicit scope disclaimer, and `docs/SECURITY.md` was updated where it named the
-        old menu path. 7 tests. *Original reasoning below.*
-
-        Today `core/project-sync.js` registers four File items:
-        `Protect this project…` (order 8), `Change passphrase…` (9), `Remove
-        protection…` (10) and `Encryption settings…` (also 10 — two items claiming one
-        slot, a small bug in its own right).
-
-        **The owner's reasoning, and it is right:** the manager is "the place for
-        opening, moving, exporting, or deleting projects **including** this one", while
-        these four are "update, enable, or disable encryption on **this one** project".
-        Different theme. A manager tab would only earn its place if it listed EVERY
-        project with encryption controls per row — and that variant is not merely
-        unwanted, it is close to unbuildable: `protectProject()` (~1609) works on the
-        ACTIVE project, `#settle()`s it to disk, then re-encrypts every file through
-        `#fullSave`/`#folderRewrite`. Doing that from a list would mean opening — and,
-        for an already-protected project, unlocking — each one first. So: a dedicated
-        modal for the active project.
-
-        **What it replaces, and why a modal beats three menu items.** The three verbs
-        are state-dependent and the menu fakes it: all three show always, and
-        `protectProject()` opens with a guard that errors "This project is already
-        protected." That is precisely [[guard-means-missing-state]] — a guard whose only
-        job is to neutralise a state means the state should not be reachable. A modal
-        reads the current state and offers only what applies: unprotected → *Set a
-        passphrase*; protected → *Change passphrase* / *Remove protection*. The guard
-        then has nothing to guard.
-
-        **DECIDED (owner, 2026-09-21): one File item, `Encryption settings…`, opening a
-        TABBED modal.** Default tab **this project** — set / change / remove its
-        passphrase; second tab **the global defaults** — encrypt new projects on this
-        device by default, and whatever else accrues later (passphrase-strength rules
-        were named as a likely example). Four File items become one, and the naming
-        collision dissolves instead of being negotiated: the organising axis is
-        *encryption*, not *scope*, which is also why this does not contradict the
-        manager decision above — that rejected mixing encryption with open/move/delete,
-        not mixing two scopes of one subject.
-
-        It absorbs `core/encryption-settings.js` (#144), which is the app-wide at-rest
-        POLICY dialog: one switch, with exports and folder projects as read-only
-        context. Evidence the seam was already wrong — it currently ends with "To
-        protect (or unprotect) a project you've already made, use **File ▸ Protect this
-        project…**". A settings dialog that has to send you back to the menu becomes a
-        tab switch.
-
-        Three things to get right when building it. **All three were built and are
-        DONE (confirmed 2026-10-13 from a screenshot the owner sent, then checked against
-        `core/encryption-settings.js` and `test/encryption-settings.test.mjs` — the
-        checkboxes were simply never ticked, the same staleness as #179, #171 and #141):**
-    - [x] **DONE — the two tabs do not look interchangeable.** `ENC_TABS` is
-          `{id: 'project', label: 'This project'}` / `{id: 'defaults', label: 'New
-          projects'}` — named by scope, as asked. The defaults tab carries the
-          load-bearing disclaimer in so many words: it *"will not unprotect or alter any
-          project that already exists — for those, use the “This project” tab."* Pinned by
-          *the project tab comes first, and the tabs are named by scope*. Original:
-          **The two tabs must not look interchangeable.** One acts on the open project
-          NOW; the other changes a default for projects that don't exist yet and touches
-          no existing project. Name them by scope (*This project* / *New projects*
-          rather than *Project* / *Globals*), and let the defaults tab say plainly that
-          it changes nothing already saved. The failure to design out is someone
-          flipping a default believing they just protected the project in front of them.
-    - [x] **DONE — both degenerate states are SHOWN, and the modal lands where there is
-          something to do.** `actionable` is false for `scope: 'none'` and for
-          `scope: 'unsaved'`, and `if (!actionable) active = 'defaults'` makes the
-          defaults tab the landing tab exactly as this asked. The two states stayed
-          distinct rather than being merged into one "nothing here": two tests,
-          *no project open offers nothing, and says why* and *an unsaved project is a
-          DIFFERENT empty state from no project*, the second noting that merging them
-          would print "no project is open" at someone looking at their data. Original:
-          **Two degenerate states, expressed not guarded.** #158 shipped, so "no project
-          open" is a real state (sitting at the launcher) — and `protectProject()` also
-          refuses an empty unsaved one ("Add some data first — an empty project has
-          nothing to protect yet"). Both are facts the project tab should SHOW, with the
-          modal opening on the defaults tab when there is nothing to act on. Turning
-          those two errors into a visible state is the same [[guard-means-missing-state]]
-          move as collapsing the three verbs.
-    - [x] **DONE — the verbs are state-driven, never all three at once.**
-          `projectEncryptionOffer(state)` returns only what applies, and two tests pin it:
-          *an unprotected project is offered exactly one verb: set a passphrase* and
-          *a protected project is offered change and remove — never protect again*. A
-          third marks removal dangerous and setting one not. Original:
-          **Keep the per-project verbs state-driven inside the tab** as above:
-          unprotected → *Set a passphrase*; protected → *Change passphrase* / *Remove
-          protection*. Never all three at once.
-  - [x] **DONE (2026-09-21) — the two bundle items folded into the manager.** `Export
-        project bundle (.crosstab)…` and `Open project bundle (.crosstab)…` left File;
-        their bodies are unchanged, only where they are reached from. **Opening** is a
-        row in the **Open** rail (`kind: 'bundle'`); **writing** is a row on the
-        **Export** tab.
-
-        Two things had to be got right rather than wired. (1) A bundle is NOT a *Store
-        in* destination — it is a snapshot that stops receiving changes the moment it
-        lands — so `providersFor(providers, mode)` now decides which rail a location
-        belongs in. That also fixed a pre-existing bug found on the way: a provider with
-        no `chooseDestination` still drew a Store button that did nothing when clicked, a
-        dead control indistinguishable from a live one. (2) The Export tab's hint claimed
-        every export "is one-way — an exported file cannot be reopened as a project",
-        which the bundle makes false. It is now two groups — *A copy you can open again*
-        and *For another program* — which keeps [[format-equality-no-lockin]] intact: the
-        bundle is described by what it does, not promoted, and the other formats keep
-        equal billing. A bundle also cannot be ENUMERATED (there is no index of
-        `.crosstab` files on a disk), so the provider declares `enumerable: false` and
-        the pane says what it is instead of reporting an empty list. 3 tests.
-  - [x] **Can the project manager be redesigned so the shared row becomes reasonable?
-        ANSWERED by the owner 2026-11-02: no, and it does not need to be.** *"the manager
-        justified its independent rendering due to unique workflow needs."*
-
-        Which answers the question as asked rather than deferring it. The analysis below
-        kept arriving at the same place from the other direction — the row is shareable
-        *because* it is opinion-free, and the manager's five modes each carry an opinion
-        about what a click does — and treated that as a tension to resolve. It is not one.
-        Two renderings of one LIST would be drift; two renderings serving two jobs is a
-        difference in the jobs.
-
-        The redesign sketch below is **not** retired, because it was never really about
-        sharing the row: "are these five tabs fewer surfaces than they look" is a question
-        about the manager's own usability, and it stands or falls on that. It is just no
-        longer owed to anybody as a prerequisite. The trigger named at the end still
-        applies — a sixth mode would be evidence the tabs are doing too much.
-
-        Original question and analysis follow. Deliberately a question about the MANAGER,
-        not about `project-list.js`.
-
-        The row is shareable because it is opinion-free — it draws name, location, date and
-        size, and holds no view about what a click does. The manager is a `<dialog>` with
-        five modes (recents / open / store / manage / export) and a verb set per mode, so
-        consuming that row would mean teaching it about modes, which would cost it the
-        property that makes three other surfaces able to use it. The owner's reading:
-        *"the current 'tabbed dialog with five modes' does not seem a reasonable candidate
-        for using the shared component."*
-
-        So the duplication — its own `renderList`, `renderRail` and `describeRow`, plus
-        the line `[what.detail, projectMetaLine(row)].filter(Boolean).join(' · ')` repeated
-        verbatim from `project-list.js` — is a **symptom of the manager's shape**, and the
-        honest question is whether that shape is right.
-
-        What would make it one: if the five tabs turned out to be fewer surfaces than they
-        look. "Recents" and "Open" are both *pick a project to open*; "Store" is *pick a
-        destination*; "Manage" is *act on a project in place*. A manager that was a list
-        plus per-row verbs — the sidebar's shape, which already uses the shared row — might
-        need no tabs at all, at which point sharing is free rather than forced. That is a
-        redesign with a user-visible cost (the tabs are discoverable), so it is a question
-        and not a task.
-
-        Not urgent: nothing is broken, and the thing most likely to drift is already
-        shared (`projectMetaLine`, in `project-meta.js`). Worth revisiting if the manager
-        grows a sixth mode, which would be evidence the tabs are doing too much.
-
-  - [x] **CLOSED by the owner, 2026-11-02:** *"done. launcher and manager both are using
-        the same underlying list component but the manager justified its independent
-        rendering due to unique workflow needs."*
-
-        That settles a question this sub-item had been asking in two directions at once,
-        and the contradiction is worth keeping because of how it got there. The entry
-        ended with a paragraph titled **"The launcher should reuse the manager component
-        instead of its own rail"** — and three paragraphs above it, a 2026-10-26 note
-        saying that description was backwards: `core/project-list.js` is the shared row
-        component, **the launcher already uses it** (`launcher.js:18`) alongside the
-        sidebar (`app.js:63`), and the manager is the surface that never adopted it. So
-        the item simultaneously recorded that the work was done in the other direction and
-        still instructed a reader to do it in this one. A correction appended ABOVE a
-        stale conclusion does not retire it; the conclusion is what gets read and acted
-        on.
-
-        The owner's answer resolves it on the merits rather than the bookkeeping: the
-        shared component is in use by both, and the manager's own rendering is not drift
-        but a response to workflow the launcher does not have — it opens, moves, exports
-        and deletes, with a backend registry and per-row verbs, where the launcher picks
-        one project and goes. Two renderings of one LIST would be drift; two renderings
-        for two jobs is not.
-
-        **[[#167]]** ("the launcher should INCLUDE project management") and **#161**
-        ("clicking a source/project should just go") no longer have a dependency here.
-        Whatever they ask for stands on its own.
-
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
       let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
@@ -2918,101 +2708,6 @@ bottom; they are the project's memory and are not summarised away.
       code — kept as filed, because the lesson is that a watch set up for one axis is
       what caught a different one.)*
 
-- [~] **Settings persistence — the STORE is built (2026-10-15); the screen is not.**
-      `core/settings.js`. Confirmed with the owner first: *"is this talking about pulling
-      together the various call sites that put/read some sort of persistent setting to
-      local storage and making a unified settings get/set mechanism? I agree that sounds
-      worth doing, as it could also be helpful if we want to build a single 'settings'
-      screen where the user can edit those."*
-
-      That second half decided the shape. A `get`/`set` wrapper would have removed some
-      duplication and given a screen nothing to render, so this is a **registry**: each
-      setting declares its key, accepted values, default, label, group, hint and options,
-      and `listSettings()` is a Settings screen's entire data source. The same
-      declare-and-the-host-renders pattern as `menus.register` and the plugin manifests.
-
-      **What it absorbed** — eight settings over five modules, each of which had rebuilt
-      the same five pieces (key, accepted values, default, validate-on-read, and a
-      `try/catch` on both sides because storage throws outright in Safari private mode and
-      in a sandboxed frame): `varlist.order` (+ its legacy key), `varlist.display`,
-      `screen.mode`, `screen.autoNoteSeen`, `debug.logging`, `privacy.encryption`,
-      `collab.relays`, `collab.turn`. Every public function (`loadVarOrder`,
-      `storedScreenMode`, `setDebug`, `getEncryptionPolicy`, `getRelayUrls`, …) kept its
-      signature and became a one-liner, so nothing else in the app changed.
-
-      **Two behaviours a naive fold would have broken**, now pinned by tests:
-      `screen.mode` is TRI-state — `small`, `full`, or null for "nobody has said", which
-      is what lets the viewport decide, so a default there would read as a choice; and
-      `screen.autoNoteSeen` answers **`true` when storage throws**, not its fallback,
-      because a dismissal that cannot be remembered must not re-show the note on every
-      load. Hence `onError` as a field separate from `fallback`.
-
-      **Keys are never renamed.** A tidier scheme costs nothing to type and silently
-      resets every existing user's preferences on upgrade; the test that checks this says
-      so, and says the fix is to restore the key rather than update the expectation.
-
-      **Deliberately NOT settings**, and the exclusions are the design rather than a
-      backlog: plugin install/enable state (that *is* the plugin manager), the catalogue
-      cache, transient handoffs (`oauth.result`, the offline resume), credentials
-      (`dropbox.config` — a screen that enumerates settings must never print a token),
-      and identity/first-run flags.
-
-      **Shaped settings, added on the owner's call (2026-10-15):** *"I think it's worth
-      including the encryption settings and collab settings in this same registry. If we
-      ever do build a settings screen it would make sense to move them there."* They had
-      been left out for being objects and arrays rather than scalars, which was a gap in
-      the registry rather than a property of those settings — so `json` and `coerce`
-      close it. `coerce` runs on BOTH directions, which is what lets the encryption policy
-      state its one real rule in one place: what is stored may be a **partial**, and the
-      effective policy is always that read over the defaults, so a target nobody has ruled
-      on keeps following the default even after the default changes. A stored full
-      snapshot would have frozen it silently.
-
-      Each module kept its own write semantics, because those are domain rules rather than
-      storage rules and burying them in a generic store would have made them invisible:
-      the policy merges a patch, `setRelayUrls([])` **clears** the override (nobody can
-      mean "use no relays"), and `setTurnConfig(null)` clears.
-
-      **`secret`, found while doing it.** A TURN entry is `{urls, username, credential}`.
-      A registry whose entire purpose is to let a screen enumerate settings must not be
-      the thing that prints a credential — so a setting can declare itself `secret` and
-      `listSettings` then reports `isSet` and withholds the value. Verified in the running
-      app: a probe credential appears nowhere in the listing, the row still says one is
-      configured, and the app itself still reads it. `isSet` is useful beyond secrets —
-      it is how a screen shows "Default" beside an untouched setting instead of implying
-      the user chose it.
-
-  - [ ] **A Settings screen — MAYBE YES, MAYBE NO (owner, 2026-10-15).** Deliberately not
-        a commitment: *"I'm not sure it's needed so far, we don't have many settings and
-        each one currently is set close to the source that uses it. But maybe it'll be
-        reasonable to add later on."*
-
-        The case against building it now is the better one. Eight settings is not a
-        screen's worth, and each already sits beside what it affects — the variable order
-        and display in the toolbar of every list that obeys them, the screen mode in the
-        Edit menu next to what it reflows, encryption in the modal that asks about a
-        project. A central screen would move each of them *away* from its context and buy
-        a second place to look.
-
-        What would change the answer: enough settings that "where is that option" becomes
-        a real question, or a setting with no natural home next to its effect. Watch the
-        count — and note that the registry already makes the list cheap to see
-        (`listSettings()`), so the question can be re-asked from evidence rather than
-        guessed at.
-
-        **The registry does not depend on this.** It was built for the duplication (five
-        copies of key + values + default + validate + try/catch) and for the two
-        behaviours that duplication was about to lose; a screen was the second reason, not
-        the first. If this is never built, nothing is stranded.
-
-        If it IS built, it is a view over `listSettings()`: group by `group` (Appearance,
-        Variables, Privacy, Collaboration, Advanced), render `options` as a `<select>`,
-        respect `secret` by showing configured/not rather than a value, and use `isSet` to
-        say "Default" instead of implying a choice. Two things to decide then: how a
-        shaped value (the three encryption toggles, a relay list) is edited generically,
-        and whether it absorbs the Encryption settings modal or links out to it.
-
-
 ### Open follow-ups attached to completed entries
 
 Loose ends that live as sub-items under entries that are otherwise **done**, where they
@@ -3081,6 +2776,294 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#198 — the Settings screen. BUILT 2026-11-02.** The owner's call, and the
+      reasoning is the entry: *"I suppose it can't hurt. rather than set some benchmark
+      number of settings where having it makes sense we can just add it now when it
+      clearly isn't necessary and it will be there if the number ever does get larger."*
+
+      Which is the right shape of argument for this one. The case against was never that a
+      screen is bad — it was that eight settings do not need one and each already sits
+      beside what it affects. Both still true. But the cost is lowest exactly now, with
+      nothing to migrate and no layout to rework, and the registry it reads was finished in
+      October with *"a Settings screen's entire data source"* written in its own docs.
+      Waiting for a threshold would have meant paying more later for the same thing.
+
+      **It closed a gap nobody had filed.** `collab.relays` and `collab.turn` had **no UI
+      at all** — `setRelayUrls` and `setTurnConfig` had no caller anywhere outside
+      `live-sync.js`, so two declared settings were reachable only from a browser console.
+      A screen that enumerates settings finds that by construction, which is a better
+      argument for having one than the count ever was.
+
+      **The registry could be read and not written.** `listSettings()` returns specs plus
+      values; the accessors go to the declaring module and nowhere else. So a screen could
+      render all eight settings and change none of them. Added `setSetting(id, value)` and
+      `clearSetting(id)`, routed through the module's own accessor so there is exactly one
+      definition of what a valid value is — a second write path would have been a second
+      set of rules, and the screen would have been the client of whichever was more
+      lenient. `set()` now returns whether the value was ACCEPTED, which the screen needs:
+      a refused write must not leave a control showing something that was never stored.
+
+      **A write is not the same as taking effect**, which is where this stopped being a
+      rendering job. `defineSetting` gained an optional `apply`, declared by the owning
+      module because only it knows what "take effect" means, and forbidden from writing
+      (the registry has already stored the value). Two settings need it — `screen.mode`
+      reuses the existing `applyScreenMode`, and `debug.logging` re-reads its cached gate.
+
+      **Three settings are deliberately NOT editable here**, and that distinction is the
+      design rather than a shortcut. A screen that lists settings is not automatically the
+      place to change them, and pretending otherwise is how you ship a control that looks
+      like it worked:
+      - `varlist.order` / `varlist.display` carry `editedAt` and are shown read-only.
+        `data-views.js` reads them into INSTANCE state, so a write from a dialog would not
+        appear until something re-rendered. The toolbar that owns them sits in the header
+        of every list that obeys them — both the better place and the only one that
+        re-renders.
+      - `privacy.encryption` routes to its own dialog, with an **Open…** button.
+      - `collab.turn` is `secret`: status and Clear, never contents. `listSettings`
+        already withholds the value, and a screen that printed it would have made that
+        care pointless. No add-form — writing a credential blind is worth building when
+        something asks for it.
+
+      `editedAt` is a STRING naming where the control lives, not a function, because the
+      module declaring a setting must not import the dialog that edits it: `at-rest.js` is
+      imported BY `encryption-settings.js`, so the reverse is a cycle. The opener is passed
+      in instead, from `project-sync.js`, which already holds both the menu registry and
+      the `projects` handle the encryption dialog needs.
+
+      **A setting with no `label` does not appear at all** — and that rule was not invented
+      here. `screen.autoNoteSeen` has carried the comment *"Not offered to a Settings
+      screen (no `label`)"* since long before this file existed. A label is what marks a
+      declaration as a preference rather than a lifecycle flag.
+
+      Filed at **File ▸ Settings…**, order 9, between `Encryption settings…` and `Copy
+      dataset…`. Two existing tests did their job on the way through: one refused a
+      top-level `[x]` left under *Open work* (so #181 got moved rather than just ticked),
+      and the File-menu test demanded the item count be updated **deliberately** rather
+      than drifting from 13 to 14.
+
+      22 tests across the screen's model and the registry's new write path, including the
+      bug the first version had: `setSetting` inferred acceptance by comparing before and
+      after, so writing a *coerced* value over an identical one read as a refusal. `set()`
+      reporting it directly is both simpler and correct.
+
+      **Not browser-tested yet** — and it cannot be tested in Node at all: there is no DOM
+      shim in the suite, so `showSettings` needs a real browser. The model around it is
+      covered; the dialog is not. What to look at: File ▸ Settings… lists five groups, the
+      three selects change, Appearance ▸ Screen layout re-lays-out the app immediately,
+      the Variables rows read "Changed from the toolbar above any variable list", Privacy
+      offers **Open…**, and Collaboration ▸ TURN server says *Not configured* with no
+      field.
+
+- [x] **#181 — the three follow-ons #173 was carrying (split out 2026-09-21).** #173
+      shipped the project manager and is closed; these rode along inside its entry and
+      would have been closed with it. None blocks anything — they are the difference
+      between "the File menu stopped multiplying" and "the File menu is finished".
+
+      **Two of the three BUILT (2026-09-21), both menu moves; the third is not a menu
+      move and is still open — see below.** File is down to **two** project items:
+      `New project` and `Encryption settings…`. 840 tests (10 new).
+
+      **Browser pass: looked over by the owner on the deployed build (2026-09-21) — "looks
+      good from what I can see", no problems seen — and the **no-project-open** case
+      confirmed separately.** That was the one worth checking by hand: it is the state
+      #158 made real, it is unreachable from the menu of an open project, and getting it
+      wrong would have meant a dead first tab. The dialog lands on *New projects* with
+      the project tab saying why.
+
+      Still only covered as a function call: the **bundle round-trip** — Export ▸ the
+      `.crosstab` bundle, then Open ▸ Project bundle on the file it wrote. The two halves
+      used to be adjacent menu items and are now reached from two different tabs, so the
+      seam between them is new even though neither body changed.
+  - [x] **DONE (2026-09-21) — one per-project encryption modal, NOT a project-manager
+        tab (decided by the owner).** Four File items became one: `Encryption settings…`
+        opens `core/encryption-settings.js`, rewritten as a two-tab dialog — **This
+        project** (default) and **New projects**. `projectEncryptionOffer(state)` is the
+        extracted rule and decides what the project tab shows, so an unprotected project
+        is offered only *Set a passphrase…* and a protected one only *Change passphrase…*
+        / *Remove protection…*; the three `if (already protected) appendError` guards in
+        `project-sync.js` are now backstops for a direct call rather than the thing
+        standing between the user and a wrong state. `ProjectSync#protectionState()` is
+        the new read-only accessor — deliberately NOT `#settle()`ing, since settling only
+        writes when a binding already exists and so cannot change the answer, and saving
+        as a side effect of opening a dialog to *look* at a setting is a surprise. Both
+        empty states are distinguished and shown: `none` (no project open — real since
+        #158) and `unsaved` (exists, never written), with the dialog landing on the
+        defaults tab when there is nothing to act on. The defaults tab carries an
+        explicit scope disclaimer, and `docs/SECURITY.md` was updated where it named the
+        old menu path. 7 tests. *Original reasoning below.*
+
+        Today `core/project-sync.js` registers four File items:
+        `Protect this project…` (order 8), `Change passphrase…` (9), `Remove
+        protection…` (10) and `Encryption settings…` (also 10 — two items claiming one
+        slot, a small bug in its own right).
+
+        **The owner's reasoning, and it is right:** the manager is "the place for
+        opening, moving, exporting, or deleting projects **including** this one", while
+        these four are "update, enable, or disable encryption on **this one** project".
+        Different theme. A manager tab would only earn its place if it listed EVERY
+        project with encryption controls per row — and that variant is not merely
+        unwanted, it is close to unbuildable: `protectProject()` (~1609) works on the
+        ACTIVE project, `#settle()`s it to disk, then re-encrypts every file through
+        `#fullSave`/`#folderRewrite`. Doing that from a list would mean opening — and,
+        for an already-protected project, unlocking — each one first. So: a dedicated
+        modal for the active project.
+
+        **What it replaces, and why a modal beats three menu items.** The three verbs
+        are state-dependent and the menu fakes it: all three show always, and
+        `protectProject()` opens with a guard that errors "This project is already
+        protected." That is precisely [[guard-means-missing-state]] — a guard whose only
+        job is to neutralise a state means the state should not be reachable. A modal
+        reads the current state and offers only what applies: unprotected → *Set a
+        passphrase*; protected → *Change passphrase* / *Remove protection*. The guard
+        then has nothing to guard.
+
+        **DECIDED (owner, 2026-09-21): one File item, `Encryption settings…`, opening a
+        TABBED modal.** Default tab **this project** — set / change / remove its
+        passphrase; second tab **the global defaults** — encrypt new projects on this
+        device by default, and whatever else accrues later (passphrase-strength rules
+        were named as a likely example). Four File items become one, and the naming
+        collision dissolves instead of being negotiated: the organising axis is
+        *encryption*, not *scope*, which is also why this does not contradict the
+        manager decision above — that rejected mixing encryption with open/move/delete,
+        not mixing two scopes of one subject.
+
+        It absorbs `core/encryption-settings.js` (#144), which is the app-wide at-rest
+        POLICY dialog: one switch, with exports and folder projects as read-only
+        context. Evidence the seam was already wrong — it currently ends with "To
+        protect (or unprotect) a project you've already made, use **File ▸ Protect this
+        project…**". A settings dialog that has to send you back to the menu becomes a
+        tab switch.
+
+        Three things to get right when building it. **All three were built and are
+        DONE (confirmed 2026-10-13 from a screenshot the owner sent, then checked against
+        `core/encryption-settings.js` and `test/encryption-settings.test.mjs` — the
+        checkboxes were simply never ticked, the same staleness as #179, #171 and #141):**
+    - [x] **DONE — the two tabs do not look interchangeable.** `ENC_TABS` is
+          `{id: 'project', label: 'This project'}` / `{id: 'defaults', label: 'New
+          projects'}` — named by scope, as asked. The defaults tab carries the
+          load-bearing disclaimer in so many words: it *"will not unprotect or alter any
+          project that already exists — for those, use the “This project” tab."* Pinned by
+          *the project tab comes first, and the tabs are named by scope*. Original:
+          **The two tabs must not look interchangeable.** One acts on the open project
+          NOW; the other changes a default for projects that don't exist yet and touches
+          no existing project. Name them by scope (*This project* / *New projects*
+          rather than *Project* / *Globals*), and let the defaults tab say plainly that
+          it changes nothing already saved. The failure to design out is someone
+          flipping a default believing they just protected the project in front of them.
+    - [x] **DONE — both degenerate states are SHOWN, and the modal lands where there is
+          something to do.** `actionable` is false for `scope: 'none'` and for
+          `scope: 'unsaved'`, and `if (!actionable) active = 'defaults'` makes the
+          defaults tab the landing tab exactly as this asked. The two states stayed
+          distinct rather than being merged into one "nothing here": two tests,
+          *no project open offers nothing, and says why* and *an unsaved project is a
+          DIFFERENT empty state from no project*, the second noting that merging them
+          would print "no project is open" at someone looking at their data. Original:
+          **Two degenerate states, expressed not guarded.** #158 shipped, so "no project
+          open" is a real state (sitting at the launcher) — and `protectProject()` also
+          refuses an empty unsaved one ("Add some data first — an empty project has
+          nothing to protect yet"). Both are facts the project tab should SHOW, with the
+          modal opening on the defaults tab when there is nothing to act on. Turning
+          those two errors into a visible state is the same [[guard-means-missing-state]]
+          move as collapsing the three verbs.
+    - [x] **DONE — the verbs are state-driven, never all three at once.**
+          `projectEncryptionOffer(state)` returns only what applies, and two tests pin it:
+          *an unprotected project is offered exactly one verb: set a passphrase* and
+          *a protected project is offered change and remove — never protect again*. A
+          third marks removal dangerous and setting one not. Original:
+          **Keep the per-project verbs state-driven inside the tab** as above:
+          unprotected → *Set a passphrase*; protected → *Change passphrase* / *Remove
+          protection*. Never all three at once.
+  - [x] **DONE (2026-09-21) — the two bundle items folded into the manager.** `Export
+        project bundle (.crosstab)…` and `Open project bundle (.crosstab)…` left File;
+        their bodies are unchanged, only where they are reached from. **Opening** is a
+        row in the **Open** rail (`kind: 'bundle'`); **writing** is a row on the
+        **Export** tab.
+
+        Two things had to be got right rather than wired. (1) A bundle is NOT a *Store
+        in* destination — it is a snapshot that stops receiving changes the moment it
+        lands — so `providersFor(providers, mode)` now decides which rail a location
+        belongs in. That also fixed a pre-existing bug found on the way: a provider with
+        no `chooseDestination` still drew a Store button that did nothing when clicked, a
+        dead control indistinguishable from a live one. (2) The Export tab's hint claimed
+        every export "is one-way — an exported file cannot be reopened as a project",
+        which the bundle makes false. It is now two groups — *A copy you can open again*
+        and *For another program* — which keeps [[format-equality-no-lockin]] intact: the
+        bundle is described by what it does, not promoted, and the other formats keep
+        equal billing. A bundle also cannot be ENUMERATED (there is no index of
+        `.crosstab` files on a disk), so the provider declares `enumerable: false` and
+        the pane says what it is instead of reporting an empty list. 3 tests.
+  - [x] **Can the project manager be redesigned so the shared row becomes reasonable?
+        ANSWERED by the owner 2026-11-02: no, and it does not need to be.** *"the manager
+        justified its independent rendering due to unique workflow needs."*
+
+        Which answers the question as asked rather than deferring it. The analysis below
+        kept arriving at the same place from the other direction — the row is shareable
+        *because* it is opinion-free, and the manager's five modes each carry an opinion
+        about what a click does — and treated that as a tension to resolve. It is not one.
+        Two renderings of one LIST would be drift; two renderings serving two jobs is a
+        difference in the jobs.
+
+        The redesign sketch below is **not** retired, because it was never really about
+        sharing the row: "are these five tabs fewer surfaces than they look" is a question
+        about the manager's own usability, and it stands or falls on that. It is just no
+        longer owed to anybody as a prerequisite. The trigger named at the end still
+        applies — a sixth mode would be evidence the tabs are doing too much.
+
+        Original question and analysis follow. Deliberately a question about the MANAGER,
+        not about `project-list.js`.
+
+        The row is shareable because it is opinion-free — it draws name, location, date and
+        size, and holds no view about what a click does. The manager is a `<dialog>` with
+        five modes (recents / open / store / manage / export) and a verb set per mode, so
+        consuming that row would mean teaching it about modes, which would cost it the
+        property that makes three other surfaces able to use it. The owner's reading:
+        *"the current 'tabbed dialog with five modes' does not seem a reasonable candidate
+        for using the shared component."*
+
+        So the duplication — its own `renderList`, `renderRail` and `describeRow`, plus
+        the line `[what.detail, projectMetaLine(row)].filter(Boolean).join(' · ')` repeated
+        verbatim from `project-list.js` — is a **symptom of the manager's shape**, and the
+        honest question is whether that shape is right.
+
+        What would make it one: if the five tabs turned out to be fewer surfaces than they
+        look. "Recents" and "Open" are both *pick a project to open*; "Store" is *pick a
+        destination*; "Manage" is *act on a project in place*. A manager that was a list
+        plus per-row verbs — the sidebar's shape, which already uses the shared row — might
+        need no tabs at all, at which point sharing is free rather than forced. That is a
+        redesign with a user-visible cost (the tabs are discoverable), so it is a question
+        and not a task.
+
+        Not urgent: nothing is broken, and the thing most likely to drift is already
+        shared (`projectMetaLine`, in `project-meta.js`). Worth revisiting if the manager
+        grows a sixth mode, which would be evidence the tabs are doing too much.
+
+  - [x] **CLOSED by the owner, 2026-11-02:** *"done. launcher and manager both are using
+        the same underlying list component but the manager justified its independent
+        rendering due to unique workflow needs."*
+
+        That settles a question this sub-item had been asking in two directions at once,
+        and the contradiction is worth keeping because of how it got there. The entry
+        ended with a paragraph titled **"The launcher should reuse the manager component
+        instead of its own rail"** — and three paragraphs above it, a 2026-10-26 note
+        saying that description was backwards: `core/project-list.js` is the shared row
+        component, **the launcher already uses it** (`launcher.js:18`) alongside the
+        sidebar (`app.js:63`), and the manager is the surface that never adopted it. So
+        the item simultaneously recorded that the work was done in the other direction and
+        still instructed a reader to do it in this one. A correction appended ABOVE a
+        stale conclusion does not retire it; the conclusion is what gets read and acted
+        on.
+
+        The owner's answer resolves it on the merits rather than the bookkeeping: the
+        shared component is in use by both, and the manager's own rendering is not drift
+        but a response to workflow the launcher does not have — it opens, moves, exports
+        and deletes, with a backend registry and per-row verbs, where the launcher picks
+        one project and goes. Two renderings of one LIST would be drift; two renderings
+        for two jobs is not.
+
+        **[[#167]]** ("the launcher should INCLUDE project management") and **#161**
+        ("clicking a source/project should just go") no longer have a dependency here.
+        Whatever they ask for stands on its own.
 
 - [x] **#197 — the plugin manifest was never sanitised. DONE 2026-11-01.** The owner's
       question, off the back of #196: *"The app is building plugin identities from strings
@@ -11494,6 +11477,112 @@ The record of what shipped and why. Kept in full, in the original sections.
       shipped in only one of them and produced a chart mode nothing could draw.
 
 ### Nice-to-have / optimisations
+
+- [x] **Settings persistence — COMPLETE 2026-11-02. The store was built 2026-10-15; the
+      screen is #198.** Closed because its one open child closed: the title's "the screen
+      is not" is simply no longer true. Kept whole rather than split, since the registry
+      and the screen only make sense as one decision — the registry was shaped as a
+      declare-and-the-host-renders list *because* a screen was the second reason for
+      building it, and that bet paid off unchanged.
+      `core/settings.js`. Confirmed with the owner first: *"is this talking about pulling
+      together the various call sites that put/read some sort of persistent setting to
+      local storage and making a unified settings get/set mechanism? I agree that sounds
+      worth doing, as it could also be helpful if we want to build a single 'settings'
+      screen where the user can edit those."*
+
+      That second half decided the shape. A `get`/`set` wrapper would have removed some
+      duplication and given a screen nothing to render, so this is a **registry**: each
+      setting declares its key, accepted values, default, label, group, hint and options,
+      and `listSettings()` is a Settings screen's entire data source. The same
+      declare-and-the-host-renders pattern as `menus.register` and the plugin manifests.
+
+      **What it absorbed** — eight settings over five modules, each of which had rebuilt
+      the same five pieces (key, accepted values, default, validate-on-read, and a
+      `try/catch` on both sides because storage throws outright in Safari private mode and
+      in a sandboxed frame): `varlist.order` (+ its legacy key), `varlist.display`,
+      `screen.mode`, `screen.autoNoteSeen`, `debug.logging`, `privacy.encryption`,
+      `collab.relays`, `collab.turn`. Every public function (`loadVarOrder`,
+      `storedScreenMode`, `setDebug`, `getEncryptionPolicy`, `getRelayUrls`, …) kept its
+      signature and became a one-liner, so nothing else in the app changed.
+
+      **Two behaviours a naive fold would have broken**, now pinned by tests:
+      `screen.mode` is TRI-state — `small`, `full`, or null for "nobody has said", which
+      is what lets the viewport decide, so a default there would read as a choice; and
+      `screen.autoNoteSeen` answers **`true` when storage throws**, not its fallback,
+      because a dismissal that cannot be remembered must not re-show the note on every
+      load. Hence `onError` as a field separate from `fallback`.
+
+      **Keys are never renamed.** A tidier scheme costs nothing to type and silently
+      resets every existing user's preferences on upgrade; the test that checks this says
+      so, and says the fix is to restore the key rather than update the expectation.
+
+      **Deliberately NOT settings**, and the exclusions are the design rather than a
+      backlog: plugin install/enable state (that *is* the plugin manager), the catalogue
+      cache, transient handoffs (`oauth.result`, the offline resume), credentials
+      (`dropbox.config` — a screen that enumerates settings must never print a token),
+      and identity/first-run flags.
+
+      **Shaped settings, added on the owner's call (2026-10-15):** *"I think it's worth
+      including the encryption settings and collab settings in this same registry. If we
+      ever do build a settings screen it would make sense to move them there."* They had
+      been left out for being objects and arrays rather than scalars, which was a gap in
+      the registry rather than a property of those settings — so `json` and `coerce`
+      close it. `coerce` runs on BOTH directions, which is what lets the encryption policy
+      state its one real rule in one place: what is stored may be a **partial**, and the
+      effective policy is always that read over the defaults, so a target nobody has ruled
+      on keeps following the default even after the default changes. A stored full
+      snapshot would have frozen it silently.
+
+      Each module kept its own write semantics, because those are domain rules rather than
+      storage rules and burying them in a generic store would have made them invisible:
+      the policy merges a patch, `setRelayUrls([])` **clears** the override (nobody can
+      mean "use no relays"), and `setTurnConfig(null)` clears.
+
+      **`secret`, found while doing it.** A TURN entry is `{urls, username, credential}`.
+      A registry whose entire purpose is to let a screen enumerate settings must not be
+      the thing that prints a credential — so a setting can declare itself `secret` and
+      `listSettings` then reports `isSet` and withholds the value. Verified in the running
+      app: a probe credential appears nowhere in the listing, the row still says one is
+      configured, and the app itself still reads it. `isSet` is useful beyond secrets —
+      it is how a screen shows "Default" beside an untouched setting instead of implying
+      the user chose it.
+
+  - [x] **A Settings screen — BUILT 2026-11-02 as #198** (owner: *"I suppose it can't
+        hurt… add it now when it clearly isn't necessary and it will be there if the number
+        ever does get larger"*). The analysis below was not wrong — eight settings do not
+        need a screen and each does sit beside what it affects — it was just answering
+        "does this need building" when the deciding question was "when is it cheapest".
+        Full entry under *Completed*. Original reasoning follows.
+
+        **A Settings screen — MAYBE YES, MAYBE NO (owner, 2026-10-15).** Deliberately not
+        a commitment: *"I'm not sure it's needed so far, we don't have many settings and
+        each one currently is set close to the source that uses it. But maybe it'll be
+        reasonable to add later on."*
+
+        The case against building it now is the better one. Eight settings is not a
+        screen's worth, and each already sits beside what it affects — the variable order
+        and display in the toolbar of every list that obeys them, the screen mode in the
+        Edit menu next to what it reflows, encryption in the modal that asks about a
+        project. A central screen would move each of them *away* from its context and buy
+        a second place to look.
+
+        What would change the answer: enough settings that "where is that option" becomes
+        a real question, or a setting with no natural home next to its effect. Watch the
+        count — and note that the registry already makes the list cheap to see
+        (`listSettings()`), so the question can be re-asked from evidence rather than
+        guessed at.
+
+        **The registry does not depend on this.** It was built for the duplication (five
+        copies of key + values + default + validate + try/catch) and for the two
+        behaviours that duplication was about to lose; a screen was the second reason, not
+        the first. If this is never built, nothing is stranded.
+
+        If it IS built, it is a view over `listSettings()`: group by `group` (Appearance,
+        Variables, Privacy, Collaboration, Advanced), render `options` as a `<select>`,
+        respect `secret` by showing configured/not rather than a value, and use `isSet` to
+        say "Default" instead of implying a choice. Two things to decide then: how a
+        shaped value (the three encryption toggles, a relay list) is edited generically,
+        and whether it absorbs the Encryption settings modal or links out to it.
 
 - [x] **#184 — a comprehensive how-to guide (owner, 2026-09-21). SCOPE DECIDED and
       PHASE 1 SHIPPED 2026-10-23: a task reference. Discipline courses are OUT OF SCOPE,

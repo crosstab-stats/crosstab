@@ -35,6 +35,10 @@ const gateSetting = defineSetting({
   label: 'Debug logging',
   group: 'Advanced',
   hint: 'Record diagnostics for a bug report. Off unless you have been asked to turn it on.',
+  // The gate is cached in module state (`_enabled`, `_tags`) so that a disabled log call
+  // costs nothing, which means a change to the stored value is invisible until something
+  // re-reads it. Re-reading IS the apply.
+  apply: () => _readGate(),
 });
 
 let _enabled = false;

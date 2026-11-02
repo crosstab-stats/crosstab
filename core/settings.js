@@ -87,10 +87,35 @@
  * @property {string} [group] - How a Settings screen would section it.
  * @property {string} [hint] - One line on what the choice does.
  * @property {Array<[any, string]>} [options] - `[value, label]` pairs for a `<select>`.
+ * @property {(value: any) => void} [apply] - Make a stored change TAKE EFFECT, declared by
+ *   the owning module because only it knows what that means. Called by {@link setSetting}
+ *   and {@link clearSetting} after the write, with the value that is now in force.
+ *
+ *   **Must not write.** The registry has already stored the value; an `apply` that stored
+ *   it again would make the write path depend on which of two stores ran last. A setting
+ *   with no `apply` is one that is simply read when next needed — which is most of them,
+ *   and is why this is optional rather than required.
+ * @property {string} [editedAt] - Where the REAL control for this setting lives, when a
+ *   Settings screen should route to it rather than offer its own. Named rather than
+ *   linked: the module declaring a setting must not have to import the dialog that edits
+ *   it (`at-rest.js` is imported BY `encryption-settings.js`, so the reverse is a cycle).
+ *   A screen shows the current value read-only and this text beside it.
  */
 
 /** @type {Map<string, SettingSpec>} */
 const registry = new Map();
+
+/**
+ * id -> the accessor object {@link defineSetting} handed its declaring module.
+ *
+ * Kept so that {@link setSetting} can write through the SAME closure the module uses
+ * rather than re-implementing encode/accept beside it. A second write path would be a
+ * second set of rules about what a valid value is, and the screen would be the client of
+ * whichever one happened to be more lenient.
+ *
+ * @type {Map<string, {get: Function, set: Function, clear: Function}>}
+ */
+const accessors = new Map();
 
 /** Read at call time, never captured: a test can install a fake, and `localStorage` does
  * not exist at all under `node --test`. */
@@ -113,7 +138,7 @@ export function defineSetting(spec) {
   if (!('onError' in full)) full.onError = full.fallback;
   registry.set(full.id, full);
 
-  return {
+  const api = {
     spec: full,
     get() {
       try {
@@ -129,8 +154,9 @@ export function defineSetting(spec) {
       }
     },
     /**
-     * Write a value. An unaccepted one is a no-op, not a throw: a caller passing rubbish
-     * is a bug to fix, and corrupting the stored preference on the way out helps nobody.
+     * Write a value, returning whether it was ACCEPTED. An unaccepted one is a no-op, not
+     * a throw: a caller passing rubbish is a bug to fix, and corrupting the stored
+     * preference on the way out helps nobody.
      *
      * "Unaccepted" is not the same as "means clear". `setRelayUrls([])` clears the
      * override and says so by calling {@link clear} — rather than leaning on an empty
@@ -139,17 +165,70 @@ export function defineSetting(spec) {
      */
     set(value) {
       const v = accept(full, value);
-      if (v === undefined) return;
+      if (v === undefined) return false;
       try {
         storage()?.setItem(full.key, full.json ? JSON.stringify(v) : v);
       } catch { /* storage unavailable */ }
+      // TRUE means the value was accepted, not that it reached the disk. Storage failing
+      // is already handled everywhere else here by being invisible (`onError` answers the
+      // read), and the caller that needed a return value — a Settings screen — is asking
+      // "was my input valid", which is a different question with a different remedy.
+      return true;
     },
     /** Forget the choice — the stored absence that `fallback` describes. */
     clear() {
       try { storage()?.removeItem(full.key); } catch { /* storage unavailable */ }
     },
   };
+  accessors.set(full.id, api);
+  return api;
 }
+
+/**
+ * Write a setting BY ID, for a Settings screen — which holds specs, not accessors.
+ *
+ * {@link listSettings} made the registry a complete data SOURCE for a screen and left it
+ * unable to change anything: the accessors go to the declaring module and nowhere else.
+ * So a screen could render every setting and edit none of them.
+ *
+ * Routed through the module's own accessor, so an unaccepted value is the same no-op it
+ * would be anywhere else, and then through the spec's `apply` so the change takes effect.
+ * Returns whether the value was accepted — a screen needs to know, because a rejected
+ * write leaves the control showing something that was never stored.
+ *
+ * @param {string} id
+ * @param {any} value
+ * @returns {boolean} whether it was accepted and written
+ */
+export function setSetting(id, value) {
+  const api = accessors.get(id);
+  const spec = registry.get(id);
+  if (!api || !spec) return false;
+  if (!api.set(value)) return false;
+  // The value that is now in force, which is not always the one passed in: a `coerce` may
+  // adjust it, and `apply` has to act on what was actually stored.
+  spec.apply?.(api.get());
+  return true;
+}
+
+/**
+ * Return a setting to its default — the stored absence, not a written default value.
+ *
+ * The distinction is the whole point of `fallback`: `screen.mode` unset means "let the
+ * viewport decide", which no concrete value can express.
+ *
+ * @param {string} id
+ * @returns {boolean} whether the id was known
+ */
+export function clearSetting(id) {
+  const api = accessors.get(id);
+  const spec = registry.get(id);
+  if (!api || !spec) return false;
+  api.clear();
+  spec.apply?.(api.get());
+  return true;
+}
+
 
 /** A fallback may be a thunk, for a default a caller could mutate. */
 const resolve = (f) => (typeof f === 'function' ? f() : f);
@@ -210,4 +289,5 @@ export function settingIds() {
 /** Drop every declaration. Tests only — modules declare at import, and an import runs once. */
 export function _resetRegistry() {
   registry.clear();
+  accessors.clear();
 }

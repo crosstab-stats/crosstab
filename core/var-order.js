@@ -114,6 +114,12 @@ const orderSetting = defineSetting({
   values: VAR_ORDERS,
   fallback: 'file', // what every surface did before the choice existed
   label: 'Variable list order',
+  // Routed, not editable from a Settings screen. The toolbar that owns this sits in the
+  // header of every list that obeys it, which is both the better place to change it and
+  // the only place that re-renders when it does: `data-views.js` reads the value into
+  // instance state, so a write from elsewhere would not show until something refreshed.
+  // A screen that offered the control without the re-render would look broken.
+  editedAt: 'the toolbar above any variable list',
   group: 'Variables',
   hint: 'How the Data grid, Variable View and every picker order their variables.',
   options: VAR_ORDER_OPTIONS,
@@ -125,6 +131,7 @@ const displaySetting = defineSetting({
   values: VAR_DISPLAYS,
   fallback: 'label',
   label: 'Show variables as',
+  editedAt: 'the toolbar above any variable list',
   group: 'Variables',
   hint: 'Whether a variable is named by its label, its name, or both.',
   options: VAR_DISPLAY_OPTIONS,
