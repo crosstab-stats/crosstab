@@ -25,6 +25,8 @@
  * do not describe them. Everything else in `fields` stays opaque (#152 D1).
  */
 
+import { identityText } from './plugin-stdlib.js';
+
 /**
  * @typedef {Object} CollectionDecl
  * @property {string} id            Collection name, as passed to `app.items.*`.
@@ -89,13 +91,31 @@ const SIDEBAR_MODES = new Set(['list', 'count', 'none']);
  * @param {*} raw
  * @returns {CollectionDecl|null}
  */
+/** The character class for a collection id — see {@link normalizeCollection}. */
+const COLLECTION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 export function normalizeCollection(raw) {
   const id = typeof raw?.id === 'string' ? raw.id.trim() : '';
   if (!id) return null;
+  // A collection id is half of a storage address and is VALIDATED, not cleaned, for the
+  // same reason a plugin id is (see core/loader.js~qualifyId): cleaning a key quietly
+  // makes two keys one. Dropped rather than repaired, which is what this function already
+  // does with a half-written `parent` — a bad manifest costs that plugin the collection,
+  // never the whole sidebar.
+  //
+  // The class is deliberately the id class plus camelCase, because `boundarySets` is a
+  // real declaration we ship. It excludes the slash (collections appear in `owner/id`
+  // addresses in prose and in the how-to), whitespace, control characters, NUL,
+  // surrogates and the invisibles — none of which belongs in an identifier, and all of
+  // which passed through untouched before.
+  if (!COLLECTION_ID.test(id)) return null;
   const sidebar = SIDEBAR_MODES.has(raw.sidebar) ? raw.sidebar : 'none';
   return {
     id,
-    label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : id,
+    // Display text from somebody else's manifest: it is drawn in the sidebar and in the
+    // project panel, so it is cleaned to equal its own rendering (invisibles, control
+    // characters, length) rather than trusted. Falls back to the id, which is validated.
+    label: identityText(raw.label, { max: 60, fallback: id }),
     labelField: typeof raw.labelField === 'string' && raw.labelField ? raw.labelField : null,
     summaryField: typeof raw.summaryField === 'string' && raw.summaryField ? raw.summaryField : null,
     portable: raw.portable === true,

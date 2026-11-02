@@ -111,12 +111,74 @@ export const API_VERSION = '0.1.0';
  * @returns {string} the qualified id, e.g. `builtin-regression`, `sdsu-attendance`,
  *   or `alice.dev:regression`.
  */
+/**
+ * A plugin id is a KEY, so it is VALIDATED rather than cleaned.
+ *
+ * Cleaning a key silently is how two plugins come to share one: `#ensureIdAvailable`
+ * guarantees qualified-id uniqueness (#102) by comparing exact strings, so if a character
+ * were stripped after that comparison the guarantee would be checking a value that no
+ * longer exists. Rejecting instead keeps the check and the key talking about the same
+ * string, and matches the rule the rest of the manifest already follows — a bad
+ * declaration costs that plugin the feature, never the whole app.
+ *
+ * ASCII, lowercase-or-upper letters, digits, dot, underscore, hyphen; must begin with a
+ * letter or digit; 64 characters. Every one of the sixty built-ins and every id the
+ * in-app creator generates (`authored-<8 hex>`) is already inside this, so it describes
+ * what the project actually uses rather than inventing a new convention.
+ *
+ * No colon: that is the namespace separator this function inserts and
+ * {@link module:core/workspace-store~ownerToken} splits on. No slash, whitespace,
+ * control character, NUL, surrogate or invisible — an id appears in two `confirm()`
+ * prompts in the plugin manager, where a newline forges extra lines of dialog text.
+ */
+const LOCAL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * Render an untrusted string safely INSIDE AN ERROR MESSAGE about that string.
+ *
+ * The messages below name the offending id, and the whole reason it is being rejected is
+ * that it may carry newlines or bidi overrides — which would then be carried by the
+ * complaint, into the same `confirm()` and `alert()` surfaces. A validator that quotes
+ * its input verbatim re-introduces exactly what it is there to stop.
+ */
+function idPreview(s) {
+  const printable = String(s ?? '').replace(/[^\x20-\x7E]/g, '?');
+  return printable.length > 40 ? printable.slice(0, 40) + '…' : printable;
+}
+
+/**
+ * Slug a self-declared or parsed string into an id NAMESPACE.
+ *
+ * Restricted to the same ASCII class as the id itself, because the namespace is half of
+ * the key and is shown beside it. It grants nothing — `ownerToken` stopped reading
+ * authority off this prefix — so mangling it costs nothing but legibility, which is why
+ * this cleans where the id proper rejects.
+ */
+function slugNamespace(s, fallback) {
+  const slug = String(s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9._-]/g, '-')  // anything else, a colon in an IPv6 host included
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-._]+|[-._]+$/g, '')
+    .slice(0, 40);
+  return slug || fallback;
+}
+
 export function qualifyId(origin, manifest) {
   const local = String(manifest?.id ?? '').trim();
   if (!local) throw new Error('Plugin manifest is missing an id.');
+  if (!LOCAL_ID.test(local)) {
+    throw new Error(
+      'Plugin id "' + idPreview(local) + '" is not usable. An id is a storage key: it may '
+      + 'contain only ASCII letters, digits, dot, underscore and hyphen, must start with a '
+      + 'letter or digit, and must be at most 64 characters.',
+    );
+  }
   if (!origin || origin.kind === 'builtin') return local; // reserved builtin namespace
   if (origin.kind === 'site') {
-    const ns = String(origin.namespace || 'site').trim().toLowerCase() || 'site';
+    const ns = slugNamespace(origin.namespace, 'site');
     // Already prefixed by its author? Leave it — `sdsu-sdsu-attendance` helps nobody. Anything
     // else gets the prefix even if it starts with `builtin-`, so a would-be forgery reads as
     // exactly what it is: `sdsu-builtin-frequencies`.
@@ -125,15 +187,19 @@ export function qualifyId(origin, manifest) {
   if (origin.kind === 'url') {
     let host = '';
     try {
-      host = new URL(origin.url).host;
+      // `hostname`, not `host`: `host` carries the PORT, so a plugin served from
+      // `https://example.com:8080/p.js` produced the id `example.com:8080:thing` — two
+      // colons, and `ownerToken` splits on the first, so the namespace silently became
+      // `example.com` with `8080:thing` dangling. An IPv6 literal arrives bracketed and
+      // full of colons; `slugNamespace` flattens both cases.
+      host = new URL(origin.url).hostname;
     } catch {
       /* relative/garbage URL → fall back below */
     }
-    return `${host || 'url'}:${local}`;
+    return `${slugNamespace(host, 'url')}:${local}`;
   }
   // file / authored: the author tag is the namespace (self-declared); else 'local'.
-  const author = String(manifest?.author ?? '').trim().replace(/\s+/g, '-').toLowerCase();
-  return `${author || 'local'}:${local}`;
+  return `${slugNamespace(manifest?.author, 'local')}:${local}`;
 }
 
 /**

@@ -32,7 +32,7 @@ import { packPlugin, unpackPlugin, looksLikeZip } from './plugin-package.js';
 import { ownerToken } from './workspace-store.js';
 import { escapeHtml } from './text.js';
 import { downloadBlob } from './project-bundle.js';
-import { el } from './plugin-stdlib.js';
+import { el, identityText } from './plugin-stdlib.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
@@ -398,7 +398,18 @@ export class PluginManager {
   #recordCatalog(key, manifest) {
     this.#catalog[key] = {
       id: manifest.id,
-      name: manifest.name,
+      // Display strings are cleaned HERE, at the one boundary where an outside manifest
+      // becomes something the app stores and draws (#197). `identityText` makes a string
+      // equal its own rendering: no bidi override, no zero-width space, no control
+      // character, and a length bound.
+      //
+      // The name specifically: it is the thing a user reads to decide whether to trust a
+      // plugin, it is the attribution line, and it is interpolated into two `confirm()`
+      // prompts below — where a newline forges extra lines of dialog text ("Replace it
+      // with this one?" followed by whatever the plugin wants to claim). The fallback is
+      // the id, which `qualifyId` has already validated, so a plugin that supplies no
+      // usable name is still identifiable rather than blank.
+      name: identityText(manifest.name, { fallback: manifest.id }),
       // Author-declared version (any style). Recorded so the plugin manager can show
       // it — a visible way to confirm a freshly-deployed plugin file actually loaded
       // (#91). Re-read whenever the catalog re-probes (CATALOG_VERSION bump / new id).
@@ -413,8 +424,15 @@ export class PluginManager {
       // plugin and is fetched when a topic is opened.
       howtoIndex: Array.isArray(manifest.howtoIndex) ? manifest.howtoIndex : [],
       howtoFile: typeof manifest.howtoFile === 'string' ? manifest.howtoFile : null,
-      category: typeof manifest.category === 'string' ? manifest.category : '',
-      keywords: Array.isArray(manifest.keywords) ? manifest.keywords : [],
+      // The category groups the picker and is drawn as a heading.
+      category: identityText(manifest.category, { max: 40 }),
+      // Keywords are search text, matched against what the user types and never shown
+      // alone, so the cap is per-keyword and the list length is bounded too: this object
+      // is JSON in localStorage, re-parsed on every boot.
+      keywords: (Array.isArray(manifest.keywords) ? manifest.keywords : [])
+        .slice(0, 40)
+        .map((k) => identityText(k, { max: 40 }))
+        .filter(Boolean),
       disciplines: Array.isArray(manifest.disciplines) ? manifest.disciplines : [],
       // R packages the plugin declares — used by the offline cache to pre-fetch the
       // dependency closure of the *enabled* plugins.

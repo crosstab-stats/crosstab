@@ -73,6 +73,76 @@ read/corrupt a just-imported blob; that is closed by construction now). Reads ad
 the caller's own owner by default; that is an *addressing* default, not a claimed
 barrier — nothing is promised to be unreadable, so nothing is over-promised.
 
+### A plugin manifest is untrusted input (#197)
+
+Found by the owner asking a question this file could not answer: *"The app is building
+plugin identities from strings in the plugin manifest. Are those string inputs sanitized?
+Is any of the plugin manifest sanitized before processing?"* The answer was **no** — the
+only check in the whole path was whether an id existed at all.
+
+**Why two earlier audits missed it, which is worth more than the fix.** Both passes (#89
+pre-launch, the 2026-07 plugin audit) were organised around *capability*: what can an
+activated plugin **reach** — the active dataset, the network, another plugin's records.
+Against that frame, sanitising a manifest looks pointless, because a plugin that is
+already trusted with the data has nothing to gain by lying in its metadata. The frame has
+no row for the manifest because the manifest is not a capability the plugin wields
+against the data — **it is the evidence the USER weighs when deciding whether to grant
+the capability in the first place.** An audit that asks only "what can it do once trusted"
+will never ask "what does the user see when deciding to trust it".
+
+**What was and was not at risk.** Checked rather than assumed, because the fix stays small
+only if the claims are accurate:
+
+- *Not* HTML injection. Every render path uses `textContent` or `el({text})`, and the two
+  `innerHTML` templates that interpolate a manifest value call `escapeHtml`.
+- *Not* key corruption through save/load. `JSON.stringify` escapes NUL and lone surrogates
+  as ASCII `\uXXXX`, so a storage key containing either round-trips through a UTF-8
+  project file losslessly. The string-ingress problem fixed for column names does not
+  reach plugin keys.
+- *Not* filenames. OPFS source keys are `local:<uuid>`, never manifest strings.
+- *Not* boot. `writeJSON` catches quota errors and returns false; an oversized manifest
+  fails to persist instead of breaking a launch.
+- *Not* R injection. `rPackages` goes to WebR's own `installPackages`, not into R source
+  we build by hand.
+
+**What was at risk was identity, and it defeated a protection this project built on
+purpose.** `qualifyId` namespaces a non-built-in id so a would-be forgery "reads as
+exactly what it is: `sdsu-builtin-frequencies`" — which assumes the string renders as its
+characters. A single U+202E breaks that, and `core/plugin-manager.js` interpolates both
+the id and the name into `confirm()` prompts, where a newline forges extra lines of dialog
+text in the app's own voice ("Replace it with this one?" followed by whatever the plugin
+cares to assert). `#ensureIdAvailable` compares exact strings, so two ids differing only
+by a zero-width character both installed and were indistinguishable in the picker.
+
+**Two policies, because a key and a label are not the same kind of string.**
+
+- **Keys are VALIDATED and the manifest is REJECTED** — `manifest.id` and collection ids
+  must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Cleaning a key silently is how two
+  plugins come to share one: uniqueness is checked by exact comparison, so a character
+  stripped afterwards leaves the check guarding a value that no longer exists. Validation
+  runs inside `qualifyId`, which `#ensureIdAvailable` already calls, so a bad manifest
+  never reaches the catalogue. A plugin already installed with a now-invalid id fails in
+  isolation: `#activateEntry` catches, reports "Failed to load plugin <name>", and boot
+  continues.
+- **Display text is CLEANED to equal its own rendering** — `identityText` in
+  `core/plugin-stdlib.js`, applied once at `#recordCatalog`, the single boundary where an
+  outside manifest becomes state the app stores and draws. It strips bidi overrides and
+  isolates, the zero-width space and the BOM, sweeps control characters, repairs lone
+  surrogates and bounds the length. It deliberately **keeps** U+200C/U+200D, which are
+  letters in Persian, Hindi and other scripts — deleting them would corrupt a real
+  author's name. The confusability they permit is closed on the id instead, which is
+  ASCII-only and is the string uniqueness is actually checked against.
+
+The error message is sanitised too: the complaint about an unsafe id reaches the same
+`confirm()` surfaces the id was going to abuse, so a validator quoting its input verbatim
+would re-introduce what it exists to stop.
+
+**One real bug fell out of it.** `URL.host` carries the port, so a plugin served from
+`https://example.com:8080/p.js` got the id `example.com:8080:thing` — two colons, and
+`ownerToken` splits on the first, leaving the namespace `example.com` with `8080:thing`
+dangling. An IPv6 literal arrives bracketed and full of colons. Now `hostname`, slugged,
+with a test asserting **exactly one colon** in every qualified id.
+
 ### Cross-plugin reads are an offer the owner makes, not a wall (#196)
 
 Item records (`app.items.*` — CAQDAS codings, map layers, agreement rater sets) follow

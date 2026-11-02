@@ -187,6 +187,48 @@ export function cleanName(s, { max = 200, fallback = '' } = {}) {
 }
 
 /**
+ * Formatting-only invisible characters: the bidi overrides and isolates, the zero-width
+ * SPACE, and the byte-order mark. Every one of these changes what a string LOOKS like
+ * without changing what it IS, and none of them is ever a letter in any script.
+ *
+ * Deliberately NOT here: U+200C and U+200D, the zero-width non-joiner and joiner. Those
+ * are letters — they are required to spell words correctly in Persian, Hindi and others,
+ * and an author whose name needs one would have it quietly deleted. They do enable
+ * confusable strings, and that risk is closed on the ID instead (see
+ * {@link module:core/loader~qualifyId}, which restricts an id to ASCII), because an id is
+ * a machine identifier that can be restricted without damaging anyone's name.
+ */
+const INVISIBLE = /[\u202A-\u202E\u2066-\u2069\u200B\uFEFF]/g;
+
+/**
+ * Clean a string that asserts an IDENTITY — a plugin's name, its author, its category.
+ *
+ * Distinct from {@link cleanName} by purpose, not by strictness. `cleanName` protects
+ * CONTENT the user typed: it turns a control character into a space precisely so that the
+ * words either side do not weld together, because the user's text is the thing being
+ * preserved. This protects a TRUST DECISION about text somebody else wrote, so the
+ * requirement is the opposite — **the stored string must equal what the reader sees.** A
+ * zero-width space is therefore DELETED rather than spaced: the reader sees `ab`, so `ab`
+ * is what the string has to be, and leaving a boundary nobody can see is the whole defect.
+ *
+ * Why this matters more than it looks. `qualifyId` namespaces a non-built-in id so that,
+ * in its own words, a would-be forgery "reads as exactly what it is:
+ * `sdsu-builtin-frequencies`" — an explicit anti-impersonation measure that assumes the
+ * string renders as its characters. A single U+202E breaks that assumption, and a plugin
+ * name reaches two confirm() prompts in the plugin manager where a newline forges extra
+ * lines of dialog text. Neither is reachable once a name equals its rendering.
+ *
+ * @param {*} s
+ * @param {{max?: number, fallback?: string}} [opts]
+ * @returns {string}
+ */
+export function identityText(s, { max = 120, fallback = '' } = {}) {
+  // Invisibles first, so the length cap and the whitespace collapse in `cleanName` both
+  // see the string the reader will actually see.
+  return cleanName(String(s ?? '').replace(INVISIBLE, ''), { max, fallback });
+}
+
+/**
  * Who made a record — the display name for the #148 author stamp.
  *
  * Two plugins need this and they must not disagree, because they report on the same

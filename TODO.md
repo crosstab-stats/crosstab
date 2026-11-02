@@ -3021,6 +3021,88 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#197 — the plugin manifest was never sanitised. DONE 2026-11-01.** The owner's
+      question, off the back of #196: *"The app is building plugin identities from strings
+      in the plugin manifest. Are those string inputs sanitized? Is any of the plugin
+      manifest sanitized before processing?"* No, and the only check in the entire path
+      was whether an id existed at all — no calls to `safeText`, `cleanName` or any
+      validator in `core/loader.js`, `core/plugin-manager.js` or `core/collections.js`.
+
+      Also the owner, and the more useful half of the exchange: *"Interesting these gaps
+      survived our past security audits, these are old features."* They did, and the
+      reason is recorded in docs/SECURITY.md rather than just the fix. **Both earlier
+      passes were organised around capability** — what can an activated plugin *reach*.
+      Against that frame a manifest looks irrelevant, because a plugin already trusted
+      with the dataset gains nothing by lying about its metadata. But the manifest is not
+      a capability the plugin wields against the data; **it is the evidence the USER
+      weighs when deciding whether to grant the capability.** An audit that only asks
+      "what can it do once trusted" never asks "what does the user see when deciding to
+      trust it". That is a gap in the audit's *shape*, which is why it survived two of
+      them, and it is worth carrying into the next one.
+
+      **Checked what was NOT at risk first**, so the fix stayed small and the claims
+      stayed honest: HTML injection (covered — `textContent`/`el({text})` everywhere, and
+      the two `innerHTML` templates use `escapeHtml`); keys through save/load (fine, and
+      not for the reason I expected — `JSON.stringify` escapes NUL and lone surrogates as
+      ASCII `\uXXXX`, so a key with either round-trips through a UTF-8 project file
+      losslessly, and the column-name problem from the last sweep does not reach plugin
+      keys); filenames (OPFS keys are `local:<uuid>`); boot (`writeJSON` catches quota
+      errors); R injection (`rPackages` goes to WebR's own `installPackages`).
+
+      **What WAS at risk was identity, and it defeated a protection this project built on
+      purpose.** `qualifyId` namespaces a non-built-in id so a forgery "reads as exactly
+      what it is: `sdsu-builtin-frequencies`" — which assumes a string renders as its
+      characters. One U+202E breaks it. Both the id and the name are interpolated into
+      `confirm()` prompts in the plugin manager, where a newline forges extra lines of
+      dialog text in the app's own voice. And `#ensureIdAvailable` compares exact strings,
+      so two ids differing only by a zero-width character both installed and were
+      indistinguishable in the picker.
+
+      **Two policies, because a key and a label are not the same kind of string.**
+      - **Keys are validated, the manifest rejected** — `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`
+        for `manifest.id` and collection ids. Cleaning a key silently is how two plugins
+        come to share one: uniqueness is an exact comparison, so a character stripped
+        afterwards leaves the check guarding a value that no longer exists. Validation
+        sits in `qualifyId`, which `#ensureIdAvailable` already calls, so nothing bad
+        reaches the catalogue. Every one of the sixty built-ins and the creator's
+        `authored-<8 hex>` is already inside the class — it describes what the project
+        uses rather than inventing a convention, and a test pins that.
+      - **Display text is cleaned to equal its rendering** — `identityText`, applied once
+        at `#recordCatalog`, the single boundary where an outside manifest becomes stored,
+        drawn state. Strips bidi overrides/isolates, zero-width space and BOM; sweeps
+        control characters; repairs lone surrogates; bounds length. **Keeps U+200C/U+200D**
+        because they are letters in Persian and Hindi and deleting them would corrupt a
+        real author's name — the confusability they allow is closed on the ASCII-only id,
+        which is what uniqueness is actually checked against.
+
+      Deliberately the *opposite* rule to `cleanName`, and the contrast is the clearest
+      way to hold both: `cleanName` turns a control character into a SPACE so the words
+      either side do not weld, because it is protecting content the user typed.
+      `identityText` DELETES a zero-width space, because it is protecting a trust decision
+      about someone else's text and the requirement is that the string equal what the
+      reader sees. Asserted both ways in the tests.
+
+      The error message is sanitised too — the complaint about an unsafe id lands in the
+      same `confirm()` surfaces the id was going to abuse, so quoting the input verbatim
+      would re-introduce what the validator exists to stop.
+
+      **One real bug fell out.** `URL.host` carries the PORT, so a plugin served from
+      `https://example.com:8080/p.js` got the id `example.com:8080:thing` — two colons,
+      and `ownerToken` splits on the first, so the namespace became `example.com` with
+      `8080:thing` dangling. An IPv6 literal arrives bracketed and full of colons. Now
+      `hostname`, slugged, with a test asserting **exactly one colon** in every qualified
+      id.
+
+      11 tests, negative-controlled by reverting `core/loader.js` ALONE — reverting
+      everything only proved the new export was new, which is not a control. With just
+      `qualifyId` old, exactly the five id/namespace tests fail. The test file carries no
+      literal invisible characters: a file about invisible characters that contains them
+      invisibly is hostile to the next reader, so all 25 are `\u` escapes.
+
+      **Not browser-tested yet** — the owner's pass: the picker still lists all sixty
+      built-ins with their names and categories, and adding a plugin from a file still
+      works.
+
 - [x] **#196 — can a plugin read data written by another developer's plugin? DONE
       2026-11-01, and the default turned out not to be what anyone thought.** Raised by
       the owner while I was pitching a much smaller item ("a host read surface for coding
