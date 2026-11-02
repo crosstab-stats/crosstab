@@ -2142,18 +2142,30 @@ bottom; they are the project's memory and are not summarised away.
 - [ ] **Baked-chart review — the lesson from #140 (2026-08-05).** Originally 21
       `appendPlot` call sites across 16 plugins handed the host a FINISHED SVG, so they
       got no live controls, no palette, no re-editability. Reviewed to find out why.
-      **Now 11 sites across 9 plugins, and every one of them is R-drawn** — box,
-      wordcloud (×2), steps, forest, the three diagnostic scatters, the cost-effectiveness
-      plane and both sensitivity figures have been migrated, and builtin-plots,
-      builtin-survival, builtin-meta, builtin-regression and builtin-assumptions each
-      dropped `svglite`. The JS-drawn half of this review is CLOSED: the only figure a
-      plugin still draws itself is the decision tree, deliberately (see below).
+      **Now 8 sites across 7 plugins** — box, wordcloud (×2), steps, forest, the three
+      diagnostic scatters, the cost-effectiveness plane and both sensitivity figures have
+      been migrated, and builtin-plots, builtin-survival, builtin-meta, builtin-regression
+      and builtin-assumptions each dropped `svglite`. The JS-drawn half of this review is
+      CLOSED: the only figure a plugin still draws itself is the decision tree,
+      deliberately (see below).
+
+      **Re-counted against the code 2026-11-01**, because this header had drifted twice
+      over. It said "11 sites across 9 plugins, and every one of them is R-drawn": the
+      count was the one from before the three figures flagged below migrated on
+      2026-10-16, and "every one of them is R-drawn" was contradicted by the "1 is
+      produced in JavaScript" bullet two lines under it. Measured now — 8 `appendPlot`
+      sites in 7 plugins, one figure each except ordination's two, of which 7 are R-drawn
+      and the eighth is the decision tree. The residue paragraph further down already read
+      "8 across 7" and was right: 8 was the HARD residue, 11 was that residue plus the
+      three flagged items. **Those three are now done, so the two numbers coincide** —
+      which is itself the signal that the ranked sub-list below is finished.
 
       **The dividing line is not difficulty — it is who holds the numbers.**
 
-      - **10 are R-produced** (svglite): impulse-response, conditional volatility, CA
-        biplot, MDS map, NMDS, Lorenz curve, network graph, choropleth, STL
-        decomposition, ARIMA forecast. These share a property: the coordinates do not
+      - **7 are R-produced** (svglite): impulse-response, CA biplot, MDS map, NMDS,
+        network graph, choropleth, STL decomposition. *(Conditional volatility, the Lorenz
+        curve and the ARIMA forecast were on this list until 2026-10-16 and are items 5–7
+        below.)* These share a property: the coordinates do not
         exist until R has fitted something. But that is a DATA-EXTRACTION choice, not a
         barrier — `survfit` already yields time/surv/lower/upper vectors; we ask R for a
         picture instead of those numbers.
@@ -2197,22 +2209,29 @@ bottom; they are the project's memory and are not summarised away.
          `line: true`. **svglite dropped from builtin-cointegration entirely** — it was
          that plugin's only figure.
 
-      **The third one is BLOCKED on a missing kind, not on effort.** `timeseries` ARIMA
-      forecast needs a line with an uncertainty ribbon: the historical series, the forecast
-      mean, and the CI band. Nothing draws that today.
-      - `scatter` has no band, and a forecast figure without its interval has lost the
-        point of being a forecast.
-      - `steps` has exactly the right band — but it is deliberately a STAIRCASE, and its
-        own header explains why in statistical terms: joining two estimates with a straight
-        line claims a gradual change between them, which is the opposite of what a
-        Kaplan–Meier curve asserts. A forecast mean IS a continuous interpolation, so
-        borrowing `steps` would make the false claim in the other direction.
+      7. ~~**ARIMA forecast**~~ — **done 2026-10-16 on the new `band` kind; this item was
+         never struck and its paragraph stayed on the board for a fortnight saying the
+         opposite of the code.** Verified 2026-11-01: `band` is registered in BOTH the
+         manifest `kinds` list and `chartKinds()` (`plugins/builtin-charts/index.js:97`
+         and `:1510`), and `builtin-timeseries/index.js:265` emits `kind: 'band'` for the
+         forecast. `svglite` stays in that plugin for the STL panels, which are a
+         different figure and are still on the residue list.
 
-      So it wants a new kind — a line plus an uncertainty ribbon — which is reusable well
-      beyond ARIMA (fitted curves with CIs, smoothed trends, growth trajectories). Worth
-      doing, but it is "add a chart kind" rather than "migrate a chart", and adding one
-      means registering it in BOTH the manifest list and `chartKinds()` (the harness
-      asserts this, after `tornado` shipped in only one of them).
+         **Why it needed a new kind rather than an option on an old one** — the reusable
+         half, kept so it is not re-decided. `scatter` draws a connected line but has no
+         band, and a forecast figure without its interval has lost the point of being a
+         forecast. `steps` has exactly the right band but is deliberately a STAIRCASE:
+         joining two estimates with a straight line claims a gradual change between them,
+         which is what a Kaplan–Meier curve denies and what a forecast mean asserts.
+         Borrowing either would have made a false statistical claim in one direction or
+         the other — so the two kinds share one `curveKind` factory parameterised by
+         exactly the two functions that differ (how the curve joins its points, how the
+         ribbon follows it), because that difference IS the claim. Reusable well beyond
+         ARIMA: fitted curves with CIs, smoothed trends, growth trajectories.
+
+         The warning this paragraph used to carry is still worth keeping: adding a kind
+         means registering it in BOTH places, and the harness asserts that now, after
+         `tornado` shipped in only one of them.
 
       5. ~~**the three diagnostic scatters**~~ — done (2026-09-27); regression's
          *Residuals vs Fitted* and *Normal Q–Q*, and builtin-assumptions' per-variable
@@ -2954,9 +2973,13 @@ this is the index.
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
 - **~~Does any other baked figure want a legend?~~ ANSWERED 2026-11-01 — one did.**
-  Read what each of the nine actually draws rather than guessing from the count. Seven
-  plot in a single accent colour (NMDS, the MDS perceptual map, the network, the STL
-  panels, the IRF) and need none — a key reading "the colour means: the data" is noise,
+  Read what each actually draws rather than guessing from the count. *(Which this answer
+  then did anyway: it said "each of the nine" and "seven plot in a single accent colour",
+  where the code has eight baked figures and the five this sentence goes on to name. The
+  named list is what the scan actually produced and the finding is unaffected; the two
+  totals were not recounted. Corrected 2026-11-01 alongside the entry's own header, which
+  had drifted the same way.)* Five plot in a single accent colour (NMDS, the MDS
+  perceptual map, the network, the STL panels, the IRF) and need none — a key reading "the colour means: the data" is noise,
   and adding one for consistency would have been worse than leaving the question open.
   The correspondence biplot already had one. The choropleth's continuous ramp is still a
   separate problem.
@@ -2979,9 +3002,18 @@ this is the index.
   *(was under chart Layer 3b)*
 
 Two chart questions were raised while the baked figures were being standardised
-(2026-10-16). The legend one is above; the other is a first-class item of its own —
-**a line-with-uncertainty-ribbon kind**, under *More analyses*, which is what the ARIMA
-forecast is waiting on.
+(2026-10-16). The legend one is above. The other — ~~**a line-with-uncertainty-ribbon
+kind**, which is what the ARIMA forecast is waiting on~~ — **had already shipped as
+`band` on 2026-10-16, the same day, with the forecast migrated onto it.** Corrected
+2026-11-01.
+
+That is the **second** stale line this index has carried, the building-block one above
+being the first, and both failed the same way: the pointer outlived the thing it pointed
+at. Worth naming the mechanism rather than just fixing the line. An index entry is
+written at the moment a loose end is noticed, by someone looking at the parent entry —
+and nothing re-reads it when that entry closes, because closing an entry means editing
+the entry. So the index decays in exactly the cases it exists for. It stays, because a
+missing line is worse, but it is to be read as "look here", never as "this is open".
 
 ## Completed
 
