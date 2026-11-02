@@ -1212,6 +1212,17 @@ bottom; they are the project's memory and are not summarised away.
         Krippendorff's α with a benchmark reading. Browser-verified 2026-10-18, including
         on a per-coder dataset emitted by the CAQDAS quantitiser.
 
+        **Correction 2026-11-02: that verification covered the VARIABLES path only, and the
+        wording above implies both.** `Inter-coder agreement from codings…` could not have
+        completed on any date before today — it bound `vars` in one R call and read it in
+        the next, which the runtime has never supported (see #200). A per-coder dataset
+        emitted by the quantitiser goes through `Scale ▸ Inter-rater agreement…` over rater
+        COLUMNS, which is the other path and is the one that was verified. The codings path
+        first produced a coefficient on 2026-11-02.
+
+        Worth keeping rather than quietly rewording: "browser-verified" named the entry, not
+        the path, and that is how a verified-adjacent feature came to read as verified.
+
         **What is still missing is the other half of the original line: "surface
         disagreements".** A coefficient says how much two coders agree; it does not say
         WHERE they differed, and the where is what a team actually acts on — it is the
@@ -1717,11 +1728,29 @@ bottom; they are the project's memory and are not summarised away.
         Still visibly wrong and NOT ours: a whole clause duplicated in the transcript, from
         Whisper's own 30 s chunking with `stride_length_s: 5` failing to dedupe its overlap.
 
-        **What the spike did NOT do**, and what the epic still is: worker architecture (this
-        ran on the main thread and froze the tab for seconds at a time — unacceptable in the
-        app), chunking and progress for long recordings, cancellation, model choice UI, and
-        the cache/offline integration. The feasibility question is now closed; the effort
-        question is not.
+        **This list is now four-fifths STALE — re-checked 2026-11-02.** It read: *"What the
+        spike did NOT do, and what the epic still is: worker architecture (this ran on the
+        main thread and froze the tab for seconds at a time — unacceptable in the app),
+        chunking and progress for long recordings, cancellation, model choice UI, and the
+        cache/offline integration."*
+
+        Four of those five shipped in the transcription epic (#193/#194 and the work
+        around them), and the owner tested the whole path on an iPhone end to end — import,
+        language detection, chunked progress, saved transcripts, timestamps in the Coding
+        tab. Verified in the code rather than from recall: `core/transcribe.js` spawns
+        `Worker(...)`, `core/transcribe-worker.js` chunks (`chunk_length_s`), progress and
+        cancellation are in both, and model choice is in all three of
+        `core/transcribe{,-pool,-worker}.js`.
+
+        **The fifth is real and is the only open piece: the cache/offline integration.**
+        `core/offline.js` mentions neither transcription nor whisper, so the model weights
+        are not part of "Make available offline" and do not come along for an air-gap
+        install (#71) — while the R packages do. That gap matters more than its size
+        suggests: it is the difference between a field worker's offline device being able
+        to transcribe and silently not being able to.
+
+        The feasibility question was closed by the spike; the effort question is now closed
+        too, except for that one item.
 
         **Still to decide (deferred by the owner until the spike reported):** where the
         weights come from. The numbers now favour the established pattern — pinned CDN pull,
@@ -2226,7 +2255,26 @@ bottom; they are the project's memory and are not summarised away.
       education level (education)" to "Education" redraws the key while leaving R's
       figure untouched; clearing the box puts the long label back.
 
-  - [ ] **Does any other baked figure want a legend? (open question, 2026-10-16.)**
+  - [x] **Does any other baked figure want a legend? ANSWERED 2026-11-01 — one did, and
+        it was not on the list below.** The **decision tree** encodes four meanings (a blue
+        square per decision, an amber circle per chance node, a grey triangle per outcome,
+        and a thick green line along the branch the analysis picked) and explained none of
+        them — and the last of those is the ANSWER to the whole analysis, carried by a line
+        weight and a hue. Built through the layers model, so the key is draggable,
+        positionable, hideable and rewordable like any other; `legendItems` in
+        `core/charts/baked.js` had to stop dropping `marker` first, since a key of three
+        identical chips beside a picture of three different shapes is not a key.
+
+        **This sub-item stayed open for a day after being answered** — the answer went into
+        the follow-ups index and never came back to the entry it belonged to. Fourth
+        instance of that this week (the ribbon kind, the building-block line, the
+        quantitising read surface, this). Noted at the index itself.
+
+        **And the reasoning below was wrong on the count, not just the status.** It said
+        "the other eight have no categorical groups to key", having enumerated figures that
+        plot in a single accent colour. The decision tree was in that eight and does have
+        groups; the sentence held for the seven that remain. Original follows.
+
         The CA biplot was the one with a real gap. The other eight have **no categorical
         groups to key**: a network, a choropleth, an MDS perceptual map, an STL
         decomposition and a VAR impulse-response genuinely have nothing to label, and
@@ -2551,6 +2599,9 @@ this is the index.
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
 - **~~Does any other baked figure want a legend?~~ ANSWERED 2026-11-01 — one did.**
+  *(And the answer sat HERE for a day while the sub-item it belongs to stayed `[ ]` open —
+  closed 2026-11-02. That is this index's failure mode in both directions: a pointer that
+  outlives its target, and an answer that never travels back. Four instances this week.)*
   Read what each actually draws rather than guessing from the count. *(Which this answer
   then did anyway: it said "each of the nine" and "seven plot in a single accent colour",
   where the code has eight baked figures and the five this sentence goes on to name. The
