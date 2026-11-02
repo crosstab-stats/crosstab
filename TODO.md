@@ -2621,10 +2621,31 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Nice-to-have / optimisations
 
-- [ ] **A busy project index — re-measured 2026-10-26 at 60 projects; it caught a
-      regression I had introduced.** The watch worked, and not on the axis it was set up
-      for. Three of the four baseline numbers scaled exactly as projected; the fourth had
-      gone up **51x for a 36% increase in project count**, which is not a growth curve.
+- [ ] **A busy project index — a standing watch, not a task.** 44 projects measured
+      2026-10-17, 60 on 2026-10-26. Three of the four numbers scaled exactly as projected
+      and the fourth caught a regression, so the watch has already paid for itself once.
+      Open because the watching IS the deliverable: there is nothing to fix right now, and
+      the point is to notice when there is.
+
+      **Merged 2026-11-01 from two entries.** Each re-measurement had been filed as its
+      own open item — the newer one ending "original baseline below" — so the board showed
+      two open tasks for one ongoing watch, and a reader had to work out for themselves
+      which set of numbers was current. One entry now, newest measurement first. Nothing
+      was dropped: where a superseded instruction turned out to be wrong it is marked where
+      it stands rather than deleted, because what it got wrong is part of the record.
+
+      **The numbers to re-measure next**, which supersedes the closing advice each entry
+      gave on its own:
+      - the project manager's `listProjects({sizes: true})` — **173 ms at 60 projects**. Now
+        the only size-dependent cost left, and so the one that will bite first.
+      - `catalog.json` bytes per project — **697 at 44, 750 at 60**. Worth a glance if it
+        keeps climbing; at 1000 projects the creep is 53 KB of a 750 KB file.
+      - everything else when the dev index passes **~200**, against both columns below.
+
+      **Re-measured 2026-10-26 at 60 projects; it caught a regression I had introduced.**
+      The watch worked, and not on the axis it was set up for. Three of the four baseline
+      numbers scaled exactly as projected; the fourth had gone up **51x for a 36% increase
+      in project count**, which is not a growth curve.
 
       **At 60 projects, against the 44-project baseline below:**
       - `catalog.json` — 44,972 bytes, **750 bytes per project** (was 697)
@@ -2674,13 +2695,11 @@ bottom; they are the project's memory and are not summarised away.
       750 KB file. And the manager's 173 ms is now the only size-dependent cost, so it is
       the number to re-measure rather than `listProjects()`.
 
-      Original baseline below.
-
-- [ ] **A busy project index — baseline measured 2026-10-17, watch it grow.** The owner's
-      call: the dev machine's accumulated test projects stay rather than being swept,
-      because *"this is actually a good stress test for a busy index… I don't think we've
-      ever intentionally tested that it can handle dozens (or hundreds?) of projects."*
-      Correct — nothing ever has. So here is the starting line, to compare against later.
+      **The baseline, measured 2026-10-17.** The owner's call: the dev machine's
+      accumulated test projects stay rather than being swept, because *"this is actually a
+      good stress test for a busy index… I don't think we've ever intentionally tested
+      that it can handle dozens (or hundreds?) of projects."* Correct — nothing ever has.
+      So here is the starting line, to compare against later.
 
       **At 44 projects** (Chrome, OPFS, dev machine):
       - `catalog.json` — **30,678 bytes, 697 bytes per project**
@@ -2814,6 +2833,10 @@ bottom; they are the project's memory and are not summarised away.
       whether the launcher can read it lazily for the handful of rows it actually shows.
 
       Nothing to fix yet. Re-measure when the dev index passes ~200 and compare.
+      *(Written before the 2026-10-26 re-measure above, which did not wait for 200 and
+      found a regression. "Nothing to fix" was true of the growth curve and false of the
+      code — kept as filed, because the lesson is that a watch set up for one axis is
+      what caught a different one.)*
 
 - [~] **Settings persistence — the STORE is built (2026-10-15); the screen is not.**
       `core/settings.js`. Confirmed with the owner first: *"is this talking about pulling
