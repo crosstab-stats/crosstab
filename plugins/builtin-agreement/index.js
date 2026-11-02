@@ -254,12 +254,19 @@ export async function fromCodings(app, { metric = 'nominal' } = {}) {
 
   // applied[coder][doc\0code] = 1
   const applied = new Map(coders.map((c) => [c, new Set()]));
+  // One quote per unit, for the disagreement listing (#202). The FIRST one seen, not a
+  // concatenation: the point is to identify which passage is being argued about, and a
+  // cell holding three overlapping highlights identifies nothing.
+  const quoteOf = new Map();
   for (const s of segments) {
     const c = coderOf(s);
     const doc = String(s.fields?.doc ?? '');
     const code = String(s.fields?.codeId ?? '');
     if (!c || !doc || !code) continue;
-    applied.get(c)?.add(`${doc}\0${code}`);
+    const unit = `${doc}\0${code}`;
+    applied.get(c)?.add(unit);
+    const q = String(s.fields?.quote ?? '').trim();
+    if (q && !quoteOf.has(unit)) quoteOf.set(unit, q);
   }
 
   // One row per (doc × code), one column per coder.
@@ -273,9 +280,17 @@ export async function fromCodings(app, { metric = 'nominal' } = {}) {
   const stats = await compute(app, metric, 'unweighted', {
     prelude: matrixSource(rows, coders.length),
   });
+  // Held for the disagreement listing below, which has to run AFTER the coefficients:
+  // the coefficient is the reason anyone looked, and a reader who scrolls past a long
+  // table to reach the number they came for will not scroll back.
+  const disagreements = findDisagreements({ docs, codeIds, coders, applied, codes, quoteOf });
   await render(app, stats, {
     caption: 'Inter-coder Agreement (from codings)',
-    units: `${docs.length} document${docs.length === 1 ? '' : 's'} × ${codeIds.length} code${codeIds.length === 1 ? '' : 's'}`,
+    // `units` is a NOUN that `render` prefixes with the count ("6 rows" on the variables
+    // path). This passed a whole phrase, so the row read "6 3 documents x 2 codes" --
+    // visible only from today, because the codings path could never complete before #200.
+    // The shape of the grid is already stated in `note` below, where it belongs.
+    units: `units (document × code, from ${docs.length} document${docs.length === 1 ? '' : 's'} and ${codeIds.length} code${codeIds.length === 1 ? '' : 's'})`,
     raters: coders,
     metric,
     weight: 'unweighted',
@@ -285,6 +300,146 @@ export async function fromCodings(app, { metric = 'nominal' } = {}) {
       + 'document, not on where the highlight starts. Codes counted: '
       + `${codeIds.map((k) => codes.get(k) || k).slice(0, 12).join(', ')}${codeIds.length > 12 ? ', …' : ''}.`,
   });
+  await renderDisagreements(app, disagreements, { coders, total: rows.length });
+}
+
+/**
+ * The units the coders did not agree on (#202).
+ *
+ * **Why this exists at all.** A coefficient says HOW MUCH two coders agree; it does not
+ * say WHERE they differed, and the where is the thing a team acts on — it is the input to
+ * a coding-scheme revision, and κ alone cannot start that conversation. The data needed
+ * no new storage: the (document × code) presence matrix was already being built to
+ * compute the coefficient, so the disagreeing units are the rows where the coders differ.
+ *
+ * **Two kinds of disagreement, kept apart on purpose.** Collapsing them into one
+ * "disagreement" count throws away the distinction a revision needs:
+ *   - *presence* — one coder applied a code to a document and another did not. The common
+ *     case, and usually a question about the code's definition or its boundary.
+ *   - *choice* — within the same document, each coder used a code the other did not use
+ *     at all. That is not a threshold argument, it is two different readings, and it is
+ *     the one worth a conversation.
+ *
+ * **What this deliberately does not claim.** The unit is the DOCUMENT, not the passage —
+ * so "A used *Waiting* here and B used *Neglect*" means within the same document, not
+ * necessarily over the same words. Saying "the same passage" would be the easy phrasing
+ * and would be wrong, and a reader acting on it would go looking for an overlap that the
+ * unit model never established.
+ *
+ * Exported for `test/agreement-disagreements.test.mjs`: the presence/choice split is
+ * real logic with real edge cases (a unit nobody coded, one side holding an extra), and
+ * asserting it through a browser run would mean fabricating coders to reach it.
+ *
+ * @returns {{rows: Array<object>, choices: Array<object>, count: number}}
+ */
+export function findDisagreements({ docs, codeIds, coders, applied, codes, quoteOf }) {
+  const out = [];
+  for (const d of docs) {
+    for (const k of codeIds) {
+      const unit = `${d}\0${k}`;
+      const yes = coders.filter((c) => applied.get(c).has(unit));
+      // Unanimous either way is agreement. A unit NO ONE coded is not a disagreement
+      // either — it is the empty majority of any coding project and listing it would bury
+      // the real rows under thousands of blanks.
+      if (!yes.length || yes.length === coders.length) continue;
+      out.push({
+        doc: d,
+        code: codes.get(k) || k,
+        appliedBy: yes,
+        notBy: coders.filter((c) => !yes.includes(c)),
+        quote: quoteOf.get(unit) || '',
+      });
+    }
+  }
+
+  // The CHOICE pairs: same document, each coder holding a code the other did not use.
+  const choices = [];
+  for (const d of docs) {
+    const byCoder = new Map(coders.map((c) => [c, codeIds.filter((k) => applied.get(c).has(`${d}\0${k}`))]));
+    for (let i = 0; i < coders.length; i++) {
+      for (let j = i + 1; j < coders.length; j++) {
+        const a = byCoder.get(coders[i]) || [];
+        const b = byCoder.get(coders[j]) || [];
+        if (!a.length || !b.length) continue;
+        const onlyA = a.filter((k) => !b.includes(k));
+        const onlyB = b.filter((k) => !a.includes(k));
+        // Both sides must hold something the other does not: if only one side has an
+        // extra, that is presence (already listed above), not a different reading.
+        if (!onlyA.length || !onlyB.length) continue;
+        choices.push({
+          doc: d,
+          pair: [coders[i], coders[j]],
+          onlyA: onlyA.map((k) => codes.get(k) || k),
+          onlyB: onlyB.map((k) => codes.get(k) || k),
+        });
+      }
+    }
+  }
+  return { rows: out, choices, count: out.length };
+}
+
+/** How many disagreement rows to print before summarising. */
+const MAX_DISAGREEMENTS = 200;
+
+/** Render the disagreement listing — the half of reliability a team can act on (#202). */
+async function renderDisagreements(app, { rows, choices, count }, { coders, total }) {
+  if (!count) {
+    await app.results.appendText(
+      '**No disagreements.** Every unit was scored the same way by all coders, which is '
+      + 'what a κ of 1 means in words.',
+    );
+    return;
+  }
+
+  const shown = rows.slice(0, MAX_DISAGREEMENTS);
+  await app.results.appendTable(
+    {
+      columns: ['Document', 'Code', 'Applied by', 'Did not apply', 'Passage'],
+      rows: shown.map((r) => [
+        r.doc, r.code, r.appliedBy.join(', '), r.notBy.join(', '),
+        // The quote as the coder who applied it stored it. Truncated for the table, which
+        // is a review INDEX — the passage itself is in the Coding workspace.
+        r.quote.length > 120 ? `${r.quote.slice(0, 120)}…` : r.quote,
+      ]),
+    },
+    { caption: `Disagreements — ${int(count)} of ${int(total)} units` },
+  );
+
+  if (count > shown.length) {
+    await app.results.appendText(
+      `Showing the first ${int(shown.length)} of ${int(count)}. The rest are the same shape; `
+      + 'a project with this many disagreements is usually telling you about the scheme '
+      + 'rather than about one passage.',
+    );
+  }
+
+  if (choices.length) {
+    await app.results.appendTable(
+      {
+        columns: ['Document', 'Coders', 'Only the first used', 'Only the second used'],
+        rows: choices.slice(0, MAX_DISAGREEMENTS).map((c) => [
+          c.doc, c.pair.join(' vs '), c.onlyA.join(', '), c.onlyB.join(', '),
+        ]),
+      },
+      { caption: 'Different codes chosen in the same document' },
+    );
+    await app.results.appendText(
+      '**These are different readings, not boundary arguments**, which is why they are '
+      + 'listed apart: each coder used a code the other did not use in that document at '
+      + 'all. The unit here is the DOCUMENT, so this does not assert that both coders '
+      + 'marked the same words — only that they reached for different codes in the same '
+      + 'material.',
+    );
+  }
+
+  await app.results.appendText(
+    `**How to read this.** Each row is one (document × code) unit where ${coders.length === 2
+      ? 'the two coders'
+      : 'the coders'} did not agree, which is the unit the coefficient above is computed `
+    + 'over — so this listing and that number describe exactly the same comparison. The '
+    + 'passage shown is the one stored by whoever applied the code; open the document in '
+    + 'the Coding workspace to see it in context.',
+  );
 }
 
 /**

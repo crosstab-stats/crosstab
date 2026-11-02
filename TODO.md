@@ -120,39 +120,6 @@ bottom; they are the project's memory and are not summarised away.
         air-gap user is the same field researcher this whole feature was built for — and
         worth doing as its own change.
 
-- [ ] **#202 — inter-coder reliability: surface the DISAGREEMENTS, not just the coefficient.**
-      Owner, 2026-11-02: *"disagreements for inter-coder reliability."* The other half of
-      #148's item 4, which has carried the reasoning since 2026-10-20 and now points here.
-
-      A coefficient says **how much** two coders agree. It does not say **where** they
-      differed, and the where is the thing a team acts on: it is the input to a
-      coding-scheme revision, and κ alone cannot start that conversation. `grep -i disagree`
-      over `builtin-agreement` finds one sentence of prose in its own how-to and no code.
-
-      **The data exists and needs no new storage.** `fromCodings` already builds the
-      (document × code) × coder presence matrix — the disagreeing units are exactly the rows
-      where the coders differ. What is missing is a view.
-
-      **Newly reachable.** Until #200 (2026-11-02) `fromCodings` could not complete at all —
-      it bound `vars` in one R call and read it in the next. So this was not merely unbuilt,
-      it was unreachable: there was no coefficient to sit beside. Worth saying because the
-      entry has read as "a nice-to-have alongside a working feature" for a fortnight.
-
-      **What to work out:**
-      - **The unit to show.** The matrix row is (document × code), so a disagreement is
-        "coder A applied *Waiting* to document 7 and coder B did not". That is already
-        readable without any further joining.
-      - **Reaching the passage.** A coding carries an `anchor`, and resolving it from outside
-        a workspace is possible as of #199 — so a disagreement row can offer the text, with
-        drift reported honestly rather than cached offsets. This is the first real consumer
-        of that surface, which is also how it finally gets browser-tested.
-      - **Asymmetry is information.** "A coded it, B did not" is not the same finding as "A
-        and B chose different codes for the same passage", and collapsing them into
-        "disagreement" would throw away the distinction a scheme revision needs.
-      - **Where it renders.** Probably a table under the coefficients in the same analysis,
-        rather than a separate run: the coefficient is the reason anyone looks, and a
-        separate menu item would make the useful half the harder one to find.
-
 - [ ] **#203 — parameter controls for R-baked plots, where reasonable.** Owner, 2026-11-02:
       *"the controls for r-baked plots where reasonable."* The last open piece of chart
       Layer 3b, which now points here.
@@ -2839,6 +2806,80 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#202 — inter-coder reliability: surface the DISAGREEMENTS, not just the coefficient. BUILT 2026-11-02.**
+      Owner, 2026-11-02: *"disagreements for inter-coder reliability."* The other half of
+      #148's item 4, which has carried the reasoning since 2026-10-20 and now points here.
+
+      A coefficient says **how much** two coders agree. It does not say **where** they
+      differed, and the where is the thing a team acts on: it is the input to a
+      coding-scheme revision, and κ alone cannot start that conversation. `grep -i disagree`
+      over `builtin-agreement` finds one sentence of prose in its own how-to and no code.
+
+      **The data exists and needs no new storage.** `fromCodings` already builds the
+      (document × code) × coder presence matrix — the disagreeing units are exactly the rows
+      where the coders differ. What is missing is a view.
+
+      **Newly reachable.** Until #200 (2026-11-02) `fromCodings` could not complete at all —
+      it bound `vars` in one R call and read it in the next. So this was not merely unbuilt,
+      it was unreachable: there was no coefficient to sit beside. Worth saying because the
+      entry has read as "a nice-to-have alongside a working feature" for a fortnight.
+
+      **What to work out:**
+      - **The unit to show.** The matrix row is (document × code), so a disagreement is
+        "coder A applied *Waiting* to document 7 and coder B did not". That is already
+        readable without any further joining.
+      - **Reaching the passage.** A coding carries an `anchor`, and resolving it from outside
+        a workspace is possible as of #199 — so a disagreement row can offer the text, with
+        drift reported honestly rather than cached offsets. This is the first real consumer
+        of that surface, which is also how it finally gets browser-tested.
+      - **Asymmetry is information.** "A coded it, B did not" is not the same finding as "A
+        and B chose different codes for the same passage", and collapsing them into
+        "disagreement" would throw away the distinction a scheme revision needs.
+      - **Where it renders.** Probably a table under the coefficients in the same analysis,
+        rather than a separate run: the coefficient is the reason anyone looks, and a
+        separate menu item would make the useful half the harder one to find.
+
+      ---
+
+      **BUILT 2026-11-02, and the presence/choice split earned its keep.** Two listings,
+      because collapsing them loses what a revision needs: *presence* (one coder applied a
+      code to a document, another did not — a definition or boundary question) and *choice*
+      (within one document each coder used a code the other did not use at all — two
+      different readings, the one worth a meeting). The second is deliberately NOT reported
+      when only one side has an extra code: B reaching for nothing is not B reaching for
+      something else, and calling it a different reading would manufacture a disagreement.
+
+      **What it refuses to claim.** The unit is the DOCUMENT, so "A used *Waiting* and B
+      used *Prompt care*" means in the same document, not necessarily over the same words.
+      "The same passage" was the easy phrasing and would have sent a reader hunting for an
+      overlap the unit model never established. The output says "the unit here is the
+      DOCUMENT" outright, and a test asserts that phrase is present and that "same passage"
+      is not.
+
+      Needed no new storage, as predicted: the quote comes off the record whoever applied
+      the code already wrote, and the matrix was already being built for the coefficient.
+      Capped at 200 rows with a note — a project with more than that is telling you about
+      the scheme rather than about a passage.
+
+      **Not done: live anchor resolution.** The entry expected this to be #199's first
+      consumer. It is not, and the reason is concrete rather than effort: resolving an
+      anchor needs the document TEXT, a coding's `doc` is a `__ct_rid`, and
+      `builtin-agreement` does not know which column holds the document — that is CAQDAS's
+      configuration. Plumbing it across is a real question and not this item's. The stored
+      quote identifies the passage without it.
+
+      **Browser-verified** (2 coders, 3 documents, 2 codes, disagreeing on one document):
+      κ = 0.333 as before, "Disagreements — 2 of 6 units" with both presence rows and their
+      passages, and one choice row naming r2. 11 tests on the pure function, which is
+      exported for them because fabricating coders to reach it through a browser run is how
+      this logic would otherwise go untested.
+
+      **One pre-existing display bug fell out of running it.** The "What was compared" row
+      read **"6 3 documents × 2 codes"**: `render` prefixes `units` with the count, so
+      `units` is a noun ("6 rows" on the variables path), and the codings path was passing a
+      whole phrase. Invisible until today, because that path could never complete before
+      #200. Now "6 units (document × code, from 3 documents and 2 codes)".
 
 - [x] **#200 — `builtin-agreement.fromCodings` could never finish: `vars` bound in one R
       call and read in the next. FIXED 2026-11-02.** Found by the #196 browser pass, which
