@@ -380,15 +380,40 @@ bottom; they are the project's memory and are not summarised away.
         blind would be picking the study's method for it. It is also the only reading
         where a media file's duration is the natural exposure. Decidable with a real
         continuously-coded study in hand, and not before.
-  - [ ] **A host read surface for coding records.** `app.items` is owner-scoped and every
-        built-in shares the `'builtin'` token, which is why `builtin-agreement` and the
-        quantitiser can read codings at all; a third-party plugin cannot. Quantitising
-        sidesteps it by emitting datasets, which every plugin can read — so this is no
-        longer blocking anything, and that is exactly why it should not be built
-        speculatively. The same surface is what a consumer outside the workspace would
-        need to RESOLVE anchors on demand (the honest answer to "where does this coding
-        sit now", as against caching offsets that rot on the next edit). Two callers in
-        search of one surface; build it when the second is real.
+  - [x] **A host read surface for coding records — BUILT 2026-11-01 as #196.** This said
+        "two callers in search of one surface; build it when the second is real", and the
+        owner made the first one real by reframing the question: not "should another dev
+        be able to read CAQDAS data" but "can a plugin declare its data private from
+        plugins by other devs". CAQDAS now declares `read: 'public'` and any activated
+        plugin reads codings through `items.listFrom(owner, collection)`. The privilege
+        this paragraph described — built-ins reading each other's records because they
+        share the `'builtin'` token — is gone: `builtin-agreement` reads them on a third
+        party's terms, which is what keeps the path honest.
+
+        Original reasoning kept because the *judgement* in it held up: it was right that
+        quantitising sidestepping this via datasets meant nothing was blocked, and right
+        not to build speculatively. What changed was not the cost but the demand.
+
+  - [ ] **The SECOND caller is still open, and #196 made it sharper rather than
+        answering it: RESOLVING an anchor from outside a workspace mount.** Verified
+        2026-11-02 — `anchors` is on the mount API only (`core/workspace-manager.js:396`)
+        and does not exist on the compute-frame API in `core/loader.js`.
+
+        So the read surface shipped half a capability. A third-party plugin can now read a
+        coding and gets its `anchor` field, and has **no way to ask where that region is
+        now**: `anchors.resolve` is reachable only if you are a mounted workspace. Its
+        options are to cache offsets, which is exactly the thing the anchor model exists
+        to prevent (they rot on the next edit and nothing reports it), or to re-implement
+        selector resolution, which means the host can no longer report drift for records
+        it did not resolve.
+
+        That is a better argument for building it than the one this entry was waiting for.
+        The work is small and shaped like #196: `anchors` is already host-owned and pure
+        (deliberately — resolution must not depend on the plugin being activated, or a
+        deactivated plugin's records could not be reported stale), so it is an
+        availability question, not a design one. `resolve` takes a BATCH, which the
+        compute frame wants even more than a mount does. The one real question is what
+        `subject` means off a mount, since a mount supplies the document it is showing.
 
 
 - [~] **Verify the CAQDAS QDPX round-trip — SELF ROUND-TRIP DONE 2026-10-21; the
