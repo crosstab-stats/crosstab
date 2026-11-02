@@ -273,16 +273,93 @@ export class WorkspaceStore {
 }
 
 /**
- * The ownership namespace for a plugin's workspace state (#89, #145). Built-ins
- * share one `builtin` owner. For others the qualified id prefix is the owner.
+ * The ownership namespace for a plugin's stored data — workspace blobs (#89, #145) and
+ * item records (#152). It is a **storage key and a write authority**: everything under one
+ * token is readable and writable by every plugin that resolves to that token, so this
+ * function decides, for every pair of plugins, whether they share a data domain.
  *
- * @param {{builtin?: boolean, id?: string, origin?: string}} plugin
+ * ## An id prefix is a NAME; an owner token is an AUTHORITY
+ *
+ * {@link module:core/loader~qualifyId} namespaces every non-built-in id so two plugins
+ * cannot collide (#102), and this function used to read the authority straight off that
+ * name. For a URL plugin that is sound — the prefix is the HOST, taken from the URL the
+ * user typed, and no manifest can claim another host. For a file, authored or packaged
+ * plugin the prefix is `manifest.author`, which the plugin asserts about itself. Reading
+ * authority off that name had two consequences, both measured rather than reasoned about
+ * (test/plugin-data-domain.test.mjs):
+ *
+ *   - **`author` was an unverified authority grant.** A plugin loaded from a file
+ *     declaring `author: "Acme Labs"` landed in `ns:acme-labs`, the same token as Acme's
+ *     own plugins, and could READ AND WRITE their records. Not a read leak — a write into
+ *     another author's data.
+ *   - **Everyone who omitted it shared one domain.** No author tag gives `local:<id>`,
+ *     hence `ns:local`, so unrelated file-installed plugins read and wrote each other's
+ *     records.
+ *
+ * The rule now is **verifiable provenance earns a shared namespace; unverifiable
+ * provenance gets isolation**, and provenance is taken from the KIND the host recorded
+ * when the plugin was installed, never from anything the plugin says about itself:
+ *
+ *   | how it got here       | token              | why                                  |
+ *   |-----------------------|--------------------|--------------------------------------|
+ *   | built-in              | `builtin`          | one author (us), one domain          |
+ *   | deployment-provided   | `site:<namespace>` | the deploy host served it            |
+ *   | from a URL            | `ns:<host>`        | the host is in the URL, not claimed  |
+ *   | file / authored / pkg | `plugin:<id>`      | nothing about it is verifiable       |
+ *
+ * A developer who wants their own plugins to share a domain can still have it — by
+ * serving them from their own host, where the namespace is a fact instead of an
+ * assertion. That is the trade: a shared namespace is the reward for checkable
+ * provenance. `manifest.author` keeps doing what it is good for, naming and display.
+ *
+ * ## A site plugin is not a built-in
+ *
+ * A site entry sets `builtin` so the manager catalogues it and refuses to delete it
+ * (#185), and this used to check that flag first — handing deployment-provided code the
+ * data domain of all sixty built-ins. #185 settled that a site plugin is *provided, not
+ * privileged*, and reading every built-in's records is a privilege. It gets a per-site
+ * token, tested BEFORE `builtin` so the flag cannot leak the domain.
+ *
+ * ## Why it throws instead of guessing
+ *
+ * A token computed without an id is not a degraded answer, it is the WRONG key. The old
+ * code returned a bare `plugin:` in that case, and two callers in the plugin manager did
+ * exactly that (`#projectDataIds` passes a catalogue ENTRY, which has no id): they looked
+ * up data under a token nothing had ever written, so "this plugin has saved data, disable
+ * anyway?" never fired for a third-party plugin and "delete its data" deleted nothing.
+ * Silently, because a wrong key reads exactly like an empty one. Throwing is the only
+ * version of that failure anyone notices.
+ *
+ * @param {{builtin?: boolean, site?: boolean, namespace?: string, id?: string,
+ *          origin?: string}} plugin  `origin` is the provenance KIND the manager
+ *   recorded — 'url' | 'file' | 'authored' | 'package' | 'site' | 'built-in'.
  * @returns {string}
+ * @throws {Error} if the plugin has no id
  */
 export function ownerToken(plugin) {
-  if (plugin.builtin) return 'builtin';
-  const qid = String(plugin.id || '');
-  const i = qid.indexOf(':');
-  if (i > 0) return `ns:${qid.slice(0, i)}`;
-  return plugin.origin ? `origin:${plugin.origin}` : `plugin:${qid}`;
+  // Before the `builtin` check: a site entry sets both, and `builtin` would win.
+  if (plugin?.site) {
+    const ns = String(plugin.namespace || 'site').trim().toLowerCase() || 'site';
+    return `site:${ns}`;
+  }
+  if (plugin?.builtin) return 'builtin';
+  const qid = String(plugin?.id ?? '').trim();
+  if (!qid) {
+    throw new Error(
+      'ownerToken: the plugin has no id. An owner token is a storage key and a write '
+      + 'authority, so computing one for an unidentified plugin would silently read and '
+      + 'write the wrong data.',
+    );
+  }
+  // ONLY the url kind earns a shared namespace, because only its prefix is evidence.
+  // Anything else — including an unrecognised kind — is isolated per plugin: a new
+  // install route should have to argue for a shared domain, not inherit one by default.
+  if (plugin.origin === 'url') {
+    const i = qid.indexOf(':');
+    const host = i > 0 ? qid.slice(0, i) : '';
+    // `qualifyId` falls back to the literal `url:` prefix when `new URL()` cannot parse
+    // the source, so that prefix names no host and must not pool those plugins together.
+    if (host && host !== 'url') return `ns:${host}`;
+  }
+  return `plugin:${qid}`;
 }

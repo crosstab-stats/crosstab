@@ -895,6 +895,10 @@ export class PluginManager {
   #projectDataIds(p) {
     if (!this.#workspaceStore) return [];
     const wsIds = (this.#catalog[p.key]?.workspaces || []).map((w) => w.id).filter(Boolean);
+    // Before asking who owns it: no catalogue entry means no declared workspaces AND no
+    // qualified id, and `ownerToken` throws rather than inventing a key for a plugin it
+    // cannot identify. Nothing can hold data under a workspace it never declared.
+    if (!wsIds.length) return [];
     const owner = ownerToken(p);
     return wsIds.filter((id) => this.#workspaceStore.hasAny(owner, id));
   }

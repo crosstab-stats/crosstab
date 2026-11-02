@@ -165,7 +165,10 @@ export function surfacesConflicts(decls, owner, collection) {
 export function declaredCollections(plugins, ownerOf) {
   const out = [];
   for (const p of plugins ?? []) {
-    if (!Array.isArray(p?.collections)) continue;
+    // Length, not just the type: an UNCATALOGUED plugin reports `collections: []` and
+    // `id: null` together, and `ownerOf` refuses to name an owner for a plugin with no
+    // id. One that declares nothing needs no owner, so the check comes first.
+    if (!Array.isArray(p?.collections) || !p.collections.length) continue;
     const owner = ownerOf(p);
     for (const raw of p.collections) {
       const decl = normalizeCollection(raw);
