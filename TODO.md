@@ -2365,9 +2365,9 @@ bottom; they are the project's memory and are not summarised away.
       **What remains instead is migration, one figure at a time, when a blocker is
       specific enough to name.** That is how `detection` left the list a day after joining
       it: the blocker was "the `histogram` kind has no overlay series", so the overlay got
-      built. Two candidates are left with named blockers — STL weighed against the `sced`
-      precedent, and the choropleth's continuous colour bar, which needs a host colour-scale
-      layer. The other five are genuinely R's geometry and are expected to stay baked; the
+      built. **And how the choropleth left it on 2026-11-02: the blocker was "needs a host
+      colour-scale layer", so [[#204]] built one.** One candidate is left with a named
+      blocker — STL, weighed against the `sced` precedent. The other five are genuinely R's geometry and are expected to stay baked; the
       inventory test keeps that honest.
 
       Original note follows.
@@ -2639,7 +2639,7 @@ line, and an index that quietly disagrees with the entry it points at is worse t
 index — which is exactly what the building-block line was doing. They stay there because the reasoning around them is the parent entry's;
 this is the index.
 
-- **Latent transition analysis** — not built, no longer ruled out. *(under #141, More analyses)*
+- **Latent transition analysis** — **DEFERRED 2026-11-02 until someone asks** (feasible: `depmixS4`, closure 17 — demand is the only blocker). *(under #141, More analyses)*
 - ~~**Building-block eligibility**~~ — **CLOSED as moot 2026-10-13**, and this index line
   outlived it by three weeks. The building-block library was removed on 2026-10-02 and
   `core/copy-to-project.js` replaced it, so there is nothing for a slot to be eligible
@@ -2714,6 +2714,60 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#204 — a continuous COLOUR SCALE as a host-drawn layer; the choropleth's key is
+      no longer baked. BUILT 2026-11-02.** The one piece of chart work the 2026-10-24
+      closure of Layer 3b explicitly left open: *"migration, one figure at a time, when a
+      blocker is specific enough to name"*, and it named this one. The blocker was that
+      `legendBlock` has no shape for a ramp, so `sf` kept drawing the bar inside the panel
+      (`key.pos = 1`) — path data by the time the host saw it, and the only frozen
+      furniture left after every other figure's title, caption and legend became editable.
+
+      **A scale is not a legend with different data.** A legend is a row per category and
+      the reader matches one to one; a scale is a ramp with a value axis, where the reader
+      INTERPOLATES and the meaning is carried by the order of the colours and the numbers
+      at the ends. `scaleBlock` in the chart stdlib draws it.
+
+      **Classed, not smooth, and that is the honest choice.** `sf` bins the variable before
+      shading, so the map really is a handful of discrete colours. A gradient would promise
+      a precision the map does not have: a reader taking a colour halfway between two
+      swatches to mean a value halfway between two breaks would be reading something that
+      was never drawn.
+
+      **It occupies the `legend` layer rather than adding a fourth.** A figure keys its
+      colours one way or the other, never both, so reusing the slot means placement,
+      dragging, resizing and persistence all work with no new controls — and the render
+      picks whichever the model has. A scale defaults to the BOTTOM (where `sf` drew it,
+      and where a horizontal bar fits a map's aspect); a category legend still defaults to
+      the right.
+
+      **What the reader may not change is the colours**, and the plugin side is built so
+      the key cannot drift from the picture. The old R called `hcl.colors` inside `pal`
+      and let `sf` choose the classing; now the plugin computes **one** `brks` and **one**
+      `cols` and passes the same vectors to both `plot()` and the host. Equal-interval
+      breaks rather than `sf`'s default `classIntervals`, chosen for a specific reason: the
+      host has to LABEL the bar, and a classing rule it cannot see is a bar it cannot
+      label honestly.
+
+      **Verified in the browser, both halves.** The host: a baked figure appended with a
+      scale renders `ct-layer--{plot,legend,title}`, and the legend layer holds exactly the
+      five colours, the five break labels and the variable name. The R: the breaks/palette
+      fragment run in WebR gives 7 colours and 8 strictly-increasing breaks over 10–99,
+      light-to-dark so low values read light — and the degenerate all-values-equal case
+      widens 7 to 6.5–7.5 instead of dividing by zero.
+
+      **Not verified, and stated rather than glossed:** that `sf` honours
+      `key.pos = NULL, breaks = brks, pal = cols` on a real map. That needs a boundary
+      GeoJSON and the `sf` package, which this session had neither of. The three changed
+      arguments are the whole of the R diff, so it is a small surface — but it is the
+      owner's pass or a later one, and until then the figure itself is unexercised.
+
+      12 tests. One slip worth recording because it is the **second instance in a day**:
+      `appendPlot` builds its own options object for `bakedModel`, so `scale` arrived as
+      `undefined` until it was forwarded there too — exactly what happened to `#203`'s
+      `redraw.args` hours earlier. Both times the symptom was a feature that tested green
+      and did nothing in the app. There is now a test pinning every field that crosses
+      that boundary, not just this one.
 
 - [x] **#201 — the Whisper weights are not cached like everything else. COMPLETE
       2026-11-02: the offline toggle AND the air-gap vendoring, plus two pre-existing
@@ -11973,7 +12027,15 @@ The record of what shipped and why. Kept in full, in the original sections.
         **Reach for `lcmm` when this is not enough:** non-Gaussian or ordinal outcomes via its
         link functions, or a joint model with survival (`Jointlcmm`). Real gaps, recorded as such.
 
-  - [ ] **Latent transition analysis — no longer ruled out, and not built.** The original entry
+  - [~] **Latent transition analysis — DEFERRED until someone asks (owner, 2026-11-02:
+        *"Mark latent transition as deferred until someone actually asks for it."*).**
+        Feasibility is settled and favourable, which is exactly why this needed saying out
+        loud: `depmixS4` is in the WebR repo with a closure of 17, so the only thing
+        standing between this and a build is demand, and "we could" is not "we should".
+        Kept as a known-feasible option with the probe already spent, so whoever asks gets
+        an answer in minutes rather than a feasibility investigation.
+
+        Original entry follows. **Latent transition analysis — no longer ruled out, and not built.** The original entry
         told a future reader not to spend a probe on it: *"almost certainly not WASM-feasible."*
         `depmixS4` is in the WebR repo with a closure of 17, so that advice was wrong. LTA is
         classes at two or more time points plus the probabilities of moving between them — a

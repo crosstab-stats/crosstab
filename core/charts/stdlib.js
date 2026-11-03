@@ -765,6 +765,137 @@ export function niceNum(range, round) {
   return nf * Math.pow(10, exp);
 }
 
+/**
+ * A continuous COLOUR SCALE as a host-drawn layer — the choropleth's colour bar (#204).
+ *
+ * ## Why this is not {@link legendBlock} with different data
+ *
+ * A legend is a row per category: a swatch, a label, and the reader matches one to one.
+ * A scale is a RAMP with a value axis — the reader interpolates, and what carries the
+ * meaning is the order of the colours and the numbers at the ends. `legendBlock` has no
+ * shape for that, which is why the choropleth's key stayed baked inside the panel by
+ * `sf` (`key.pos = 1`) while every other figure's furniture became editable.
+ *
+ * ## Classed, not smooth, and that is the honest choice
+ *
+ * `sf` bins a continuous variable into classes before shading it, so the map is already
+ * a small number of discrete colours. Drawing a smooth gradient here would promise a
+ * precision the map does not have — a reader would take a colour halfway between two
+ * swatches to mean a value halfway between two breaks, which is not what was drawn. So
+ * the bar shows one block per class, with the break values beneath, and the plugin sends
+ * the SAME breaks and colours it gave R.
+ *
+ * ## What the reader may change
+ *
+ * The label and the layer's position and size, via the existing legend controls — the
+ * scale occupies the `legend` layer slot, so it inherits placement, dragging and
+ * persistence without a fourth layer. What they may NOT change is the colours: they are
+ * the map's own, and a key that disagreed with the picture beside it would be worse than
+ * no key. Same rule as `colorEditable: false` on a baked figure's legend.
+ *
+ * @param {{min: number, max: number, breaks?: number[], colors: string[], label?: string}} scale
+ * @param {string} place  'bottom' | 'top' | 'right' | 'left' | 'none'
+ * @param {{x0: number, y0: number, x1: number, y1: number}} box  the PLOT's rect
+ * @param {object} [view]
+ * @param {{x0: number, y0: number, x1: number, y1: number}} [canvas]
+ * @returns {string} SVG, or '' when there is nothing to draw
+ */
+export function scaleBlock(scale, place, box, view = {}, canvas = designBox()) {
+  if (!scale || place === 'none') return '';
+  const colors = Array.isArray(scale.colors) ? scale.colors.filter(Boolean) : [];
+  if (colors.length < 2) return '';
+  const size = legendSizeOf(view);
+  const label = typeof view.scaleLabel === 'string' ? view.scaleLabel : (scale.label || '');
+  const vertical = place === 'right' || place === 'left';
+
+  // Ticks: the break values if the plugin sent them, else just the two ends. Never
+  // invented — a tick the data did not justify is a number the reader will quote.
+  const brks = Array.isArray(scale.breaks) && scale.breaks.length >= 2
+    ? scale.breaks
+    : [scale.min, scale.max];
+  const out = [];
+  const pad = 4;
+  const barThick = Math.max(8, Math.round(size * 0.9));
+  // The scale's own rect, derived from `place` the way legendBlock derives its position:
+  // beside the plot for a vertical bar, under or over it for a horizontal one, anchored
+  // to the CANVAS on the right so it does not drift when the plot is resized.
+  const barLen = vertical
+    ? Math.max(40, (box.y1 - box.y0) * 0.75)
+    : Math.max(60, (box.x1 - box.x0) * 0.8);
+  const area = vertical
+    ? {
+      x0: place === 'left' ? canvas.x0 + LEGEND_GUTTER : canvas.x1 - LEGEND_GUTTER - size * 5,
+      y0: (box.y0 + box.y1) / 2 - barLen / 2,
+      x1: 0,
+      y1: (box.y0 + box.y1) / 2 + barLen / 2,
+    }
+    : {
+      x0: (box.x0 + box.x1) / 2 - barLen / 2,
+      y0: place === 'top' ? box.y1 + pad : box.y0 - barThick - size * 2,
+      x1: (box.x0 + box.x1) / 2 + barLen / 2,
+      y1: 0,
+    };
+  box = { ...area, x1: area.x1 || area.x0 + barLen, y1: area.y1 || area.y0 + barThick + size * 2 };
+
+  if (vertical) {
+    const h = Math.max(20, box.y1 - box.y0 - (label ? size + pad : 0) - size);
+    const x = box.x0 + pad;
+    const top = box.y0 + (label ? size + pad : 0);
+    const step = h / colors.length;
+    // Top-to-bottom, so the HIGHEST value is at the top: a vertical scale reads like an
+    // axis, and an inverted one is a misreading waiting to happen.
+    colors.slice().reverse().forEach((c, i) => {
+      out.push(`<rect x="${r(x)}" y="${r(top + i * step)}" width="${barThick}" height="${r(step + 0.5)}" fill="${esc(c)}"/>`);
+    });
+    out.push(`<rect x="${r(x)}" y="${r(top)}" width="${barThick}" height="${r(h)}" fill="none" stroke="#bbbbbb" stroke-width="0.5"/>`);
+    const tx = x + barThick + pad;
+    brks.forEach((b, i) => {
+      const t = brks.length === 1 ? 0 : i / (brks.length - 1);
+      out.push(text(tx, r(top + h - t * h + size * 0.35), esc(fmtTick(b)),
+        { size: size * 0.85, fill: '#333', cls: 'ct-scale-text' }));
+    });
+    if (label) out.push(text(x, box.y0 + size, esc(label), { size, fill: '#333', cls: 'ct-scale-text' }));
+  } else {
+    const w = Math.max(40, box.x1 - box.x0 - pad * 2);
+    const x = box.x0 + pad;
+    const top = box.y0 + (label ? size + pad : 0);
+    const step = w / colors.length;
+    colors.forEach((c, i) => {
+      out.push(`<rect x="${r(x + i * step)}" y="${r(top)}" width="${r(step + 0.5)}" height="${barThick}" fill="${esc(c)}"/>`);
+    });
+    out.push(`<rect x="${r(x)}" y="${r(top)}" width="${r(w)}" height="${barThick}" fill="none" stroke="#bbbbbb" stroke-width="0.5"/>`);
+    const ty = top + barThick + size * 0.95;
+    brks.forEach((b, i) => {
+      const t = brks.length === 1 ? 0 : i / (brks.length - 1);
+      // The end labels are pulled inside the bar rather than centred on it, so neither
+      // runs off the canvas at the extremes.
+      const anchor = i === 0 ? 'start' : i === brks.length - 1 ? 'end' : 'middle';
+      out.push(text(r(x + t * w), r(ty), esc(fmtTick(b)),
+        { size: size * 0.85, fill: '#333', anchor, cls: 'ct-scale-text' }));
+    });
+    if (label) out.push(text(x, box.y0 + size, esc(label), { size, fill: '#333', cls: 'ct-scale-text' }));
+  }
+  // The SAME layer name as a category legend, so the scale inherits placement, dragging,
+  // resizing and persistence rather than needing a fourth layer and a second set of
+  // controls. A figure has one or the other, never both.
+  return layerOpen('legend', view) + out.join('') + LAYER_CLOSE;
+}
+
+/**
+ * A break value, short enough for a tick.
+ *
+ * Not `toLocaleString`: a scale's ticks sit a few pixels apart and a thousands separator
+ * is the first thing to collide. Significant digits rather than fixed decimals, because
+ * these are data values and 0.0001 and 10000 both turn up.
+ */
+function fmtTick(v) {
+  if (!Number.isFinite(v)) return '';
+  const a = Math.abs(v);
+  if (a === 0) return '0';
+  if (a >= 1000 || a < 0.01) return v.toPrecision(3).replace(/\.?0+e/, 'e');
+  return String(Math.round(v * 100) / 100);
+}
+
 /** A legend (right column, or a centred top/bottom row). `items` = [{label,color}].
  * `box` = {x0,x1,y0,y1} plot rect. */
 export function legendBlock(items, place, box, view = {}, canvas = designBox(), { swatch } = {}) {

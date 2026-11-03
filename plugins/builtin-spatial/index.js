@@ -330,10 +330,33 @@ export async function choropleth(app, { region, value, boundary, keyprop }) {
       shp$.key <- shpkey
       m <- merge(shp, agg, by = ".key", all.x = TRUE)
       nMatched <- sum(!is.na(m$.val)); nRegions <- nrow(shp); nData <- nrow(agg)
-      .ct <- svgstring(width = 8, height = 5.5, pointsize = 11)
-      plot(m[".val"], main = "", key.pos = 1, border = "#ffffff", lwd = 0.3, pal = function(x) hcl.colors(x, "YlGnBu", rev = TRUE))
-      dev.off(); svg <- .ct()
-      list(svg = svg, nMatched = nMatched, nRegions = nRegions, nData = nData, err = "")
+      # The colour scale is now drawn by the HOST as a live layer (#204), so R must stop
+      # drawing its own key AND hand over exactly what it shaded with. Both the breaks and
+      # the palette are computed here, once, and used for the plot and the key — a key
+      # built from a second palette call would drift the moment either side changed.
+      #
+      # Equal-interval breaks rather than sf's default classIntervals: the host has to
+      # label the bar, and a classing rule it cannot see is a bar it cannot label
+      # honestly. Equal intervals are also the reading a continuous ramp implies.
+      nCls <- 7
+      vals <- m$.val[!is.na(m$.val)]
+      if (length(vals) == 0) {
+        list(svg = "", nMatched = 0, nRegions = nRegions, nData = nData,
+             err = "No regions matched, so there is nothing to map.")
+      } else {
+        lo <- min(vals); hi <- max(vals)
+        # A single distinct value has no range to divide; widen it so the breaks are
+        # strictly increasing and the one class still draws.
+        if (!is.finite(lo) || !is.finite(hi) || hi <= lo) { lo <- lo - 0.5; hi <- lo + 1 }
+        brks <- seq(lo, hi, length.out = nCls + 1)
+        cols <- hcl.colors(nCls, "YlGnBu", rev = TRUE)
+        .ct <- svgstring(width = 8, height = 5.5, pointsize = 11)
+        plot(m[".val"], main = "", key.pos = NULL, border = "#ffffff", lwd = 0.3,
+             breaks = brks, pal = cols)
+        dev.off(); svg <- .ct()
+        list(svg = svg, nMatched = nMatched, nRegions = nRegions, nData = nData, err = "",
+             scaleMin = lo, scaleMax = hi, scaleBreaks = brks, scaleColors = cols)
+      }
     }`;
   let result;
   try {
@@ -349,7 +372,29 @@ export async function choropleth(app, { region, value, boundary, keyprop }) {
     return;
   }
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Choropleth map' });
+  if (svg && /<svg[\s>]/i.test(svg)) {
+    // The scale as DATA, drawn by the host as a live layer the reader can reword and
+    // move (#204). `sf` used to draw this key inside the panel, where it was path data by
+    // the time the host saw it — the only figure whose furniture stayed frozen after
+    // everything else became editable.
+    const breaks = r.nums('scaleBreaks');
+    const colors = r.strs('scaleColors');
+    await app.results.appendPlot(cleanSvg(svg), {
+      title: 'Choropleth map',
+      scale: colors.length >= 2 ? {
+        min: r.num1('scaleMin'),
+        max: r.num1('scaleMax'),
+        // The same vectors R shaded with, not a re-derivation — see the R above.
+        breaks,
+        colors,
+        // Named after the variable being mapped, which is what the reader needs to know
+        // the bar is measuring. Editable from the panel like any other legend text.
+        // The variable being mapped: what the reader needs in order to know what the bar
+        // measures. Editable from the panel afterwards, like any other legend text.
+        label: String(value),
+      } : null,
+    });
+  }
   const nMatched = r.num1('nMatched'), nRegions = r.num1('nRegions'), nData = r.num1('nData');
   await app.results.appendText(
     `Shaded **${nMatched} of ${nRegions}** regions from **${nData}** data rows.` +

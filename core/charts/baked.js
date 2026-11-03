@@ -41,6 +41,7 @@
 
 import { registerChartKind } from './runtime.js';
 import {
+  scaleBlock,
   designBox, layerOpen, LAYER_CLOSE, titleBlock, scalePlot, titleControls,
   plotSizeControl, TITLE_BAND, W, H, FONT,
   legendBlock, legendControl, legendFormatControls, plotRightInset, plotVerticalInset,
@@ -152,10 +153,16 @@ registerChartKind('baked', {
   reorderCategories: false,
   // The legend entries, when the plugin supplied any. They appear in the panel as a
   // relabel-and-reorder list — the wording is the host's to change, the colours are not.
-  colorItems: (model) => legendItems(model),
+  // A scale's colours are not per-item and are never editable; a legend's are listed but
+  // also locked on a baked figure (the host cannot repaint R's picture).
+  colorItems: (model) => (model.scale ? [] : legendItems(model)),
   colorEditable: false,
 
-  baseView: (model) => ({ legend: legendItems(model).length ? 'right' : 'none' }),
+  // A scale defaults to the BOTTOM, where `sf` drew it and where a horizontal bar fits a
+  // map's aspect; a category legend defaults to the right, as it always has.
+  baseView: (model) => ({
+    legend: model.scale ? 'bottom' : (legendItems(model).length ? 'right' : 'none'),
+  }),
 
   controls: (model) => [
     ...titleControls(model),
@@ -193,9 +200,16 @@ registerChartKind('baked', {
     body.push(svg ?? String(model.svg || ''));
     body.push(LAYER_CLOSE);
 
-    const items = legendItems(model);
-    if (items.length) {
-      body.push(legendBlock(items, view.legend, box, view, designBox(), { swatch: bakedSwatch }));
+    // One or the other: a continuous scale OR a row-per-category legend (#204). Both
+     // occupy the `legend` layer, so drawing both would stack two different claims about
+     // the same colours in the same corner.
+    if (model.scale) {
+      body.push(scaleBlock(model.scale, view.legend, box, view, designBox()));
+    } else {
+      const items = legendItems(model);
+      if (items.length) {
+        body.push(legendBlock(items, view.legend, box, view, designBox(), { swatch: bakedSwatch }));
+      }
     }
 
     if (caption) {
@@ -212,13 +226,21 @@ registerChartKind('baked', {
 });
 
 /** The model a baked figure is stored as. Exported for the results pane and its tests. */
-export function bakedModel({ svg, title = '', caption = '', legend = [], params = [], redraw = null }) {
+export function bakedModel({ svg, title = '', caption = '', legend = [], scale = null, params = [], redraw = null }) {
   return {
     kind: 'baked',
     svg: String(svg || ''),
     title,
     caption,
     legend: Array.isArray(legend) ? legend : [],
+    // A continuous COLOUR SCALE instead of a row-per-category legend (#204) — the
+    // choropleth's colour bar, which `sf` used to draw inside the panel where nobody
+    // could reword or move it.
+    //
+    // Mutually exclusive with `legend` by construction below rather than by politeness: a
+    // figure keys its colours one way or the other, and offering both would put two
+    // different claims about the same colours in the same corner.
+    scale: normaliseScale(scale),
     // PARAMETERS of the figure, not of its furniture (#203) — a layout algorithm, a k, a
     // distance metric. Changing one re-invokes the plugin, which is acceptable precisely
     // because the user expects a recompute when they change a parameter. The furniture
@@ -240,6 +262,36 @@ export function bakedModel({ svg, title = '', caption = '', legend = [], params 
     redraw: redraw && redraw.plugin && redraw.fn
       ? { plugin: String(redraw.plugin), fn: String(redraw.fn), args: plainArgs(redraw.args) }
       : null,
+  };
+}
+
+/**
+ * Validate a declared colour scale, dropping it whole if it cannot be drawn honestly.
+ *
+ * Needs at least two colours (one is not a scale) and a finite range. `breaks` are
+ * optional and are NOT invented when absent — the bar then labels only its ends, because
+ * a tick the data did not justify is a number a reader will quote back.
+ *
+ * The colours must be the ones the figure was actually drawn with. Nothing here can check
+ * that, which is why the plugin is asked to pass the same vector it gave R rather than a
+ * palette name the host would re-evaluate — see `builtin-spatial`, where one `cols`
+ * definition feeds both.
+ */
+function normaliseScale(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const colors = Array.isArray(raw.colors) ? raw.colors.filter((c) => typeof c === 'string' && c) : [];
+  const min = Number(raw.min);
+  const max = Number(raw.max);
+  if (colors.length < 2 || !Number.isFinite(min) || !Number.isFinite(max)) return null;
+  const breaks = Array.isArray(raw.breaks)
+    ? raw.breaks.map(Number).filter(Number.isFinite)
+    : [];
+  return {
+    min,
+    max,
+    colors,
+    breaks: breaks.length >= 2 ? breaks : [],
+    label: typeof raw.label === 'string' ? raw.label : '',
   };
 }
 

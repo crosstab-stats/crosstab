@@ -597,6 +597,13 @@ export class ResultsPane {
       // Legend entries the plugin supplies as DATA, drawn by the host as a live layer
       // the reader can reword. Plain objects, so they cross the sandbox boundary.
       legend: Array.isArray(opts.legend) ? opts.legend : [],
+      // A continuous colour SCALE instead of a category legend (#204) — the choropleth's
+      // bar. Forwarded explicitly, like every other field: this function builds its own
+      // options object for `bakedModel`, so a field added to the model and not added here
+      // arrives as undefined. That happened twice in one day, with `redraw.args` and then
+      // with this, and both times the symptom was a feature that tested green and did
+      // nothing in the app.
+      scale: opts.scale || null,
       // Parameters of the FIGURE, with the function that recomputes it (#203). Both are
       // plain data for the same reason the legend is: they cross a sandbox boundary, and
       // `redraw` names a function rather than being one.
