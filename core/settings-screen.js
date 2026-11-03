@@ -166,6 +166,25 @@ export function showSettings({ openers = {} } = {}) {
         class: 'ct-dialog__hint',
         text: 'Preferences stored in this browser. They apply to every project on this device.',
       }),
+      // What is deliberately NOT here, because the absence is otherwise unexplained.
+      //
+      // The owner looked for the frequency WEIGHT and did not find it. It is not an
+      // oversight and it is not a preference: a weight is a property of a DATASET, folded
+      // from the project's op log like any other step. That is load-bearing rather than
+      // pedantic — because setting it is an op, it is undoable, it appears in History, it
+      // exports in the analysis script, and it merges to collaborators. A device
+      // preference would have none of those, and there would be one weight for every
+      // project rather than one per dataset.
+      //
+      // Named explicitly rather than described in the abstract: a reader hunting for a
+      // specific missing thing needs to see that thing's name.
+      el('p', {
+        class: 'ct-dialog__hint ct-settings__scope',
+        text: 'Anything that belongs to a project rather than to this browser is set where '
+          + 'it lives, not here — the frequency weight in Variable View or a run\'s own '
+          + 'weight control, encryption per project in the File menu. Those travel with '
+          + 'the project and appear in its History.',
+      }),
     );
 
     const body = el('div', { class: 'ct-settings__body' });

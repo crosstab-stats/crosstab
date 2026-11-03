@@ -597,17 +597,23 @@ export class ProjectSync {
     // reproducibility wants and the form a building block could not take.
     this.#menus.register({ id: 'core:proj-copy-ds', path: ['File'], label: 'Copy dataset…', order: 20, command: () => this.copyPrompt({ kind: 'dataset' }) });
     this.#menus.register({ id: 'core:encryption-settings', path: ['File'], label: 'Encryption settings…', order: 8, command: () => void showEncryptionSettings({ projects: this }) });
-    // Settings (#198). Registered HERE, beside the encryption item, because this is the
-    // module that already holds both the menu registry and the `projects` handle the
-    // encryption opener needs — wiring it from app.js would mean threading one of those
-    // across a module boundary to save nothing. `openers` is how a routed setting reaches
-    // its real editor without the declaring module importing a dialog (which would be a
-    // cycle: encryption-settings.js imports at-rest.js).
+    // Settings (#198), on EDIT rather than File since 2026-11-03 (owner: *"Edit is just
+    // the general convention for settings/preferences in most other apps"*). Correct, and
+    // the menu already agreed with itself about it: **Small screen mode** — a declared
+    // preference — has sat under Edit since it shipped, so File was holding one preference
+    // apart from another for no reason. Order 50 puts it last, where Preferences goes.
+    //
+    // Registered HERE, beside the encryption item, because this is the module that already
+    // holds both the menu registry and the `projects` handle the encryption opener needs —
+    // wiring it from app.js would mean threading one of those across a module boundary to
+    // save nothing. `openers` is how a routed setting reaches its real editor without the
+    // declaring module importing a dialog (which would be a cycle: encryption-settings.js
+    // imports at-rest.js).
     this.#menus.register({
       id: 'core:settings',
-      path: ['File'],
+      path: ['Edit'],
       label: 'Settings…',
-      order: 9,
+      order: 50,
       command: () => void showSettings({
         openers: { 'privacy.encryption': () => void showEncryptionSettings({ projects: this, tab: 'defaults' }) },
       }),

@@ -2715,6 +2715,44 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#206 — Settings moved to the Edit menu, and the screen now says what it does NOT
+      cover. DONE 2026-11-03.** Two observations from the owner, one a convention fix and
+      one an absence that needed explaining.
+
+      **The menu.** *"Can the settings screen be moved to the Edit menu instead of File?
+      Edit is just the general convention for settings/preferences in most other apps."*
+      Correct, and the menu already half-agreed with itself: **Small screen mode** — a
+      declared preference with a registry entry of its own — has sat under Edit since it
+      shipped. So File was holding one preference apart from another for no reason. Now
+      `Edit ▸ Settings…` at order 50, last, where Preferences goes.
+
+      The File-menu count test earned its keep twice in two days: it refused the addition
+      on 2026-11-02 until the count was updated to 14 deliberately, and refused the removal
+      on 2026-11-03 until it went back to 13.
+
+      **The weight is not missing — it is a different KIND of thing, and that distinction
+      is load-bearing.** The owner looked for the frequency weight on the screen and did
+      not find it. Checked rather than assumed: there is no device-level weight preference
+      anywhere, and there should not be. A weight is a property of a DATASET, folded from
+      the project's op log — `core/data-store.js` says so outright: *"a property of the
+      DATASET, not of a variable and not of the reader, so it is folded from the log like
+      everything else and travels with the project."*
+
+      Because setting it is an **op** rather than a preference, four things follow that a
+      localStorage key could not give it: it is undoable, it appears in History, it exports
+      in the analysis script, and it merges to collaborators. And there would be one weight
+      for every project instead of one per dataset. So the right fix was not to move it.
+
+      What was genuinely wrong is that the absence was unexplained — a reader hunting for it
+      got silence. The screen now carries a second hint naming the project-scoped things and
+      where they live: the frequency weight in Variable View or a run's own control,
+      encryption per project in the File menu, and that those travel with the project and
+      appear in its History. **Named explicitly rather than described in the abstract**,
+      because someone looking for a specific missing thing needs to see that thing's name.
+
+      Browser-verified: the item is registered `path: ['Edit'], order: 50`, renders, and the
+      screen shows both hints above its five groups.
+
 - [x] **#205 — the variable-role filter is a DEFAULT, not a veto. BUILT 2026-11-03.**
       The owner asked why CrossTab is "such a stickler" about measurement level: a
       categorical analysis hides a Scale-measured numeric, and recoding — which changes

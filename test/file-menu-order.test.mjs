@@ -51,11 +51,12 @@ function fileItems() {
 
 test('the import/export items form one contiguous block at the end of File', () => {
   const items = fileItems();
-  // 14 since #198 added `Settings…` at order 9 — between `Encryption settings…` (8) and
-  // `Copy dataset…` (20), so it sits with the other app-level items and well clear of the
-  // in/out block this test is really about. Updated deliberately, which is what the
-  // message below asks for: the count exists so a new item cannot arrive unnoticed.
-  assert.equal(items.length, 14, 'File gained or lost an item — update this test deliberately');
+  // Back to 13 on 2026-11-03: `Settings…` moved to EDIT, which is the convention and
+  // which the menu already half-agreed with -- `Small screen mode`, a declared preference,
+  // had been under Edit since it shipped. It was 14 for a day while Settings sat in File.
+  // The count exists so a change like that cannot pass unnoticed, and it did its job
+  // twice in two days.
+  assert.equal(items.length, 13, 'File gained or lost an item — update this test deliberately');
   const io = items.filter((i) => /^(Import|Export)\b/.test(i.label));
   assert.equal(io.length, 4, io.map((i) => i.label).join(', '));
   const first = items.findIndex((i) => i === io[0]);
