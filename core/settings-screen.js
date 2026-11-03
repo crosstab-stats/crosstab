@@ -299,14 +299,32 @@ export function showSettings({ openers = {}, projectSettings = null } = {}) {
         }
       } else if (kind === 'secret') {
         control.append(el('span', { class: 'ct-settings__value', text: describeValue(spec) }));
+        // A secret CAN have an editor, it just cannot have an inline one (#209). The
+        // first version offered status and a Clear button that was hidden until the
+        // setting was set — so an unconfigured row could only ever report its own
+        // emptiness, and the console stayed the only way in. That is a guard around a
+        // state that should not exist, and it left open the exact gap this screen was
+        // built to close.
+        //
+        // Routed through `openers` for the same reason the encryption policy is: the
+        // module that DECLARES the setting cannot import the dialog that edits it without
+        // a cycle, so app wiring supplies it.
+        const opener = openers[spec.id];
+        if (opener) {
+          const btn = el('button', { class: 'ct-btn', text: spec.isSet ? 'Change…' : 'Configure…' });
+          btn.addEventListener('click', async () => {
+            dialog.close();
+            await opener();
+          });
+          control.append(btn);
+        }
         if (spec.isSet) {
           const btn = el('button', { class: 'ct-btn', text: 'Clear' });
           btn.addEventListener('click', reset);
           control.append(btn);
         }
-        // Deliberately no editor. The value holds a credential, `listSettings` refuses to
-        // return it, and a form here could only write blind — which is worth building
-        // when something asks for it and not before.
+        // Still no INLINE editor: the value holds a credential, `listSettings` refuses to
+        // return it, and a field that redisplayed one would make that refusal pointless.
       } else if (kind === 'select') {
         const sel = el('select', { class: 'ct-field' });
         // A null fallback is a real third state ("nobody has said"), not a missing value —

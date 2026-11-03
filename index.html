@@ -826,6 +826,9 @@
       .ct-settings__control input,
       .ct-settings__control textarea { max-width: 100%; }
       .ct-settings__value { color: var(--ct-muted); }
+      /* A validation message inside a settings dialog (#209) — a fault the reader can fix
+         right now, so it takes the danger colour rather than the muted hint one. */
+      .ct-settings__error { color: var(--ct-danger); min-height: 1em; margin: 4px 0 0; }
       /* A floor for legibility (a relay URL per line), but one that yields on a narrow
          screen rather than forcing the dialog to scroll sideways. */
       .ct-settings__lines { min-width: min(240px, 100%); width: 320px; max-width: 100%;

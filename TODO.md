@@ -2715,6 +2715,53 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#209 — the TURN row could report its state and never change it. FIXED
+      2026-11-03.** Owner, with a screenshot: *"settings screen has a section for turn
+      server but no way to act."*
+
+      **My own decision, and it was wrong.** `collab.turn` is `secret`, so the row showed
+      status plus a Clear button — and Clear was hidden until the setting was SET. An
+      unconfigured row therefore offered nothing at all: a guard around a state that should
+      not exist. Worse, it left the browser console as the only way to configure a relay,
+      which is the exact gap the Settings screen was built to close — #198's own
+      justification was that `collab.relays` and `collab.turn` had no UI anywhere. I wrote
+      at the time that an add-form was "worth building when something asks for it". Something
+      asked.
+
+      **Routed, not inline, for the reason the secrecy exists.** `listSettings` refuses to
+      return a secret's value and this does not go around it: the editor's fields open EMPTY
+      every time and saving REPLACES the stored entry rather than editing it. A settings
+      screen that redisplayed a stored password would have made the registry's care
+      pointless; "type it again" is the ordinary price of never printing it. Wired through
+      `openers` like the encryption policy, because the module that declares the setting
+      cannot import the dialog that edits it without a cycle.
+
+      What it does show is the non-secret half — which URL is configured — because a reader
+      needs to know which relay is in force to decide whether to replace it.
+
+      **Two validations that are the point rather than politeness:**
+      - **`stun:` is refused.** STUN reports your address; it cannot carry traffic. Storing
+        one would look configured and silently fail to do the job this setting exists for —
+        on a hard NAT, which is the only situation anyone configures a relay for.
+      - **Half a credential pair is refused.** A server given a username and no credential
+        fails at CONNECTION time, on someone else's machine, with no hint why. Better to
+        refuse while the person holding the answer is still looking at the form.
+
+      **Browser-verified end to end:** the unconfigured row now carries **Configure…**; the
+      editor opens with all three fields empty and the credential masked; a `stun:` URL is
+      refused in place with the message; a real save stores
+      `[{urls, username, credential}]`, `buildIceServers` threads it in beside the default
+      STUN, the row becomes **Configured** with **Change…** and **Clear**, and neither the
+      credential nor the username appears anywhere in the rendered screen.
+
+      10 tests — and one of them was a **false pass** first. The pre-fill guard used
+      `new RegExp(\`${f}\.value\s*=\`)` written through a shell heredoc, which ate the
+      backslashes and produced `/urls.values*=/` — a pattern matching nothing, so the test
+      asserted nothing while reporting green. Rewritten with plain substrings and
+      negative-controlled by deliberately pre-filling the field, which now fails it. **A
+      guard that cannot fail is worse than one that fails loudly**, and a green suite hid
+      this one until it was checked by hand.
+
 - [x] **#208 — the Settings screen was pinned to 420px on a 1446px viewport. FIXED
       2026-11-03.** Owner, with a screenshot: *"settings screen is aggressively narrow on
       wider screens. Can it be width-aware and just size to 80% or such?"*
