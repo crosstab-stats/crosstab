@@ -79,11 +79,15 @@ WebR downloads in the background the first time you run an analysis.
 ### Testing
 
 `npm test` runs the unit suite (no browser needed). For manual testing there are
-two checklists: [`docs/TESTING.md`](./docs/TESTING.md) covers every feature and
-every one of the 116 plugin menu items, with a recipe per item and — because both
-demo datasets are deterministic — the exact expected values, plus how to run the
-same analysis in SPSS/Stata/R to check the arithmetic.
+two checklists: [`docs/TESTING.md`](./docs/TESTING.md) — 260 checks covering every
+feature and every one of the 116 plugin menu items, with a recipe per item and —
+because both demo datasets are deterministic — the exact expected values, plus how
+to run the same analysis in SPSS/Stata/R to check the arithmetic.
 [`docs/IPAD-TEST.md`](./docs/IPAD-TEST.md) is the narrower iPadOS Safari pass.
+
+`node scripts/build-test-page.mjs` renders TESTING.md as a single self-contained
+page whose checks tick and whose progress persists, for working through it in a
+browser. The markdown stays the source of truth.
 
 ## Deployment
 
