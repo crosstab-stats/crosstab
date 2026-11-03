@@ -49,9 +49,18 @@ bottom; they are the project's memory and are not summarised away.
         CLOSURE before fetching (see the offline-caching work), so it has the shape for
         "resolve a set, then fetch it". The model files are a set of URLs under a pinned CDN
         path — simpler than the R closure, not harder.
-      - **Size reporting.** The offline toggle tells the user what it is about to download.
-        39 MB against the R packages is not nothing and must appear in that figure, or the
-        toggle lies about its own cost.
+      - ~~**Size reporting.**~~ **Nothing to do, and this sub-task was wrong about why —
+        checked 2026-11-02.** It said "the offline toggle tells the user what it is about to
+        download". It does not: `launcher.js:681` renders `status.bytes`, which
+        `OfflineManager#status` MEASURES by summing content-lengths across the offline
+        caches after the fact. There is no forecast to update, and because the service
+        worker files runtime assets into the same `crosstab-offline-v4` cache the status
+        sums, the model's bytes appear in that figure on their own once cached.
+
+        Worth recording rather than deleting: I wrote this sub-task hours before building
+        it, from a plausible idea of what the toggle does, and it survived into a filed plan
+        unchecked. The same shape as the four stale entries this week — a claim about the
+        code, written without opening it.
       - **The air-gap script.** `scripts/vendor-assets.mjs` is the local-mode vendoring
         path; the weights need to be vendorable the same way or `docs/OFFLINE.md` is wrong
         for anyone transcribing.
@@ -105,20 +114,40 @@ bottom; they are the project's memory and are not summarised away.
       else for minutes, so a budget that only accepted a terminal message would kill
       precisely the operation it protects.
 
-  - [ ] **The air-gap half: the weights are not vendorable.** `scripts/vendor-assets.mjs`
-        has named targets (`webr duckdb arrow hyparquet packages`) mirroring
-        `core/assets.js` LOCAL mode, and adding a `whisper` target is the obvious shape —
-        but it is **not** the same change as the above and was deliberately not bundled
-        with it. transformers.js resolves a repo id against `env.remoteHost`; a vendored
-        build needs `env.localModelPath` + `allowLocalModels` plumbed into
-        `core/transcribe-worker.js`, which currently sets no `env` at all and only accepts
-        a `libUrl` override. Plus 73–238 MB landing under `vendor/`.
+  - [ ] **The air-gap half — THREE unvendored asset groups, not one, and LOCAL mode
+        already dangles. Inventoried 2026-11-02.** I first wrote this as "add a `whisper`
+        target", which was wrong in the same way as everything else this week: a plan
+        written without opening the files. Checked against the repo:
 
-        So today: **"Make available offline" covers transcription; `?assets=local` does
-        not.** `docs/OFFLINE.md` is accurate for the toggle and silent about the model,
-        which is the honest state rather than a claim either way. Worth doing — the
-        air-gap user is the same field researcher this whole feature was built for — and
-        worth doing as its own change.
+        1. **The transformers.js library is not vendored, and LOCAL mode points at it
+           anyway.** `core/assets.js:73` declares
+           `transformersUrl: './vendor/transformers/transformers.mjs'`, there is no
+           `transformers` step in `scripts/vendor-assets.mjs` (`webr duckdb arrow
+           hyparquet packages`), and `vendor/` holds no such directory. So an
+           `?assets=local` build today hands the worker a URL nothing produces, and
+           transcription fails on the LIBRARY before it ever reaches a model. That is a
+           pre-existing broken declaration, not a missing feature.
+        2. **The onnxruntime WASM binaries are not vendored either.** transformers.js
+           fetches them at runtime, and nothing in `core/` sets
+           `env.backends.onnx.wasm.wasmPaths`. The offline TOGGLE covers them by accident
+           — they come from `cdn.jsdelivr.net`, already a runtime host — but an air-gapped
+           machine has no CDN.
+        3. **The weights.** `env.localModelPath` + `allowLocalModels` plumbed into
+           `core/transcribe-worker.js`, which sets no `env` at all and accepts only a
+           `libUrl` override. 73 MB for `base`, 238 MB for `small`.
+
+        And `docs/OFFLINE.md` never mentions transcription. That was honest silence while
+        the toggle did not cover it; now that the toggle does, silence reads as "covered".
+
+        **Why I did not build it blind.** Three asset groups and a config surface I cannot
+        test end to end from here — no air-gapped machine, and a real check means a 73 MB+
+        download onto the owner's disk. A vendoring path nobody has run is exactly how item
+        1 above came to ship broken, so building more of it unverified would repeat the
+        cause rather than fix it. Ready to do with either a real local-mode test on the
+        owner's machine, or an explicit decision to write it unverified.
+
+        Worth doing: the air-gap user is the same field researcher this whole feature was
+        built for.
 
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
@@ -525,8 +554,12 @@ bottom; they are the project's memory and are not summarised away.
     `core/folder-sync.js` — `decideSync` (seed/in-sync/push/merge) + `syncOnce`
     (read theirs+base → decide → write manifest+base); `ProjectStore.writeManifest`
     with atomic temp+`move()` rename (`#writeAtomic`, torn-read-safe);
-    `core/folder-handle.js` — IndexedDB persist of the picked dir handle +
-    `ensureReadWrite`. **34 headless tests + VERIFIED IN-BROWSER** against real OPFS
+    **`core/project-locations.js`** — IndexedDB persist of the picked dir handle +
+    `ensureReadWrite`. *(This said `core/folder-handle.js` until 2026-11-02; no such module
+    exists. It was absorbed into `project-locations.js`, which holds both the IndexedDB
+    store — handles are structured-cloneable and `localStorage` is not — and
+    `ensureReadWrite` at line 261. Found by auditing every file path the open board names
+    against the filesystem.)* **34 headless tests + VERIFIED IN-BROWSER** against real OPFS
     File System Access I/O (OPFS dir as a stand-in shared folder): a peer's on-disk
     edits + local edits three-way merge (dataset op-log + caqdas codebook via the
     real `mergeState`), 0 conflicts on disjoint edits, atomic write leaves no `.tmp`,
@@ -4165,7 +4198,7 @@ The record of what shipped and why. Kept in full, in the original sections.
       **What exists today is three parallel registries**, which is how the current shape
       leaks into the UI:
       - OPFS projects — the catalog in `project-store.js`
-      - folder projects — `core/folder-handle.js`, IndexedDB, because a
+      - folder projects — `core/project-locations.js` (named `core/folder-handle.js` here until 2026-11-02), IndexedDB, because a
         `FileSystemDirectoryHandle` needs structured clone
       - WebDAV connections — `core/webdav-connections.js`, localStorage (2026-08-24)
 
