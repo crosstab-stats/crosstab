@@ -19,6 +19,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   defineSetting, listSettings, setSetting, clearSetting, _resetRegistry,
@@ -187,8 +188,17 @@ test('the real settings declare the apply/route split they need', async () => {
     await import(m);
   }
   const byId = new Map(listSettings().map((s) => [s.id, s]));
-  assert.equal(byId.get('varlist.order').editedAt, 'the toolbar above any variable list');
-  assert.equal(byId.get('varlist.display').editedAt, 'the toolbar above any variable list');
+
+  // The variable-list pair were ROUTED until #210, on the reasoning that `data-views.js`
+  // caches them in instance state so a write from the screen would not show. The owner
+  // pointed out that a row showing a value it cannot change is a dead row — right, and the
+  // answer was to make the change ARRIVE rather than keep the control away from it. They
+  // are editable now, and what makes that safe is the `apply` hook plus subscribers.
+  for (const id of ['varlist.order', 'varlist.display']) {
+    assert.equal(byId.get(id).editedAt, undefined, `${id} is no longer routed`);
+    assert.equal(typeof byId.get(id).apply, 'function', `${id} tells the surfaces`);
+  }
+  // Still routed, and rightly: the encryption policy has a whole dialog of its own.
   assert.equal(byId.get('privacy.encryption').editedAt, 'File ▸ Encryption settings…');
   assert.equal(typeof byId.get('screen.mode').apply, 'function', 'the layout must change');
   assert.equal(typeof byId.get('debug.logging').apply, 'function', 'the gate is cached');
@@ -197,4 +207,43 @@ test('the real settings declare the apply/route split they need', async () => {
   assert.equal(controlFor(byId.get('collab.turn')), 'secret');
   // The lifecycle flag stays hidden.
   assert.ok(!settingsGroups().flatMap((g) => g.items).some((s) => s.id === 'screen.autoNoteSeen'));
+});
+
+test('a write from anywhere reaches the surfaces that cache the value', async () => {
+  // The whole reason these two could become editable (#210). `data-views.js` reads both
+  // into instance state at construction, so without a notification a change from the
+  // Settings screen would leave the grid showing the old order — which is exactly what
+  // made them read-only in the first place.
+  _resetRegistry();
+  fakeStorage();
+  const varOrder = await import('../core/var-order.js?fresh=210');
+  let fired = 0;
+  const off = varOrder.onVarViewChange(() => { fired += 1; });
+
+  // A refused value notifies nobody: there is nothing to re-read.
+  assert.equal(setSetting('varlist.order', 'not-an-order'), false);
+  assert.equal(fired, 0);
+
+  assert.equal(setSetting('varlist.order', 'name-desc'), true);
+  assert.equal(fired, 1);
+  assert.equal(setSetting('varlist.display', 'both'), true);
+  assert.equal(fired, 2);
+  // Clearing is a change too — back to the default order is still a new order.
+  clearSetting('varlist.order');
+  assert.equal(fired, 3);
+
+  off();
+  setSetting('varlist.display', 'name');
+  assert.equal(fired, 3, 'unsubscribing actually unsubscribes');
+});
+
+test('the views subscribe, and correct their own controls too', () => {
+  // A list that re-sorted while its dropdown still read the old choice would be worse
+  // than either problem alone.
+  const views = readFileSync('core/data-views.js', 'utf8');
+  assert.equal((views.match(/onVarViewChange\(/g) || []).length, 2,
+    'both DataView and VariableView subscribe');
+  assert.equal((views.match(/#syncVarView\(\) \{/g) || []).length, 2, 'and each re-reads');
+  assert.match(views, /this\.orderSelect\.value = order/);
+  assert.match(views, /this\.displaySelect\.value = display/);
 });

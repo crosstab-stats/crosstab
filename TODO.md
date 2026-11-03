@@ -2715,6 +2715,50 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#210 — the variable-list rows were view-only, for a reason that did not survive
+      contact. FIXED 2026-11-03.** Owner, straight after #209: *"similarly, variable list
+      order/display are view-only in settings screen."*
+
+      Same shape as #209, same author of the mistake. `varlist.order` and `varlist.display`
+      were declared `editedAt: 'the toolbar above any variable list'`, and the reasoning in
+      the comment was not wrong about the facts: `data-views.js` reads both into INSTANCE
+      state when a view is constructed, so a write from the Settings screen would have
+      changed the stored value and left the grid sitting in the old order. I knew that, and
+      concluded the screen should not offer the control.
+
+      That is the wrong conclusion from a true premise — twice now. A row that shows a value
+      and cannot change it is a dead row; the answer is to make the change **arrive**, not
+      to keep the control away from it. Routing is for a setting with a richer editor
+      elsewhere (`privacy.encryption` has a whole dialog), not for one whose consumers
+      merely failed to listen.
+
+      **Built:** a subscriber list in `core/var-order.js` — `onVarViewChange(fn)` returning
+      an unsubscribe, and `notifyVarView()` — modelled on the one `screen-mode.js` already
+      keeps for exactly this reason. Both settings swap `editedAt` for
+      `apply: () => notifyVarView()`, so they render as dropdowns. `DataView` and
+      `VariableView` each subscribe and gained a `#syncVarView()` that re-reads
+      `loadVarOrder()`/`loadVarDisplay()`, **corrects its own `<select>`**, and re-filters
+      only `if (touched)` — the notification fires on every write including the one the
+      view's own toolbar just made, and a needless re-render of the grid is not free.
+
+      Correcting the select mattered more than it looks: a list that had already re-sorted
+      while its dropdown still read the old choice would be worse than either problem on
+      its own.
+
+      **Verified in Chrome, through the menu rather than the method.** Edit ▸ Settings now
+      renders both as `SELECT`. With a throwaway dataset whose file order (zeta, alpha, mid)
+      is deliberately not alphabetical: `name` → alpha, mid, zeta; `name-desc` → zeta, mid,
+      alpha; `label` → alpha, mid, zeta in the **Variables** tab too (the second
+      subscriber), and both toolbars' selects tracked every change. Display `label` dropped
+      the name half of each header.
+
+      One test of mine had to change, which is the useful part of the record: *"the real
+      settings declare the apply/route split they need"* asserted the old `editedAt` on both
+      — it was encoding my reasoning, not a requirement. It now asserts `apply` instead, and
+      two new tests cover the mechanism (a refused value notifies nobody; unsubscribing
+      works; both views subscribe and fix their own controls). Negative-controlled: strip
+      the `apply` and the subscriptions and all three fail. 2677 pass.
+
 - [x] **#209 — the TURN row could report its state and never change it. FIXED
       2026-11-03.** Owner, with a screenshot: *"settings screen has a section for turn
       server but no way to act."*

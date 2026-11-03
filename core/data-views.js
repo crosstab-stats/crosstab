@@ -16,7 +16,8 @@ import { serializeProject, parse } from './crosstab-syntax.js';
 import { stataToScript } from './stata-import.js';
 import { spssToScript } from './spss-import.js';
 import { scriptToStata, scriptToSpss, scriptFileName, scriptToR } from './script-export.js';
-import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
+import { floatSelected, loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay,
+  onVarViewChange } from './var-order.js';
 import { makeVarToolbar, filterVars, getWorkspaceFilter, setWorkspaceFilter } from './var-toolbar.js';
 import { labelForValue, summariseMissing } from './var-role.js';
 import { escapeHtml, stripEllipsis } from './text.js';
@@ -108,6 +109,14 @@ export class DataView {
     this.toolbar = bar.el;
     this.filterInput = bar.filterInput;
     this.orderSelect = bar.orderSelect;
+    // Kept so an outside change can correct it too (#210). `makeVarToolbar` has always
+    // returned this; nothing had needed it, because until now the only writer was the
+    // control itself.
+    this.displaySelect = bar.displaySelect;
+    // Re-read when the value is changed from somewhere else — the Settings screen (#210),
+    // or anything else that writes the setting. The toolbar's own callbacks above already
+    // hold the new value, so this is only for writes this view did not make.
+    this.offVarView = onVarViewChange(() => this.#syncVarView());
     this.selCount = document.createElement('span');
     this.selCount.className = 'ct-vartools__count';
     this.toolbar.append(this.selCount);
@@ -172,6 +181,35 @@ export class DataView {
   }
 
   /** Re-render after the filter changes (column set changed → reset H-scroll). */
+  /**
+   * Re-read the variable-list settings after something else changed them (#210).
+   *
+   * Needed because this view caches `order` and `display` in instance state — which is
+   * exactly why the Settings screen first showed them read-only. The toolbar's own
+   * callbacks do not rely on this: they already hold the new value and have re-filtered.
+   *
+   * The select elements are corrected too, not just the fields. A control still showing
+   * the old choice beside a list that has already changed is worse than either alone.
+   */
+  #syncVarView() {
+    const order = loadVarOrder();
+    const display = loadVarDisplay();
+    let touched = false;
+    if (order !== this.order) {
+      this.order = order;
+      if (this.orderSelect) this.orderSelect.value = order;
+      touched = true;
+    }
+    if (display !== this.display) {
+      this.display = display;
+      if (this.displaySelect) this.displaySelect.value = display;
+      touched = true;
+    }
+    // Only when something moved: this fires on every write of either setting, including
+    // the one this view just made through its own toolbar.
+    if (touched) void this.#applyFilter();
+  }
+
   async #applyFilter() {
     this.#snapshotFloat();
     this.scroller.scrollLeft = 0;
@@ -767,6 +805,9 @@ export class VariableView {
       onOrder: (v) => { this.order = v; saveVarOrder(v); this.#applyFilter(); },
     });
     const toolbar = bar.el;
+    // Same subscription as DataView — this view caches `order` too.
+    this.orderSelect = bar.orderSelect;
+    this.offVarView = onVarViewChange(() => this.#syncVarView());
     this.count = document.createElement('span');
     this.count.className = 'ct-vartools__count';
     toolbar.append(this.count);
@@ -791,6 +832,20 @@ export class VariableView {
   /** Rebuild the table body for the current filter (matched on name or label,
    * case-insensitive). Cheap to call on every keystroke since it only rebuilds the
    * — usually much smaller — matched set. */
+  /**
+   * Re-read the variable-list order after something else changed it (#210).
+   *
+   * Only `order`: this view shows names and labels in their own columns, so it has no
+   * display control and caches no display mode.
+   */
+  #syncVarView() {
+    const order = loadVarOrder();
+    if (order === this.order) return;
+    this.order = order;
+    if (this.orderSelect) this.orderSelect.value = order;
+    this.#applyFilter();
+  }
+
   #applyFilter() {
     if (!this.tbody) return;
     const q = this.filter.trim().toLowerCase();

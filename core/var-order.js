@@ -107,6 +107,37 @@ export const VAR_DISPLAY_OPTIONS = [
   ['both', 'Show both'],
 ];
 
+/**
+ * Who to tell when the variable-list view changes (#210).
+ *
+ * Here for the same reason `screen-mode.js` keeps one: a value that is SET without the
+ * surfaces being told is a setting that appears to do nothing. `data-views.js` reads both
+ * of these into INSTANCE state at construction, so a write from anywhere else — the
+ * Settings screen, a future command, a synced change — leaves the grid showing the old
+ * order until something happens to refresh it.
+ *
+ * That staleness is exactly why these two were marked `editedAt` (routed, view-only) on
+ * the Settings screen when it was built. The owner pointed out that a row which shows a
+ * value and cannot change it is a dead row, which is right — so the fix is to make the
+ * change arrive, not to keep the control away from it.
+ */
+const listeners = new Set();
+
+/** Subscribe to variable-list view changes. Returns an unsubscribe. */
+export function onVarViewChange(fn) {
+  if (typeof fn !== 'function') return () => {};
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+/** Tell every surface to re-read. Never throws into the caller: one broken listener must
+ *  not stop the others, and a setting write must not fail because a view is mid-teardown. */
+function notifyVarView() {
+  for (const fn of [...listeners]) {
+    try { fn(); } catch (err) { console.warn('[var-order] listener failed', err); }
+  }
+}
+
 const orderSetting = defineSetting({
   id: 'varlist.order',
   key: 'crosstab.varlist.sort',
@@ -114,12 +145,12 @@ const orderSetting = defineSetting({
   values: VAR_ORDERS,
   fallback: 'file', // what every surface did before the choice existed
   label: 'Variable list order',
-  // Routed, not editable from a Settings screen. The toolbar that owns this sits in the
-  // header of every list that obeys it, which is both the better place to change it and
-  // the only place that re-renders when it does: `data-views.js` reads the value into
-  // instance state, so a write from elsewhere would not show until something refreshed.
-  // A screen that offered the control without the re-render would look broken.
-  editedAt: 'the toolbar above any variable list',
+  // EDITABLE from the Settings screen since #210. It was routed (`editedAt`) because
+  // `data-views.js` caches the value in instance state and a write from elsewhere would
+  // not show — a true problem, and the wrong conclusion: the answer is to make the change
+  // arrive rather than to keep the control away from it. `apply` notifies the surfaces,
+  // which re-read and re-render. The toolbar is still the handier place to change it.
+  apply: () => notifyVarView(),
   group: 'Variables',
   hint: 'How the Data grid, Variable View and every picker order their variables.',
   options: VAR_ORDER_OPTIONS,
@@ -131,7 +162,7 @@ const displaySetting = defineSetting({
   values: VAR_DISPLAYS,
   fallback: 'label',
   label: 'Show variables as',
-  editedAt: 'the toolbar above any variable list',
+  apply: () => notifyVarView(),
   group: 'Variables',
   hint: 'Whether a variable is named by its label, its name, or both.',
   options: VAR_DISPLAY_OPTIONS,
