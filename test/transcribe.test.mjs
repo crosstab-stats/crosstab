@@ -512,14 +512,77 @@ test('audio is transferred, not copied', () => {
   assert.match(host, /\[audio\.buffer\]/);
 });
 
-test('the worker is told where its library lives', () => {
+test('the worker is told where ALL THREE of its asset groups live', () => {
   // A vendored / air-gapped build must not reach the CDN. Same rule as every other
   // runtime: assets.js decides, the consumer does not.
+  //
+  // Widened from "its library lives" (#201). The old version checked only
+  // `transformersUrl` and passed for months while `?assets=local` was broken: the library
+  // was pointed at a vendored path, and the onnxruntime WASM and the model weights were
+  // not pointed anywhere, so an air-gapped build loaded the library from disk and then
+  // reached for a CDN. A test that checks one of three assets reads as coverage and is
+  // not. All three, in both modes, or the mode is a lie.
   const host = codeOf('core/transcribe.js');
-  assert.match(host, /getAssets\(\)\?\.transformersUrl/);
   const assets = readFileSync('core/assets.js', 'utf8');
+
+  // One config function, not three copies of a message -- three copies is how the fourth
+  // field comes to be forgotten, which is the shape of the bug above.
+  assert.match(host, /function configure\(worker\)/);
+  assert.equal((host.match(/configure\(worker\);/g) || []).length, 3,
+    'every worker spawn is configured: detect, transcribe, and the offline prefetch');
+  for (const field of ['transformersUrl', 'ortWasmPaths', 'whisperModelPath']) {
+    assert.ok(host.includes(`a.${field}`), `configure passes ${field}`);
+  }
+
+  // CDN mode: the library is pinned, and the other two are explicitly null so that
+  // transformers.js uses its own defaults. Declared rather than absent, so the two maps
+  // have the same shape and a missing LOCAL entry is visible by comparison.
   assert.match(assets, /transformersUrl: 'https:\/\/cdn\.jsdelivr\.net/, 'pinned CDN default');
-  assert.match(assets, /transformersUrl: '\.\/vendor\//, 'and a local path for air-gap');
+  assert.match(assets, /ortWasmPaths: null/);
+  assert.match(assets, /whisperModelPath: null/);
+
+  // LOCAL mode: all three resolve inside ./vendor/.
+  assert.match(assets, /transformersUrl: '\.\/vendor\//, 'a local path for air-gap');
+  assert.match(assets, /mjs: '\.\/vendor\/onnxruntime\//);
+  assert.match(assets, /wasm: '\.\/vendor\/onnxruntime\//);
+  assert.match(assets, /whisperModelPath: '\.\/vendor\/whisper\//);
+});
+
+test('every vendored path a mode declares is something the script actually writes', () => {
+  // The defect this closes, stated as a rule: LOCAL named
+  // ./vendor/transformers/transformers.mjs and no step in vendor-assets.mjs produced it,
+  // so an ?assets=local build pointed the worker at a file that never existed. A
+  // declaration nothing writes is worse than no declaration -- it fails at the point of
+  // use, on the machine with no internet.
+  const assets = readFileSync('core/assets.js', 'utf8');
+  const script = readFileSync('scripts/vendor-assets.mjs', 'utf8');
+  const local = assets.slice(assets.indexOf('const LOCAL'), assets.indexOf('const LOCAL') + 2600);
+  const dirs = [...new Set([...local.matchAll(/'\.\/vendor\/([a-z0-9-]+)\//g)].map((m) => m[1]))];
+  assert.ok(dirs.length >= 6, `found ${dirs.length} vendored dirs`);
+  for (const d of dirs) {
+    // Either the script writes into that directory name, or it is one of the two
+    // documented exceptions: trystero (live collab is inherently online -- the mirror
+    // only keeps the import resolvable) and webr-packages (written by the `packages`
+    // step under its own name).
+    if (d === 'trystero') continue;
+    assert.ok(script.includes(`'${d}'`) || script.includes(`${d}/`) || script.includes(d),
+      `vendor/${d}/ is declared in assets.js but nothing in vendor-assets.mjs writes it`);
+  }
+});
+
+test('the worker applies the air-gap overrides BEFORE building a pipeline', () => {
+  // transformers.js only applies its own jsDelivr default when `wasmPaths` is still
+  // unset, and resolves a model id against `localModelPath` at from_pretrained time. Set
+  // either of them after the first pipeline and the vendored build quietly uses the CDN.
+  const w = codeOf('core/transcribe-worker.js');
+  const at = w.indexOf('async function loadLib()');
+  const body = w.slice(at, w.indexOf('\n}', at));
+  assert.match(body, /wasmPaths = \{ \.\.\.ORT_WASM_PATHS \}/);
+  assert.match(body, /localModelPath = MODEL_PATH/);
+  // And remote models are refused, so a missing local file fails here rather than
+  // succeeding over the network months later on a machine that happens to have one.
+  assert.match(body, /allowRemoteModels = false/);
+  assert.ok(at < w.indexOf('async function getAsr('), 'loadLib runs before any pipeline');
 });
 
 // ---------------------------------------------------------------------------------

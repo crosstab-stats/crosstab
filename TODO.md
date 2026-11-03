@@ -18,137 +18,6 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [~] **#201 — the Whisper weights are not cached like everything else. THE OFFLINE
-      TOGGLE HALF IS BUILT 2026-11-02; the air-gap vendoring half is below.** Owner, 2026-11-02:
-      *"whisper cached same as everything else."* Found while auditing the board: the Whisper
-      epic's own "what the spike did not do" list was four-fifths stale, and this was the
-      item that survived.
-
-      `core/offline.js` mentions neither transcription nor whisper. So the model weights are
-      outside **"Make available offline"** and outside the air-gap vendoring step (#71),
-      while the R packages are inside both. The asymmetry is the bug: a user who ticks
-      "available offline", closes the laptop and opens it on a plane gets their analyses and
-      not their transcription — and finds out at the point of use, which for a field worker
-      is the worst possible moment.
-
-      **The shape is already settled**, which is why this is small. The Whisper entry
-      recorded the decision when the spike reported: *the numbers now favour the established
-      pattern — pinned CDN pull, cached by "make available offline", vendorable for air-gap
-      (#71) — because 39 MB is the same order as the R packages already fetched on demand,
-      and an explicit size-gated prompt would be heavier than the thing it guards.* So this
-      is wiring an existing mechanism to an existing asset, not designing a new one.
-
-      **What to work out, in rough order of difficulty:**
-      - **Which weights.** The shipping configuration is WASM q8 at ~39 MB
-        (`onnx-community/whisper-{base,small}`), and `core/transcribe*.js` can choose a
-        model. Caching every option would multiply the download; caching only the default
-        leaves a user who changed it worse off than before. The honest answer is probably
-        "whatever is currently selected, plus whatever has already been downloaded", which
-        is also the one that needs no new UI.
-      - **Where the prefetch belongs.** `core/offline.js` already resolves an R-package
-        CLOSURE before fetching (see the offline-caching work), so it has the shape for
-        "resolve a set, then fetch it". The model files are a set of URLs under a pinned CDN
-        path — simpler than the R closure, not harder.
-      - ~~**Size reporting.**~~ **Nothing to do, and this sub-task was wrong about why —
-        checked 2026-11-02.** It said "the offline toggle tells the user what it is about to
-        download". It does not: `launcher.js:681` renders `status.bytes`, which
-        `OfflineManager#status` MEASURES by summing content-lengths across the offline
-        caches after the fact. There is no forecast to update, and because the service
-        worker files runtime assets into the same `crosstab-offline-v4` cache the status
-        sums, the model's bytes appear in that figure on their own once cached.
-
-        Worth recording rather than deleting: I wrote this sub-task hours before building
-        it, from a plausible idea of what the toggle does, and it survived into a filed plan
-        unchecked. The same shape as the four stale entries this week — a claim about the
-        code, written without opening it.
-      - **The air-gap script.** `scripts/vendor-assets.mjs` is the local-mode vendoring
-        path; the weights need to be vendorable the same way or `docs/OFFLINE.md` is wrong
-        for anyone transcribing.
-
-      Replaces the one open line left in the Whisper entry under *Deferred features*, which
-      now points here.
-
-      ---
-
-      **BUILT 2026-11-02 — and the blocker was not the prefetch.** `sw.js` gates caching by
-      HOST, and `huggingface.co` was not on the list. So the weights could not be cached
-      **even opportunistically on first use** — while the transformers.js library *was*
-      already covered by `cdn.jsdelivr.net`. That combination produced the most confusing
-      possible version of the bug: transcription could *start* offline and then fail
-      fetching its own model. The host allowance is the fix; the prefetch is the
-      improvement on top of it. Added the LFS redirect targets too, because a cached
-      redirect to an uncacheable destination looks present and fails at read time.
-
-      **The prefetch asks for the model instead of listing files.** Which ONNX files a
-      Whisper model needs is transformers.js's business and changes between versions and
-      dtypes, so a hardcoded list would be wrong at the next bump and wrong *silently* —
-      the user would tick the toggle and discover the gap on a plane. `preloadModel()`
-      spins a worker, sends a new `preload` message, and the worker calls the real
-      `getAsr()` and nothing else: no audio, no inference. Whatever it fetches, the SW
-      caches. That is exactly the strategy the WebR step (restart, then `preload()`) and
-      the DuckDB step already use, so there is now one pattern for all three runtimes.
-
-      **Three corrections to this entry's own numbers and claims:**
-      - **The size was wrong.** This entry said ~39 MB, quoting the spike. That is `tiny`,
-        which is deliberately NOT offered (it collapses into repetition loops). The real
-        figures are **73 MB for `base`** and **238 MB for `small`**.
-      - **So "which weights" answers itself differently.** The default only. Caching both
-        would triple the download for a choice most users never change; caching neither
-        was the bug. `small` now caches on first use, which is the same weaker guarantee
-        the R packages had before their closures were pre-fetched — and it is only possible
-        at all because of the host allowance.
-      - **The speaker-diarisation embedder** is a second model this entry never mentioned.
-        Not pre-fetched: it is downloaded only when someone asks for speakers, and it now
-        caches on first use like `small`.
-
-      **A model failure does not take the warm down.** It runs last, after the shell, both
-      runtimes and the R packages, and is logged and reported rather than thrown — an
-      offline app that cannot transcribe beats an all-or-nothing warm that cached nothing
-      because of an optional model. It says so in the progress line rather than claiming
-      "Offline ready."
-
-      A test also caught the new worker: the watchdog invariant is asserted against every
-      `worker.onmessage` in `core/transcribe.js` and the count was pinned at 2, so a third
-      worker could not arrive without someone confirming it has a watchdog. It does, and
-      it needs one more than the others — a model download reports progress and nothing
-      else for minutes, so a budget that only accepted a terminal message would kill
-      precisely the operation it protects.
-
-  - [ ] **The air-gap half — THREE unvendored asset groups, not one, and LOCAL mode
-        already dangles. Inventoried 2026-11-02.** I first wrote this as "add a `whisper`
-        target", which was wrong in the same way as everything else this week: a plan
-        written without opening the files. Checked against the repo:
-
-        1. **The transformers.js library is not vendored, and LOCAL mode points at it
-           anyway.** `core/assets.js:73` declares
-           `transformersUrl: './vendor/transformers/transformers.mjs'`, there is no
-           `transformers` step in `scripts/vendor-assets.mjs` (`webr duckdb arrow
-           hyparquet packages`), and `vendor/` holds no such directory. So an
-           `?assets=local` build today hands the worker a URL nothing produces, and
-           transcription fails on the LIBRARY before it ever reaches a model. That is a
-           pre-existing broken declaration, not a missing feature.
-        2. **The onnxruntime WASM binaries are not vendored either.** transformers.js
-           fetches them at runtime, and nothing in `core/` sets
-           `env.backends.onnx.wasm.wasmPaths`. The offline TOGGLE covers them by accident
-           — they come from `cdn.jsdelivr.net`, already a runtime host — but an air-gapped
-           machine has no CDN.
-        3. **The weights.** `env.localModelPath` + `allowLocalModels` plumbed into
-           `core/transcribe-worker.js`, which sets no `env` at all and accepts only a
-           `libUrl` override. 73 MB for `base`, 238 MB for `small`.
-
-        And `docs/OFFLINE.md` never mentions transcription. That was honest silence while
-        the toggle did not cover it; now that the toggle does, silence reads as "covered".
-
-        **Why I did not build it blind.** Three asset groups and a config surface I cannot
-        test end to end from here — no air-gapped machine, and a real check means a 73 MB+
-        download onto the owner's disk. A vendoring path nobody has run is exactly how item
-        1 above came to ship broken, so building more of it unverified would repeat the
-        cause rather than fix it. Ready to do with either a real local-mode test on the
-        owner's machine, or an explicit decision to write it unverified.
-
-        Worth doing: the air-gap user is the same field researcher this whole feature was
-        built for.
-
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
       let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
@@ -2809,6 +2678,198 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#201 — the Whisper weights are not cached like everything else. COMPLETE
+      2026-11-02: the offline toggle AND the air-gap vendoring, plus two pre-existing
+      air-gap bugs the verification exposed.** Owner, 2026-11-02:
+      *"whisper cached same as everything else."* Found while auditing the board: the Whisper
+      epic's own "what the spike did not do" list was four-fifths stale, and this was the
+      item that survived.
+
+      `core/offline.js` mentions neither transcription nor whisper. So the model weights are
+      outside **"Make available offline"** and outside the air-gap vendoring step (#71),
+      while the R packages are inside both. The asymmetry is the bug: a user who ticks
+      "available offline", closes the laptop and opens it on a plane gets their analyses and
+      not their transcription — and finds out at the point of use, which for a field worker
+      is the worst possible moment.
+
+      **The shape is already settled**, which is why this is small. The Whisper entry
+      recorded the decision when the spike reported: *the numbers now favour the established
+      pattern — pinned CDN pull, cached by "make available offline", vendorable for air-gap
+      (#71) — because 39 MB is the same order as the R packages already fetched on demand,
+      and an explicit size-gated prompt would be heavier than the thing it guards.* So this
+      is wiring an existing mechanism to an existing asset, not designing a new one.
+
+      **What to work out, in rough order of difficulty:**
+      - **Which weights.** The shipping configuration is WASM q8 at ~39 MB
+        (`onnx-community/whisper-{base,small}`), and `core/transcribe*.js` can choose a
+        model. Caching every option would multiply the download; caching only the default
+        leaves a user who changed it worse off than before. The honest answer is probably
+        "whatever is currently selected, plus whatever has already been downloaded", which
+        is also the one that needs no new UI.
+      - **Where the prefetch belongs.** `core/offline.js` already resolves an R-package
+        CLOSURE before fetching (see the offline-caching work), so it has the shape for
+        "resolve a set, then fetch it". The model files are a set of URLs under a pinned CDN
+        path — simpler than the R closure, not harder.
+      - ~~**Size reporting.**~~ **Nothing to do, and this sub-task was wrong about why —
+        checked 2026-11-02.** It said "the offline toggle tells the user what it is about to
+        download". It does not: `launcher.js:681` renders `status.bytes`, which
+        `OfflineManager#status` MEASURES by summing content-lengths across the offline
+        caches after the fact. There is no forecast to update, and because the service
+        worker files runtime assets into the same `crosstab-offline-v4` cache the status
+        sums, the model's bytes appear in that figure on their own once cached.
+
+        Worth recording rather than deleting: I wrote this sub-task hours before building
+        it, from a plausible idea of what the toggle does, and it survived into a filed plan
+        unchecked. The same shape as the four stale entries this week — a claim about the
+        code, written without opening it.
+      - **The air-gap script.** `scripts/vendor-assets.mjs` is the local-mode vendoring
+        path; the weights need to be vendorable the same way or `docs/OFFLINE.md` is wrong
+        for anyone transcribing.
+
+      Replaces the one open line left in the Whisper entry under *Deferred features*, which
+      now points here.
+
+      ---
+
+      **BUILT 2026-11-02 — and the blocker was not the prefetch.** `sw.js` gates caching by
+      HOST, and `huggingface.co` was not on the list. So the weights could not be cached
+      **even opportunistically on first use** — while the transformers.js library *was*
+      already covered by `cdn.jsdelivr.net`. That combination produced the most confusing
+      possible version of the bug: transcription could *start* offline and then fail
+      fetching its own model. The host allowance is the fix; the prefetch is the
+      improvement on top of it. Added the LFS redirect targets too, because a cached
+      redirect to an uncacheable destination looks present and fails at read time.
+
+      **The prefetch asks for the model instead of listing files.** Which ONNX files a
+      Whisper model needs is transformers.js's business and changes between versions and
+      dtypes, so a hardcoded list would be wrong at the next bump and wrong *silently* —
+      the user would tick the toggle and discover the gap on a plane. `preloadModel()`
+      spins a worker, sends a new `preload` message, and the worker calls the real
+      `getAsr()` and nothing else: no audio, no inference. Whatever it fetches, the SW
+      caches. That is exactly the strategy the WebR step (restart, then `preload()`) and
+      the DuckDB step already use, so there is now one pattern for all three runtimes.
+
+      **Three corrections to this entry's own numbers and claims:**
+      - **The size was wrong.** This entry said ~39 MB, quoting the spike. That is `tiny`,
+        which is deliberately NOT offered (it collapses into repetition loops). The real
+        figures are **73 MB for `base`** and **238 MB for `small`**.
+      - **So "which weights" answers itself differently.** The default only. Caching both
+        would triple the download for a choice most users never change; caching neither
+        was the bug. `small` now caches on first use, which is the same weaker guarantee
+        the R packages had before their closures were pre-fetched — and it is only possible
+        at all because of the host allowance.
+      - **The speaker-diarisation embedder** is a second model this entry never mentioned.
+        Not pre-fetched: it is downloaded only when someone asks for speakers, and it now
+        caches on first use like `small`.
+
+      **A model failure does not take the warm down.** It runs last, after the shell, both
+      runtimes and the R packages, and is logged and reported rather than thrown — an
+      offline app that cannot transcribe beats an all-or-nothing warm that cached nothing
+      because of an optional model. It says so in the progress line rather than claiming
+      "Offline ready."
+
+      A test also caught the new worker: the watchdog invariant is asserted against every
+      `worker.onmessage` in `core/transcribe.js` and the count was pinned at 2, so a third
+      worker could not arrive without someone confirming it has a watchdog. It does, and
+      it needs one more than the others — a model download reports progress and nothing
+      else for minutes, so a budget that only accepted a terminal message would kill
+      precisely the operation it protects.
+
+  - [x] **The air-gap half — BUILT AND VERIFIED 2026-11-02. Three asset groups, and it
+        found two pre-existing bugs that broke air-gap mode for everything, not just
+        transcription.**
+
+        `node scripts/vendor-assets.mjs transcription` now fetches all three groups — the
+        library, the onnxruntime WASM backend, the weights — in **one** step, because they
+        are useless apart and a half-run is the state that shipped before this existed.
+        203 MB on disk; `vendor/` is now properly gitignored (it listed only
+        `vendor/*.wasm`, so every other vendored directory was one `git add -A` away from
+        being committed).
+
+        **Verified in the browser with a real negative control**, which is the only reason
+        it is trustworthy. `?assets=local`, service worker unregistered and all Cache
+        Storage cleared:
+        - weights present → the model loads, 53.7 MB through the pipeline;
+        - weights moved aside → fails with *"`env.allowRemoteModels=false` and file was not
+          found locally at .../vendor/whisper/onnx-community/whisper-base/config.json"*.
+
+        The first attempt at that control **passed while the weights were deleted**, which
+        would have been reported as success: transformers.js keeps its own
+        `transformers-cache` in Cache Storage, so the load came from there. Finding that
+        also invalidated the positive result until it was re-run clean — the two readings
+        were identical to the byte, which is what gave it away.
+
+        **Three things went wrong on the way, all found by running it rather than by
+        reading it:**
+        1. **`tar` cannot take a Windows absolute path.** GNU tar reads `C:\...` as
+           `host:path` and tried to reach a machine called `C`. That broke **every** step
+           of `vendor-assets.mjs` on Windows, not only the new one, and had gone unnoticed
+           because vendoring is a rare deliberate act nobody had performed on this
+           platform. Fixed portably by running tar from the archive's own directory with a
+           bare filename — `--force-local` is GNU-only.
+        2. **The npm package's browser builds are BUNDLER targets.** Both carry bare
+           specifiers (`from"onnxruntime-web/webgpu"`) that a browser cannot resolve; the
+           air-gap run died with "Failed to resolve module specifier". What jsDelivr serves
+           for the pinned URL is a different, self-contained 586 KB artefact, so the step
+           vendors **the CDN bytes** — which also means an air-gapped machine runs
+           byte-identically to a connected one, so a bug cannot appear in only one mode.
+        3. **A relative `./vendor/...` path is wrong inside a worker**, which resolves it
+           against its own module URL in `/core/`. See the parent entry.
+
+  - [x] **A relative asset path resolved against `/core/`, and it broke air-gap mode for
+        the R runtime too — found 2026-11-02 while verifying the above.** The transcription
+        worker asked for `/core/vendor/transformers/transformers.mjs`, and the same request
+        log showed **`/core/vendor/webr/dist/webr.mjs` returning 503**. So `?assets=local`
+        had been broken for WebR for as long as local mode has existed, and nobody had run
+        it to find out.
+
+        Fixed in `getAssets()` rather than in each consumer: it now resolves every relative
+        URL against the document once, so the six paths that cross a worker boundary are
+        all correct and the duplicate helper added to `core/transcribe.js` an hour earlier
+        came straight back out. `duckdbBundles` is deliberately left alone — it is a
+        function returning fresh URLs, consumed on the main thread.
+
+        Worth stating plainly: the air-gap feature had never been exercised end to end on
+        this platform, and two of its three runtimes were broken. The build this entry
+        asked for was the occasion for finding that, not the cause of it.
+
+        *Original inventory follows.*
+
+  - [x] ~~**The air-gap half — THREE unvendored asset groups, not one, and LOCAL mode
+        already dangles. Inventoried 2026-11-02.**~~ I first wrote this as "add a `whisper`
+        target", which was wrong in the same way as everything else this week: a plan
+        written without opening the files. Checked against the repo:
+
+        1. **The transformers.js library is not vendored, and LOCAL mode points at it
+           anyway.** `core/assets.js:73` declares
+           `transformersUrl: './vendor/transformers/transformers.mjs'`, there is no
+           `transformers` step in `scripts/vendor-assets.mjs` (`webr duckdb arrow
+           hyparquet packages`), and `vendor/` holds no such directory. So an
+           `?assets=local` build today hands the worker a URL nothing produces, and
+           transcription fails on the LIBRARY before it ever reaches a model. That is a
+           pre-existing broken declaration, not a missing feature.
+        2. **The onnxruntime WASM binaries are not vendored either.** transformers.js
+           fetches them at runtime, and nothing in `core/` sets
+           `env.backends.onnx.wasm.wasmPaths`. The offline TOGGLE covers them by accident
+           — they come from `cdn.jsdelivr.net`, already a runtime host — but an air-gapped
+           machine has no CDN.
+        3. **The weights.** `env.localModelPath` + `allowLocalModels` plumbed into
+           `core/transcribe-worker.js`, which sets no `env` at all and accepts only a
+           `libUrl` override. 73 MB for `base`, 238 MB for `small`.
+
+        And `docs/OFFLINE.md` never mentions transcription. That was honest silence while
+        the toggle did not cover it; now that the toggle does, silence reads as "covered".
+
+        **Why I did not build it blind.** Three asset groups and a config surface I cannot
+        test end to end from here — no air-gapped machine, and a real check means a 73 MB+
+        download onto the owner's disk. A vendoring path nobody has run is exactly how item
+        1 above came to ship broken, so building more of it unverified would repeat the
+        cause rather than fix it. Ready to do with either a real local-mode test on the
+        owner's machine, or an explicit decision to write it unverified.
+
+        Worth doing: the air-gap user is the same field researcher this whole feature was
+        built for.
 
 - [x] **#203 — parameter controls for R-baked plots, where reasonable. BUILT 2026-11-02.** Owner, 2026-11-02:
       *"the controls for r-baked plots where reasonable."* The last open piece of chart

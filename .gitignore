@@ -13,6 +13,22 @@ Thumbs.db
 # Vendored binaries / icons placeholder (add real assets, ignore scratch)
 vendor/*.wasm
 
+# What `scripts/vendor-assets.mjs` downloads for an air-gapped build. These are other
+# people's release artefacts fetched on demand (hundreds of MB with the Whisper weights),
+# and docs/OFFLINE.md says to run the script per machine and copy the directory -- so they
+# are deliberately not history. Only `vendor/*.wasm` was listed before, which left every
+# other vendored directory showing up as untracked and one `git add -A` away from being
+# committed. The tracked contents of vendor/ (the icons, readstat) are not affected.
+vendor/webr/
+vendor/webr-packages/
+vendor/duckdb/
+vendor/arrow/
+vendor/hyparquet-writer/
+vendor/trystero/
+vendor/transformers/
+vendor/onnxruntime/
+vendor/whisper/
+
 # A deployment's own settings (#185). The committed template is deploy.example.json; the live
 # file is yours, so it is never in our history and never conflicts on `git pull`.
 deploy.json

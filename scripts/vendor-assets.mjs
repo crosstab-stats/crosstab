@@ -7,7 +7,7 @@
  * docs/OFFLINE.md). The asset URLs/layout here mirror core/assets.js (LOCAL).
  *
  *   node scripts/vendor-assets.mjs            # everything
- *   node scripts/vendor-assets.mjs webr duckdb arrow hyparquet packages
+ *   node scripts/vendor-assets.mjs webr duckdb arrow hyparquet packages transcription
  *
  * No npm dependencies — uses global fetch (Node 18+) and the system `tar` (present
  * on Windows 10+, macOS, Linux) to unpack npm tarballs.
@@ -21,9 +21,9 @@
  *    packages the bundled plugins declare. Re-run after adding plugins/packages.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync, existsSync, cpSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync, existsSync, cpSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,6 +37,17 @@ const HYPARQUET_VERSION = '0.16.1';
 // bin/emscripten/contrib/<this>/). WebR 0.5.x → R 4.6. Adjust if you pin a
 // different WebR.
 const R_VERSION_DIR = '4.6';
+// Transcription (#201). Keep in sync with core/assets.js (CDN `transformersUrl`) and
+// core/transcribe-worker.js (`WHISPER`).
+const TRANSFORMERS_VERSION = '4.3.1';
+// The onnxruntime-web build transformers.js asks for. Read from its package.json
+// `dependencies` rather than guessed: transformers.js constructs the CDN path from
+// `ONNX_ENV.versions.web`, so a mismatch here fetches a build the library will not use.
+const ORT_VERSION = '1.31.0-dev.20260914-8d85527a0';
+// The ONE model the offline cache pre-fetches, and so the one to vendor by default.
+// `small` is 238 MB against base's 73 — vendor it explicitly if you need it.
+const WHISPER_REPOS = ['onnx-community/whisper-base'];
+const HF = 'https://huggingface.co';
 const WEBR_REPO = 'https://repo.r-wasm.org';
 
 const log = (...a) => console.log('[vendor]', ...a);
@@ -53,10 +64,26 @@ async function fetchText(url) {
   return res.text();
 }
 
-/** Untar a .tgz into destDir using the system tar. */
+/**
+ * Untar a .tgz into destDir using the system tar.
+ *
+ * **The archive is named by BASENAME, from its own directory**, which is not fussiness:
+ * GNU tar treats an argument containing a colon as `host:path`, so passing a Windows
+ * absolute path made it try to reach a machine called `C` --
+ * `tar (child): Cannot connect to C: resolve failed`. That broke every step of this
+ * script on Windows, not just the one that found it, and it went unnoticed because
+ * vendoring is a rare deliberate act nobody had performed on this platform.
+ *
+ * `--force-local` is the usual fix and is GNU-only; running tar from the file's own
+ * directory needs no flag and behaves the same on bsdtar (macOS), where drive letters do
+ * not exist in the first place.
+ */
 function untar(tgzPath, destDir) {
   mkdirSync(destDir, { recursive: true });
-  const r = spawnSync('tar', ['-xzf', tgzPath, '-C', destDir], { stdio: 'inherit' });
+  const r = spawnSync('tar', ['-xzf', basename(tgzPath), '-C', destDir], {
+    stdio: 'inherit',
+    cwd: dirname(tgzPath),
+  });
   if (r.status !== 0) throw new Error(`tar failed (status ${r.status}) on ${tgzPath}`);
 }
 
@@ -204,12 +231,104 @@ async function vendorPackages() {
   log('  NOTE: re-run this after adding plugins or R packages.');
 }
 
+/**
+ * Everything on-device transcription needs, in ONE step (#201).
+ *
+ * **Why one step and not three.** The three asset groups are useless apart: the library
+ * cannot run without the onnxruntime WASM, and neither can do anything without the
+ * weights. A `transformers` step that a user ran alone would produce a build that loads
+ * the library from disk and then reaches for a CDN — which is exactly the half-state that
+ * shipped before this existed, where `core/assets.js` declared a vendored bundle that no
+ * step wrote. One step cannot be half-run.
+ *
+ * Group 1 — the LIBRARY. `dist/transformers.web.js` from the npm package: the browser ESM
+ * build the package's own `exports.default` points at, written to the filename
+ * `core/assets.js` already declared.
+ *
+ * Group 2 — the onnxruntime WASM BACKEND. Not in the npm package (checked: it ships only
+ * the `ort-wasm-*.jsep.mjs` loader, no `.wasm`), so it comes from the same jsDelivr path
+ * transformers.js would have used at runtime. `.asyncify` is the variant it defaults to;
+ * the non-asyncify build is only for Safari below 26 without WebGPU, so an air-gapped
+ * deploy on such a Mac needs the other pair and will say so by failing to find it.
+ *
+ * Group 3 — the WEIGHTS. The file list comes from the Hugging Face API rather than a
+ * hardcoded set, because which ONNX files a model needs depends on the dtype and changes
+ * between library versions — the same reason the offline cache prefetches by LOADING the
+ * model instead of listing files. Only the quantised ONNX files are taken: the full-size
+ * ones are several hundred MB and nothing here asks for them.
+ */
+async function vendorTranscription() {
+  // 1. the library — the CDN bundle, byte for byte.
+  //
+  // **Not the npm package's `dist/`, and the first attempt at this failed on exactly
+  // that.** Both browser builds in the tarball are BUNDLER targets: they carry bare
+  // specifiers (`from"onnxruntime-web/webgpu"`, `from"onnxruntime-common"`) which a
+  // browser cannot resolve, and the air-gap run died with "Failed to resolve module
+  // specifier". What jsDelivr serves for the pinned URL is a different artefact — 586 KB,
+  // self-contained, no bare specifiers, building the onnxruntime URL at runtime from a
+  // version string (which is what `ortWasmPaths` then overrides).
+  //
+  // So the honest vendoring of "the library that works" is the bytes that work. Same
+  // approach as `vendorEsmBundle` for arrow and hyparquet, and it has a property the npm
+  // route cannot: what an air-gapped machine runs is identical to what a connected one
+  // runs, so a bug cannot appear in only one of the two modes.
+  const libOut = join(VENDOR, 'transformers');
+  mkdirSync(libOut, { recursive: true });
+  const libUrl = `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}`;
+  const libBytes = await fetchBuffer(libUrl);
+  // Matches an import/export STATEMENT, not the word "from" next to a quote. The loose
+  // version of this guard rejected a perfectly good bundle because minified onnxruntime
+  // contains the error string "Unsupported data conversion from 'int32' to ..." -- the
+  // same matching-prose-instead-of-code mistake three tests in this session made.
+  if (/(?:^|[;}\s])(?:import|export)[^;]{0,200}?from\s*["'][a-zA-Z@][^"']*["']/.test(libBytes.toString('utf8'))) {
+    throw new Error('the CDN bundle now carries bare import specifiers — a browser cannot load it');
+  }
+  // `.mjs` because that is the name core/assets.js LOCAL declares, and because it IS an
+  // ES module — the extension should not lie about that.
+  writeFileSync(join(libOut, 'transformers.mjs'), libBytes);
+  log(`transformers ${TRANSFORMERS_VERSION} → vendor/transformers/transformers.mjs`);
+
+  // 2. the onnxruntime WASM backend
+  const ortOut = join(VENDOR, 'onnxruntime');
+  mkdirSync(ortOut, { recursive: true });
+  const ortBase = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
+  for (const f of ['ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm']) {
+    writeFileSync(join(ortOut, f), await fetchBuffer(ortBase + f));
+    log(`onnxruntime → vendor/onnxruntime/${f}`);
+  }
+
+  // 3. the weights
+  for (const repo of WHISPER_REPOS) {
+    const meta = JSON.parse(await fetchText(`${HF}/api/models/${repo}`));
+    const files = (meta.siblings || []).map((x) => x.rfilename).filter(Boolean);
+    // The config/tokeniser JSONs, plus the QUANTISED onnx only. `_quantized` is what the
+    // worker asks for (`dtype: 'q8'`); the fp32 pair is several hundred MB.
+    const wanted = files.filter((f) => (
+      (f.endsWith('.json') && !f.includes('/'))
+      || (f.startsWith('onnx/') && f.endsWith('.onnx') && f.includes('quantized'))
+    ));
+    if (!wanted.some((f) => f.endsWith('.onnx'))) {
+      throw new Error(`${repo}: no quantised .onnx found — the repo layout changed`);
+    }
+    for (const f of wanted) {
+      const out = join(VENDOR, 'whisper', ...repo.split('/'), ...f.split('/'));
+      mkdirSync(dirname(out), { recursive: true });
+      writeFileSync(out, await fetchBuffer(`${HF}/${repo}/resolve/main/${f}`));
+      log(`${repo} → vendor/whisper/${repo}/${f}`);
+    }
+  }
+}
+
 const STEPS = {
   webr: (w) => vendorWebR(w),
   duckdb: (w) => vendorDuckDB(w),
   arrow: () => vendorEsmBundle('apache-arrow', ARROW_VERSION, 'arrow/arrow.mjs'),
   hyparquet: () => vendorEsmBundle('hyparquet-writer', HYPARQUET_VERSION, 'hyparquet-writer/hyparquet-writer.mjs'),
   packages: () => vendorPackages(),
+  // All three transcription asset groups together — see vendorTranscription for why they
+  // cannot sensibly be separate steps.
+  // No `work` dir: every asset here is fetched straight to `vendor/`, nothing is a tarball.
+  transcription: () => vendorTranscription(),
 };
 
 async function main() {

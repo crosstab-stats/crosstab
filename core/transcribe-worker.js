@@ -61,6 +61,13 @@ const EMBEDDER = 'onnx-community/wespeaker-voxceleb-resnet34-LM';
 const WIN_SECONDS = 2;
 const SAMPLE_RATE = 16000;
 
+/**
+ * Air-gap overrides, null in CDN mode (#201). Applied in {@link loadLib} the moment the
+ * library exists, because `env` is the library's own object.
+ */
+let ORT_WASM_PATHS = null;
+let MODEL_PATH = null;
+
 let lib = null;
 let asr = null;
 let asrKey = '';
@@ -70,7 +77,21 @@ let cancelled = false;
 const post = (type, payload) => self.postMessage({ type, ...payload });
 
 async function loadLib() {
-  if (!lib) lib = await import(/* @vite-ignore */ LIB_URL);
+  if (lib) return lib;
+  lib = await import(/* @vite-ignore */ LIB_URL);
+  // Both of these must be set BEFORE any pipeline is built: transformers.js only applies
+  // its own jsDelivr default when `wasmPaths` is still unset (see its backends/onnx.js),
+  // and it resolves a model id against `localModelPath` at from_pretrained time.
+  if (ORT_WASM_PATHS && lib.env?.backends?.onnx?.wasm) {
+    lib.env.backends.onnx.wasm.wasmPaths = { ...ORT_WASM_PATHS };
+  }
+  if (MODEL_PATH && lib.env) {
+    lib.env.allowLocalModels = true;
+    lib.env.localModelPath = MODEL_PATH;
+    // The point of an air-gapped build: a missing local file must FAIL rather than
+    // quietly succeed over the network months later on a machine that does have one.
+    lib.env.allowRemoteModels = false;
+  }
   return lib;
 }
 
@@ -246,7 +267,16 @@ self.onmessage = async (e) => {
   const { type, id } = e.data ?? {};
 
   if (type === 'cancel') { cancelled = true; return; }
-  if (type === 'config') { LIB_URL = e.data.libUrl || LIB_URL; return; }
+  if (type === 'config') {
+    LIB_URL = e.data.libUrl || LIB_URL;
+    // Air-gap mode (#201). The worker is TOLD where its assets are and never decides —
+    // the same rule as `libUrl`, and for the same reason: a vendored build must not be
+    // one forgotten default away from reaching a CDN that is not there. Stored rather
+    // than applied, because `env` only exists once the library has been imported.
+    if (e.data.ortWasmPaths) ORT_WASM_PATHS = e.data.ortWasmPaths;
+    if (e.data.modelPath) MODEL_PATH = e.data.modelPath;
+    return;
+  }
   // Fetch the model and nothing else (#201). The offline cache cannot enumerate which
   // ONNX files a model needs — that is transformers.js's business and changes between
   // versions — so the only honest prefetch is to ASK FOR THE MODEL and let the service

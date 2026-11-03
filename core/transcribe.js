@@ -402,6 +402,31 @@ export function summariseDetection(perWindow = [], windows = []) {
 }
 
 /**
+ * Tell a fresh worker where its code, its WASM backend and its weights live (#201).
+ *
+ * One function rather than three call sites repeating the same fields. The air-gap gap
+ * this closes WAS a missing declaration, and three copies of a config message is how the
+ * fourth one comes to be forgotten — the library was already being pointed at a vendored
+ * path while the model and the onnxruntime WASM were not, which is the only reason
+ * transcription in `?assets=local` failed on the library rather than on the weights.
+ *
+ * A CDN build sends only `libUrl`; transformers.js then uses its own defaults for the
+ * rest, which is what it has always done.
+ */
+function configure(worker) {
+  const a = getAssets() || {};
+  const msg = { type: 'config' };
+  // Already absolute: `getAssets()` resolves every relative path against the document,
+  // because a worker would otherwise resolve `./vendor/...` against `/core/` (#201). Done
+  // there rather than here so the six other consumers get it too -- WebR had the same bug.
+  if (a.transformersUrl) msg.libUrl = a.transformersUrl;
+  if (a.ortWasmPaths) msg.ortWasmPaths = { ...a.ortWasmPaths };
+  if (a.whisperModelPath) msg.modelPath = a.whisperModelPath;
+  worker.postMessage(msg);
+}
+
+
+/**
  * Fetch a model's weights without transcribing anything — the offline cache's prefetch
  * step (#201).
  *
@@ -460,8 +485,7 @@ export function preloadModel({ size = 'base', onProgress = null, watchdogMs = 15
       reject(new Error(err?.message || 'the model worker failed'));
     };
 
-    const libUrl = getAssets()?.transformersUrl;
-    if (libUrl) worker.postMessage({ type: 'config', libUrl });
+    configure(worker);
     worker.postMessage({ type: 'preload', id: 'preload', size, device: 'wasm', dtype: 'q8' });
   });
 }
@@ -523,8 +547,7 @@ export function detectLanguage(audio, opts = {}) {
           + 'device ran out of memory — choose the language yourself to skip detecting it'}`));
       close();
     };
-    const libUrl = getAssets()?.transformersUrl;
-    if (libUrl) worker.postMessage({ type: 'config', libUrl });
+    configure(worker);
     // COPIED, deliberately. These are 30-second views into the caller's audio; transferring
     // them would detach the buffer we are about to transcribe.
     worker.postMessage({
@@ -782,8 +805,7 @@ export function transcribe(audio, opts = {}) {
 
   // A vendored build must not reach the CDN; the worker is told where its code lives
   // rather than deciding, the same way every other runtime here is pinned in assets.js.
-  const libUrl = getAssets()?.transformersUrl;
-  if (libUrl) worker.postMessage({ type: 'config', libUrl });
+  configure(worker);
 
   // `audio.buffer` is transferred, not copied — an hour of 16 kHz mono is ~230 MB and
   // structured-cloning that would double it for no reason.
