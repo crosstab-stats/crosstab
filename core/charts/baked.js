@@ -174,6 +174,10 @@ registerChartKind('baked', {
       default: model.caption || '',
       placeholder: 'Add a caption…',
     },
+    // LAST, after the furniture: see `paramControls`. These re-invoke the plugin and cost
+    // seconds of R; everything above them is instant and in-process, and a reader scanning
+    // the panel for the title box should not pass an expensive control on the way.
+    ...paramControls(model),
   ],
 
   render(model, view = {}) {
@@ -208,12 +212,100 @@ registerChartKind('baked', {
 });
 
 /** The model a baked figure is stored as. Exported for the results pane and its tests. */
-export function bakedModel({ svg, title = '', caption = '', legend = [] }) {
+export function bakedModel({ svg, title = '', caption = '', legend = [], params = [], redraw = null }) {
   return {
     kind: 'baked',
     svg: String(svg || ''),
     title,
     caption,
     legend: Array.isArray(legend) ? legend : [],
+    // PARAMETERS of the figure, not of its furniture (#203) — a layout algorithm, a k, a
+    // distance metric. Changing one re-invokes the plugin, which is acceptable precisely
+    // because the user expects a recompute when they change a parameter. The furniture
+    // (title, caption, legend, size) stays instant and R-free, which is the half most
+    // editing actually is.
+    params: normaliseParams(params),
+    // Who to ask for a new figure, and WITH WHAT: `{plugin, fn, args}`.
+    //
+    // `args` is the plugin's own context for the run — which columns it used, which
+    // options were chosen — and it is the part that is easy to leave out and impossible
+    // to do without. Each `app.webr.run` is a fresh environment and a bare invoke binds
+    // no analysis inputs, so a redraw that referenced the variables the host injected for
+    // the original run would fail with "object 'from' not found". (It did, in the first
+    // version of this, which is the same mistake #200 had just been fixed for.)
+    //
+    // Held on the MODEL rather than in a closure because the model is what PERSISTS: a
+    // reopened chart has to be able to redraw or honestly say it cannot, so the context
+    // has to survive a save. Plain data only, for the same reason.
+    redraw: redraw && redraw.plugin && redraw.fn
+      ? { plugin: String(redraw.plugin), fn: String(redraw.fn), args: plainArgs(redraw.args) }
+      : null,
   };
+}
+
+/**
+ * A plugin's redraw context, reduced to values that survive a structured clone and a
+ * save: strings, finite numbers, booleans, and flat arrays of those. Anything else is
+ * dropped rather than carried, because a redraw context that cannot be persisted is a
+ * chart that redraws until it is reopened and then stops.
+ */
+function plainArgs(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string' || typeof v === 'boolean') out[k] = v;
+    else if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+    else if (Array.isArray(v) && v.every((x) => ['string', 'number', 'boolean'].includes(typeof x))) out[k] = [...v];
+  }
+  return out;
+}
+
+/**
+ * Validate declared parameters, dropping anything half-written.
+ *
+ * Same rule as every other declaration the host accepts from a plugin: a malformed entry
+ * costs that entry, never the figure. A parameter with no options could only render an
+ * empty select, and one with no id could not be read back.
+ */
+function normaliseParams(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((p) => {
+      const id = typeof p?.id === 'string' ? p.id.trim() : '';
+      const options = Array.isArray(p?.options)
+        ? p.options
+          .map((o) => (Array.isArray(o) ? o : [o, o]))
+          .filter(([v]) => v != null && String(v) !== '')
+          .map(([v, l]) => [String(v), String(l ?? v)])
+        : [];
+      if (!id || !options.length) return null;
+      return {
+        id,
+        label: typeof p.label === 'string' && p.label.trim() ? p.label.trim() : id,
+        options,
+        default: String(p.default ?? options[0][0]),
+        hint: typeof p.hint === 'string' ? p.hint : '',
+      };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * The parameter controls, which the host renders alongside the furniture ones.
+ *
+ * Grouped under their own heading and placed LAST, because they are the expensive ones:
+ * a reader scanning the panel for the title box should not pass a control that spins up R
+ * on the way. The group name says what they cost.
+ */
+function paramControls(model) {
+  if (!model.params?.length || !model.redraw) return [];
+  return model.params.map((p) => ({
+    id: `param:${p.id}`,
+    label: p.label,
+    type: 'select',
+    group: 'Recompute the figure',
+    options: p.options,
+    default: p.default,
+    hint: p.hint,
+  }));
 }

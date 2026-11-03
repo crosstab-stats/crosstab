@@ -313,11 +313,15 @@ test('the figures that plot in one colour are left without a legend', () => {
   // the network, the STL panels and the IRF all draw in a single accent colour. A legend
   // saying "the colour means: the data" is noise, and adding one to be consistent would
   // have been worse than the question going unanswered.
-  for (const [plugin, call] of [
-    ['builtin-ecology', 'appendPlot(cleanSvg(svg), { title })'],
-    ['builtin-sna', "appendPlot(cleanSvg(svg), { title: 'Network' })"],
-  ]) {
+  // Asserts the ABSENCE OF A LEGEND, not an exact call string. The first version matched
+  // the whole `appendPlot(...)` text, so it failed the moment #203 added a `params` field
+  // to builtin-sna's call -- a change that adds no legend at all. A test that breaks on
+  // unrelated edits to the same line stops reading as a statement about legends.
+  for (const plugin of ['builtin-ecology', 'builtin-sna']) {
     const src = readFileSync(`plugins/${plugin}/index.js`, 'utf8');
-    assert.ok(src.includes(call), `${plugin} still appends without a legend`);
+    const at = src.indexOf('appendPlot(');
+    assert.ok(at > 0, `${plugin} appends a baked figure`);
+    assert.ok(!src.slice(at, at + 400).includes('legend:'),
+      `${plugin} appends without a legend`);
   }
 });

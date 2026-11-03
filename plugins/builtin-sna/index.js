@@ -14,7 +14,100 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, unpackR: flat, cleanSvg } = globalThis.ctStd;
+const { fixed: f, unpackR: flat, cleanSvg, rStr } = globalThis.ctStd;
+
+/**
+ * Layouts the reader can switch between (#203) — the first PARAMETER control on a baked
+ * figure.
+ *
+ * **Why a layout and not a colour.** A re-invocation costs seconds of R, which is only
+ * acceptable for a control whose answer the user expects to be recomputed. A layout is
+ * exactly that: it is a claim about the graph's structure, and which one reads best is
+ * not knowable in advance — Fruchterman-Reingold spreads hairballs, Kamada-Kawai respects
+ * path distances, a circle makes degree comparable at a glance, and a grid is the honest
+ * choice when a layout would imply structure that is not there. Appearance controls
+ * (title, legend, size) stay instant and R-free in the host's layer model.
+ *
+ * `set.seed` is fixed, so the same layout redraws identically — a figure that reshuffled
+ * every time the panel was touched would be unreadable and unciteable.
+ */
+const LAYOUTS = Object.freeze([
+  ['fr', 'Force-directed (Fruchterman-Reingold)'],
+  ['kk', 'Force-directed (Kamada-Kawai)'],
+  ['circle', 'Circle'],
+  ['grid', 'Grid'],
+  ['star', 'Star (highest degree at the centre)'],
+]);
+
+/** `layout_*` call for a chosen id. Unknown ids fall back rather than erroring: the view
+ *  is persisted, so a figure saved with a layout a later version dropped must still draw. */
+function layoutCall(id) {
+  switch (id) {
+    case 'kk': return 'layout_with_kk(g)';
+    case 'circle': return 'layout_in_circle(g)';
+    case 'grid': return 'layout_on_grid(g)';
+    case 'star': return 'layout_as_star(g, center = which.max(degree(g)))';
+    case 'fr':
+    default: return 'layout_with_fr(g)';
+  }
+}
+
+/**
+ * The R that draws the network, shared by the first run and every redraw.
+ *
+ * One definition, because two copies of a plot call drift: the redraw would keep the old
+ * vertex sizing or the old palette and the figure would change in ways the user did not
+ * ask for when they picked a layout.
+ */
+function plotSource(layout) {
+  return `
+    .ct_dev <- svgstring(width = 6, height = 5.6, pointsize = 10)
+    par(mar = c(0.5, 0.5, 1.5, 0.5))
+    set.seed(1)
+    plot(g, layout = ${layoutCall(layout)},
+         vertex.size = pmin(25, 6 + 2 * degree(g)), vertex.color = "${ACCENT}",
+         vertex.frame.color = "white", vertex.label.cex = 0.7, vertex.label.color = "#222222",
+         edge.arrow.size = 0.4, edge.color = "#bbbbbb")
+    dev.off(); svg <- .ct_dev()`;
+}
+
+/**
+ * Redraw the network with a different layout — invoked by the host when the reader picks
+ * one in the chart panel (#203).
+ *
+ * Rebuilds the graph from the bound edge list rather than carrying one across calls,
+ * because each `app.webr.run` is a fresh environment (see builtin-agreement's
+ * `matrixSource` for the same constraint stated at length). Returns the SVG and nothing
+ * else: the summary tables are already on screen and a layout does not change them.
+ */
+export async function redrawNetwork(app, params = {}) {
+  const dir = params.directed === 'directed';
+  const fromVar = String(params.from || '');
+  const toVar = String(params.to || '');
+  if (!fromVar || !toVar) throw new Error('the figure did not record which columns it used');
+
+  // **Read the edge list again rather than expecting it to still be bound.** An analysis
+  // run gets its variables injected by the host; a redraw is a plain invoke and gets
+  // nothing, and each `app.webr.run` is a fresh environment besides. The first version of
+  // this referenced `from` and `to` directly and failed with "object 'from' not found" —
+  // the same mistake builtin-agreement had just been fixed for (#200), made again one
+  // file over, which is why the binding now happens in the same call as the plot.
+  const rows = await app.data.getRows({ variables: [fromVar, toVar] });
+  const pairs = rows
+    .map((r) => [String(r[fromVar] ?? '').trim(), String(r[toVar] ?? '').trim()])
+    .filter(([a, b]) => a && b);
+  if (!pairs.length) throw new Error('no edges to draw');
+
+  const { result } = await app.webr.run(`
+    suppressMessages({library(igraph); library(svglite)})
+    el <- matrix(c(${[...pairs.map(([a]) => rStr(a)), ...pairs.map(([, b]) => rStr(b))].join(',')}),
+                 ncol = 2, byrow = FALSE)
+    g <- graph_from_edgelist(el, directed = ${dir ? 'TRUE' : 'FALSE'})
+    ${plotSource(String(params.layout || 'fr'))}
+    list(svg = svg)`);
+  if (!result) throw new Error('R returned no figure');
+  return cleanSvg(flat(result).str1('svg'));
+}
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -77,13 +170,7 @@ export async function run(app, { from: fromName, to: toName, directed }) {
     deg <- degree(g); btw <- betweenness(g); clo <- suppressWarnings(closeness(g))
     eig <- tryCatch(eigen_centrality(g)$vector, error = function(e) rep(NA_real_, vcount(g)))
     ord <- order(deg, decreasing = TRUE); topn <- head(ord, 10)
-    .ct_dev <- svgstring(width = 6, height = 5.6, pointsize = 10)
-    par(mar = c(0.5, 0.5, 1.5, 0.5))
-    set.seed(1)
-    plot(g, vertex.size = pmin(25, 6 + 2 * deg), vertex.color = "${ACCENT}", vertex.frame.color = "white",
-         vertex.label.cex = 0.7, vertex.label.color = "#222222", edge.arrow.size = 0.4,
-         edge.color = "#bbbbbb")
-    dev.off(); svg <- .ct_dev()
+    ${plotSource('fr')}
     list(nodes = vcount(g), edges = ecount(g), density = edge_density(g), ncomp = components(g)$no,
          transitivity = transitivity(g, type = "global"), apl = mean_distance(g),
          diameter = diameter(g), directed = ${dir ? 'TRUE' : 'FALSE'},
@@ -119,7 +206,24 @@ export async function run(app, { from: fromName, to: toName, directed }) {
     { caption: 'Most Central Actors (top 10 by degree)' },
   );
   const svg = r.str1('svg');
-  if (svg && /<svg[\s>]/i.test(svg)) await app.results.appendPlot(cleanSvg(svg), { title: 'Network' });
+  if (svg && /<svg[\s>]/i.test(svg)) {
+    await app.results.appendPlot(cleanSvg(svg), {
+      title: 'Network',
+      // A parameter the reader is expected to recompute (#203). Which layout reads best
+      // is not knowable in advance and is a claim about the graph, so it belongs to the
+      // reader rather than to whoever ran the analysis.
+      params: [{
+        id: 'layout',
+        label: 'Layout',
+        options: LAYOUTS,
+        default: 'fr',
+        hint: 'Recomputes the figure in R — a few seconds on a large network.',
+      }],
+      // The context the redraw needs to rebuild from nothing. Persisted with the model,
+      // so a reopened chart can still change its layout.
+      redraw: { plugin: manifest.id, fn: 'redrawNetwork', args: { from: fromName, to: toName, directed } },
+    });
+  }
   await app.results.appendText(
     '**Density** is the share of possible ties present; **components** are disconnected sub-networks; **transitivity** is the chance two of a node\'s contacts are themselves tied (clustering). Centrality flavours: **degree** (how many ties), **betweenness** (bridging/broker position), **closeness** (reach), **eigenvector** (tied to well-connected others).',
   );

@@ -345,6 +345,9 @@ export class ResultsPane {
   /** Optional event bus, so appendError can ask the workspace to surface Output. */
   #bus = null;
 
+  /** @type {((plugin: string, fn: string, args: any[]) => Promise<string>)|null} */
+  #redrawBaked = null;
+
   /**
    * The **result model**: an ordered, structured record of everything appended to
    * the pane, parallel to the DOM. This is the single source the export plugins
@@ -386,8 +389,13 @@ export class ResultsPane {
    * @param {HTMLElement} host - The element to attach the shadow root to.
    * @param {{bus?: import('./event-bus.js').EventBus}} [opts]
    */
-  constructor(host, { bus } = {}) {
+  constructor(host, { bus, redrawBaked = null } = {}) {
     this.#bus = bus ?? null;
+    // How to ask a plugin for a NEW figure when one of its declared parameters changes
+    // (#203). Injected rather than reached for: this pane knows nothing about the plugin
+    // loader and should not start to — it is handed a function that takes
+    // (plugin, fn, args) and resolves to an SVG string.
+    this.#redrawBaked = redrawBaked;
     this.#root = host.attachShadow({ mode: 'open' });
 
     const style = document.createElement('style');
@@ -589,7 +597,61 @@ export class ResultsPane {
       // Legend entries the plugin supplies as DATA, drawn by the host as a live layer
       // the reader can reword. Plain objects, so they cross the sandbox boundary.
       legend: Array.isArray(opts.legend) ? opts.legend : [],
+      // Parameters of the FIGURE, with the function that recomputes it (#203). Both are
+      // plain data for the same reason the legend is: they cross a sandbox boundary, and
+      // `redraw` names a function rather than being one.
+      params: Array.isArray(opts.params) ? opts.params : [],
+      redraw: opts.redraw && opts.redraw.fn
+        ? { plugin: opts.redraw.plugin || '', fn: opts.redraw.fn, args: opts.redraw.args || {} }
+        : null,
     }));
+  }
+
+  /**
+   * Ask the plugin for a new figure with the current parameter values (#203).
+   *
+   * **Honest latency, because there is no hiding it.** An MDS ordination or a network
+   * layout is seconds of compute in R. A select that silently takes four seconds reads as
+   * a broken select, so the figure is dimmed and a busy note shown while it runs — the
+   * same courtesy any other long operation here gets.
+   *
+   * **A failure leaves the old figure alone.** The previous SVG is still correct for the
+   * previous parameters, and replacing a valid figure with an error message would destroy
+   * the thing the reader was looking at in order to report that they cannot have a
+   * different one. The control is put back to the value that actually produced what is on
+   * screen, so the panel never claims a setting the figure does not reflect.
+   */
+  async #redrawFigure(item, rerender, holder = null) {
+    const { plugin, fn } = item.model.redraw || {};
+    if (!plugin || !fn || !this.#redrawBaked) return;
+    // The plugin's own run context FIRST, then the live parameter values — so a
+    // parameter can override a stale default but the plugin always receives the columns
+    // and options it needs to rebuild the figure from nothing.
+    const params = { ...(item.model.redraw?.args || {}) };
+    for (const p of item.model.params || []) {
+      params[p.id] = item.view?.[`param:${p.id}`] ?? p.default;
+    }
+    const before = { ...(item.view || {}) };
+    if (holder) holder.setAttribute('data-busy', 'true');
+    try {
+      const svg = await this.#redrawBaked(plugin, fn, [params]);
+      if (typeof svg === 'string' && /<svg[\s>]/i.test(svg)) {
+        item.model.svg = sanitizeHtml(svg);
+        rerender();
+        this.#bus?.emit?.('output:edited');
+      } else {
+        throw new Error('the plugin returned no figure');
+      }
+    } catch (err) {
+      console.warn('[results] figure redraw failed', err);
+      // Put the control back, so the panel and the picture agree.
+      if (item.view) for (const k of Object.keys(item.view)) {
+        if (k.startsWith('param:')) item.view[k] = before[k];
+      }
+      rerender();
+    } finally {
+      if (holder) holder.removeAttribute('data-busy');
+    }
   }
 
   /**
@@ -787,7 +849,15 @@ export class ResultsPane {
     // result arrived", and the workspace answers it by switching to Output and
     // scrolling to the bottom. Firing it on every nudge of a size spinner would
     // scroll the chart being edited off the screen.
-    const onEdit = () => {
+    const onEdit = (changed) => {
+      // A PARAMETER change cannot be satisfied by re-rendering: the plot layer holds a
+      // finished SVG, so the figure itself has to come back from the plugin (#203).
+      // Everything else — title, caption, legend, size, layer placement — is a view
+      // change and stays instant and R-free, which is the majority of real editing.
+      if (typeof changed === 'string' && changed.startsWith('param:') && item.model?.redraw) {
+        void this.#redrawFigure(item, rerender, holder);
+        return;
+      }
       rerender();
       this.#bus?.emit?.('output:edited');
     };

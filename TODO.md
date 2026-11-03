@@ -120,49 +120,6 @@ bottom; they are the project's memory and are not summarised away.
         air-gap user is the same field researcher this whole feature was built for — and
         worth doing as its own change.
 
-- [ ] **#203 — parameter controls for R-baked plots, where reasonable.** Owner, 2026-11-02:
-      *"the controls for r-baked plots where reasonable."* The last open piece of chart
-      Layer 3b, which now points here.
-
-      **"Where reasonable" is already drawn, and the 2026-10-15 investigation drew it.** Two
-      kinds of control, one defensible and one not:
-      - **Appearance** — title, caption, legend text and position, layer placement, plot
-        size. These are **already live and need no R**, because a baked figure is a chart
-        whose plot layer holds a foreign SVG (`core/charts/baked.js`, shipped 2026-10-16).
-        Nothing to do here, and this is the half most users actually edit.
-      - **Parameters** — a different k, another distance metric, a new projection, a
-        forecast horizon. These necessarily re-invoke R, and that is acceptable precisely
-        because the user expects a recompute when they change one. The investigation's own
-        test: *"a legend dropdown that takes three seconds and spins up R is worse than no
-        dropdown"* — which argues against appearance controls and FOR parameter ones.
-
-      So the scope is: a plugin declares the parameters its figure supports
-      (`controls: [{id, label, type, options}]`), the host renders them in the ⚙ panel
-      alongside the furniture controls that already exist, and a change calls back into the
-      plugin to redraw. The kind-level `controls` mechanism is already there
-      (`core/charts/runtime.js` resolves `kd.controls(model)`); what does not exist is a
-      channel for a PLUGIN to declare one on a figure it baked, and a re-invocation path.
-
-      **The constituency is five figures**, re-counted 2026-10-23 and unchanged: `sna`
-      network (force-directed layout), `spatial` choropleth (projection), `ordination` CA
-      biplot (arrow field) and MDS map, `ecology` NMDS. These are the ones whose geometry
-      genuinely is not ours.
-
-      **What to work out:**
-      - **Which parameters, per figure.** This is the real work and it is per-plugin
-        judgement, not a chart-layer question — "what would a reader of an NMDS plot
-        plausibly want to change" is an ecology question. Starting with one figure and one
-        parameter is better than five figures and a framework.
-      - **The re-invocation path.** `plotSize` already round-trips through the plugin, so
-        there is a precedent for "the host asks the plugin for a new figure". A parameter
-        change is the same shape with a different payload.
-      - **Honest latency.** An STL decomposition or an MDS ordination is seconds of compute.
-        A control that silently takes four seconds reads as a broken control; it needs the
-        busy state the rest of the app already uses.
-      - **What persists.** A reopened chart must either remember the parameter and the figure
-        it produced, or say it cannot redraw — the same rule as *output outlives its maker*.
-
-
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
       let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
@@ -2806,6 +2763,94 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **#203 — parameter controls for R-baked plots, where reasonable. BUILT 2026-11-02.** Owner, 2026-11-02:
+      *"the controls for r-baked plots where reasonable."* The last open piece of chart
+      Layer 3b, which now points here.
+
+      **"Where reasonable" is already drawn, and the 2026-10-15 investigation drew it.** Two
+      kinds of control, one defensible and one not:
+      - **Appearance** — title, caption, legend text and position, layer placement, plot
+        size. These are **already live and need no R**, because a baked figure is a chart
+        whose plot layer holds a foreign SVG (`core/charts/baked.js`, shipped 2026-10-16).
+        Nothing to do here, and this is the half most users actually edit.
+      - **Parameters** — a different k, another distance metric, a new projection, a
+        forecast horizon. These necessarily re-invoke R, and that is acceptable precisely
+        because the user expects a recompute when they change one. The investigation's own
+        test: *"a legend dropdown that takes three seconds and spins up R is worse than no
+        dropdown"* — which argues against appearance controls and FOR parameter ones.
+
+      So the scope is: a plugin declares the parameters its figure supports
+      (`controls: [{id, label, type, options}]`), the host renders them in the ⚙ panel
+      alongside the furniture controls that already exist, and a change calls back into the
+      plugin to redraw. The kind-level `controls` mechanism is already there
+      (`core/charts/runtime.js` resolves `kd.controls(model)`); what does not exist is a
+      channel for a PLUGIN to declare one on a figure it baked, and a re-invocation path.
+
+      **The constituency is five figures**, re-counted 2026-10-23 and unchanged: `sna`
+      network (force-directed layout), `spatial` choropleth (projection), `ordination` CA
+      biplot (arrow field) and MDS map, `ecology` NMDS. These are the ones whose geometry
+      genuinely is not ours.
+
+      **What to work out:**
+      - **Which parameters, per figure.** This is the real work and it is per-plugin
+        judgement, not a chart-layer question — "what would a reader of an NMDS plot
+        plausibly want to change" is an ecology question. Starting with one figure and one
+        parameter is better than five figures and a framework.
+      - **The re-invocation path.** `plotSize` already round-trips through the plugin, so
+        there is a precedent for "the host asks the plugin for a new figure". A parameter
+        change is the same shape with a different payload.
+      - **Honest latency.** An STL decomposition or an MDS ordination is seconds of compute.
+        A control that silently takes four seconds reads as a broken control; it needs the
+        busy state the rest of the app already uses.
+      - **What persists.** A reopened chart must either remember the parameter and the figure
+        it produced, or say it cannot redraw — the same rule as *output outlives its maker*.
+
+      ---
+
+      **BUILT 2026-11-02, one figure and one parameter**, as this entry argued for. The
+      mechanism: a plugin passes `params` and `redraw` to `appendPlot`, the host renders
+      them as selects in the ⚙ panel under a group called "Recompute the figure", and a
+      change invokes the plugin and replaces the plot layer's SVG. `builtin-sna` is the
+      first client, offering five network layouts.
+
+      **Everything needed already existed and had no caller**, which is why this was small:
+      `replacePlot` was written for exactly this and documented as unused, and
+      `loader.invoke(plugin, fn, args)` already returned a plugin's value. The only new
+      plumbing is that `chart-controls` now passes the changed control's ID to its
+      callback — every other caller passes nothing and still works, but a view repaint
+      cannot satisfy a parameter change, so the id is the only thing distinguishing "move
+      the legend" from "recompute the figure".
+
+      **A redraw needs the CONTEXT of the run, not just the changed parameter** — and
+      getting that wrong was the one real design error, found only by driving the control
+      in a browser. The first version named `{plugin, fn}` and the plugin's redraw
+      referenced `from` and `to`, which exist only as host-injected bindings during an
+      analysis run; a bare invoke binds nothing and each `webr.run` is a fresh environment
+      besides. It failed with **"object 'from' not found"** — the same error #200 had been
+      fixed for hours earlier, made again one file over. So `redraw` now carries `args`:
+      the plugin's own context (which columns, which options), restricted to values that
+      survive a structured clone and a save, because a redraw context that cannot be
+      persisted is a chart that redraws until it is reopened and then stops. The plugin
+      re-reads its edge list through `app.data` and binds it in the same call as the plot.
+
+      Two smaller slips from the same session, both caught in the browser rather than by
+      tests: `appendPlot` built its own `redraw` object and dropped `args` on the way
+      through (so the model arrived with `args: {}`), and the plugin's `args: { from, to }`
+      named variables that `run` destructures as `fromName`/`toName`.
+
+      **Where the line fell, concretely.** The panel now shows title, title size, bold,
+      italic, caption, plot size — all instant and R-free — and then Layout last, under a
+      heading that says it recomputes. A failed redraw keeps the figure that is on screen
+      and puts the select back, so the panel never advertises a setting the picture does
+      not reflect.
+
+      **Browser-verified**: three layouts, three distinct figures (2949 / 2943 / 2947
+      bytes), the view and the select agreeing, rendered in the DOM. 13 tests.
+
+      **The other four figures are deliberately not done** — choropleth projection, CA
+      biplot, MDS map, NMDS. The mechanism is there; which parameters a reader of an NMDS
+      plot would want is an ecology question and belongs with whoever asks for it.
 
 - [x] **#202 — inter-coder reliability: surface the DISAGREEMENTS, not just the coefficient. BUILT 2026-11-02.**
       Owner, 2026-11-02: *"disagreements for inter-coder reliability."* The other half of

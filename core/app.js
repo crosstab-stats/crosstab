@@ -580,7 +580,19 @@ export async function boot(mounts) {
     },
     { preloadPackages: [] }, // built-in plugins declare their own R deps
   );
-  const results = new ResultsPane(mounts.results, { bus });
+  // `redrawBaked` lets a baked figure's PARAMETER controls ask the plugin for a new
+  // picture (#203). Wired here because this is where the loader lives; the results pane
+  // is handed a function and never learns what a plugin is. Returns the plugin's value
+  // verbatim — an SVG string — and lets a rejection propagate, because the pane's own
+  // handler is what decides to keep the previous figure.
+  //
+  // `loader` is declared BELOW this line and that is fine, deliberately: the arrow
+  // resolves it when a user moves a chart control, which is long after boot. Hoisting the
+  // loader up here to "fix" the ordering would move a large construction for no reason.
+  const results = new ResultsPane(mounts.results, {
+    bus,
+    redrawBaked: (plugin, fn, args) => loader.invoke(plugin, fn, args),
+  });
   // A menu command that fails says so. It used to reach the console and nowhere else,
   // which made a broken item (File ▸ Copy dataset…, after a rename) indistinguishable from
   // one that does nothing — reported as exactly that (owner, 2026-10-02).

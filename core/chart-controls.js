@@ -136,7 +136,13 @@ export function buildChartControls(item, onChange, { holder } = {}) {
         // dropdown would read as broken.
         if (ctl.id === 'legend' && view.layerOffsets) delete view.layerOffsets.legend;
         if (ctl.structural || depended.has(ctl.id)) paint();
-        onChange();
+        // The control's ID goes with the notification (#203). Every other caller here
+        // passes nothing and still works -- the argument is additive -- but a baked
+        // figure's PARAMETER controls cannot be satisfied by repainting a view, so the
+        // pane has to be able to tell which control moved. Only the declared controls
+        // carry an id worth reporting; the colour pickers and the position resets are all
+        // view edits by construction.
+        onChange(ctl.id);
       }));
     }
 
