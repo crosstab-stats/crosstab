@@ -2710,7 +2710,20 @@ this is the index.
   than an incomplete one. *(under Plugin data as first-class citizens, #146)*
 - **A preset file per chapter** an INSTRUCTOR ships with their own course, paired with #185 deployments. Re-scoped 2026-10-23: CrossTab does not write the course. *(under #162)*
 - **Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin note. *(under #162)*
+  **Attempted 2026-11-02 and BLOCKED by the harness, not by the feature.** The preset flow
+  goes through `promptText`, which resolves in the `<dialog>` `close` listener — and in a
+  tab reporting `visibilityState: "hidden"` that event never fires, so the promise never
+  settles and the handler returns at `if (!name)`. Confirmed rather than guessed: the
+  store itself works (a direct `savePreset` wrote and `listPresets` read it back), the
+  dropdown and the hidden-until-selected Rename/Delete/Export buttons are all in the DOM,
+  and the picker reported no note and no error — the signature of a prompt that resolved
+  null. Then the renderer froze outright (the display-sleep symptom), so I stopped after
+  three failures rather than keep retrying.
+  **What it needs:** the window foregrounded and the screen kept awake. Mine to finish,
+  not the owner's — it is a one-sitting check once the tab is visible.
 - **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
+  Not attempted — the session's browser went unresponsive before reaching it. Same
+  prerequisite as the line above.
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
 - **~~Does any other baked figure want a legend?~~ ANSWERED 2026-11-01 — one did.**
   *(And the answer sat HERE for a day while the sub-item it belongs to stayed `[ ]` open —
