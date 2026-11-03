@@ -36,6 +36,7 @@ import { showConflictDialog } from './conflict-ui.js';
 import { FolderBackend, OpfsBackend } from './storage-backend.js';
 import { showEncryptionSettings } from './encryption-settings.js';
 import { showSettings } from './settings-screen.js';
+import { projectSettings } from './project-settings.js';
 import {
   assetIdsOf, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice,
   ownerPluginOp, recordSlice, travellingChildren, unionById, reidentifyLog } from './copy-to-project.js';
@@ -616,6 +617,10 @@ export class ProjectSync {
       order: 50,
       command: () => void showSettings({
         openers: { 'privacy.encryption': () => void showEncryptionSettings({ projects: this, tab: 'defaults' }) },
+        // The project's own settings (#207). A provider, read each time the screen
+        // renders, so the rows describe what is open NOW rather than what was open when
+        // the menu was built — and so a change can re-read the value it just wrote.
+        projectSettings: () => projectSettings(this.#datasets),
       }),
     });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));

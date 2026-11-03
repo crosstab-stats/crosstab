@@ -2715,6 +2715,65 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#207 — project-level settings on the Settings screen, written as OPS. BUILT
+      2026-11-03.** The owner's design, which dissolved a tension rather than trading one
+      side of it away: *"Could we design the project-level settings (such as weights) as
+      viewable/settable in the settings screen, but have a change there emit an op in the
+      project log just like it would if set elsewhere?"*
+
+      I had argued the weight could not go on that screen because it is project data and
+      not a device preference, and offered a read-only row at best. Both halves of that
+      were too timid. The scoping argument is right and stays — but it is an argument about
+      where the setting LIVES, not about where it can be changed from.
+
+      **It needed no new machinery, which is the tell that it was the right shape.** A
+      descriptor's `set` calls the same `DataStore#setWeight` the Data menu calls, and
+      `setWeight` appends an op. So the op, the History row, the undo entry, the script
+      export and the collaborator merge all happen because they always did. The screen is a
+      second DOORWAY to one path, not a second path.
+
+      **Built as a descriptor list, not a registry.** There is one project setting today; a
+      declaration schema with keys and a decode step would be a framework for a single
+      item, and the device registry already exists to copy from if a second arrives. What
+      the descriptor shape does buy is the thing actually needed: `settings-screen.js`
+      renders project rows **without knowing what a weight is**, so the second one costs a
+      descriptor rather than a dialog change. A test asserts that ignorance — and caught a
+      real leak, where the screen hardcoded "no longer a usable weight" for the stale
+      case. The wording moved to the descriptor.
+
+      **Details that are decisions rather than defaults:**
+      - **Eligibility is `isQuantitative`** — the same predicate the Data ▸ Weight cases
+        picker gets from `types: ['numeric']`, imported rather than re-derived. Two
+        definitions of "can this be a weight" is how a screen comes to offer a variable the
+        picker refuses, and #188 was careful about exactly this.
+      - **The row names the DATASET.** A weight is per-dataset, so "Frequency weight" alone
+        would claim a project-wide scope it does not have; two datasets in one project
+        routinely want different weights.
+      - **"No weight" is first and always present.** Turning one off is what people reach
+        for right after turning one on, and it must not mean finding a blank row under 900
+        variables.
+      - **A weight that is set but no longer eligible is kept and marked**, because dropping
+        it from its own control would leave a weight in force that the screen denies exists.
+      - **A refused write reverts the control and says why**, and a successful one re-reads
+        rather than trusting what was sent.
+      - **No dataset open gets a sentence, not an empty section or a dead control** — the
+        guard-vs-missing-state rule.
+      - **The project group is LAST**, with a border, because a screen whose first section
+        vanishes depending on what is open reads as broken.
+
+      **Browser-verified end to end**, which is the only reason the op claim is worth
+      anything: the screen shows six headings ending in "This project"; the select offers
+      No weight + the two quantitative variables; choosing one sets
+      `active.weightVar = 'wtssall'` and the control re-reads it; the dataset's log then
+      holds a real `setWeight` op with an op id and author stamp; **Undo reverses it to
+      null and moves it to `future` for redo**, with the dataset intact at 3 rows.
+
+      12 tests. Also the sixth instance today of an absence assertion failing on its own
+      explanation — two of these checks tripped over doc comments saying "a localStorage key
+      would have none of those" and "never learns what a weight is". The fix is now a
+      helper in the test file rather than a lesson: **an absence assertion reads code, not
+      prose.**
+
 - [x] **#206 — Settings moved to the Edit menu, and the screen now says what it does NOT
       cover. DONE 2026-11-03.** Two observations from the owner, one a convention fix and
       one an absence that needed explaining.

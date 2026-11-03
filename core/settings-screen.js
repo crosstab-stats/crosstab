@@ -148,14 +148,18 @@ export function describeValue(spec) {
 /**
  * Show the Settings dialog.
  *
- * @param {{openers?: Object<string, () => void>}} [opts] `openers` maps a setting id to a
+ * @param {{openers?: Object<string, () => void>,
+ *          projectSettings?: () => Array<object>}} [opts]
+ *   `projectSettings` supplies the project-scoped rows (#207) — a provider rather than a
+ *   store handle, so this file renders what it is given and never learns what a weight is.
+ *   `openers` maps a setting id to a
  *   function that opens its real editor. Passed in by `core/app.js` rather than imported
  *   here, because the module that DECLARES a setting cannot import the dialog that edits
  *   it — `at-rest.js` is imported by `encryption-settings.js`, so the reverse is a cycle.
  *   App wiring lives where everything else is already wired.
  * @returns {Promise<void>} resolves when the dialog closes
  */
-export function showSettings({ openers = {} } = {}) {
+export function showSettings({ openers = {}, projectSettings = null } = {}) {
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog ct-settings';
@@ -180,10 +184,9 @@ export function showSettings({ openers = {} } = {}) {
       // specific missing thing needs to see that thing's name.
       el('p', {
         class: 'ct-dialog__hint ct-settings__scope',
-        text: 'Anything that belongs to a project rather than to this browser is set where '
-          + 'it lives, not here — the frequency weight in Variable View or a run\'s own '
-          + 'weight control, encryption per project in the File menu. Those travel with '
-          + 'the project and appear in its History.',
+        text: 'Settings below the line belong to the open PROJECT, not to this browser. '
+          + 'Changing one here is recorded in its History and undoes like any other step, '
+          + 'because it goes through exactly the path the menus use.',
       }),
     );
 
@@ -196,6 +199,74 @@ export function showSettings({ openers = {} } = {}) {
         body.append(el('h3', { class: 'ct-settings__group', text: group }));
         for (const spec of items) body.append(row(spec));
       }
+      // The PROJECT's own settings, last and visibly separated (#207). Last because they
+      // are the ones that are not always there — a screen whose first section vanishes
+      // depending on what is open reads as broken.
+      if (projectSettings) {
+        body.append(el('h3', { class: 'ct-settings__group ct-settings__group--project', text: 'This project' }));
+        const rows = projectSettings() || [];
+        if (!rows.length) {
+          // The honest empty state. Not an empty section and not a disabled control:
+          // there is nothing to set because there is no data open, and saying which is
+          // more use than either.
+          body.append(el('p', { class: 'ct-settings__hint', text: 'No dataset is open, so there is nothing project-specific to set yet.' }));
+        } else {
+          for (const p of rows) body.append(projectRow(p));
+        }
+      }
+    };
+
+    /**
+     * One project-scoped row. Separate from `row` because the contract is different: a
+     * device setting is written through the registry, a project setting is written by
+     * calling the same method a menu would — and that call is ASYNC and can fail.
+     */
+    const projectRow = (p) => {
+      const wrap = el('div', { class: 'ct-settings__row' });
+      const head = el('div', { class: 'ct-settings__label' });
+      head.append(el('span', { text: p.label }));
+      // Which dataset this applies to. A weight is per-dataset, so a screen that said
+      // only "Frequency weight" would be claiming a project-wide scope it does not have.
+      if (p.scope) head.append(el('span', { class: 'ct-settings__hint', text: `Applies to ${p.scope}.` }));
+      if (p.hint) head.append(el('span', { class: 'ct-settings__hint', text: p.hint }));
+      wrap.append(head);
+
+      const control = el('div', { class: 'ct-settings__control' });
+      const sel = el('select', { class: 'ct-field' });
+      for (const [value, label] of p.options || []) {
+        const opt = new Option(label, String(value));
+        if (String(p.value ?? '') === String(value)) opt.selected = true;
+        sel.append(opt);
+      }
+      // A stored value that is no longer eligible would otherwise disappear from its own
+      // control, leaving a weight in force that the screen denies exists.
+      if (p.stale) {
+        // The WORDING comes from the descriptor: this file renders project settings
+        // without knowing what any of them are, and "no longer a usable weight" was
+        // domain knowledge leaking into a generic screen. A test caught it.
+        const opt = new Option(`${p.value} (${p.staleNote || 'no longer available'})`, String(p.value));
+        opt.selected = true;
+        sel.append(opt);
+      }
+      const err = el('span', { class: 'ct-settings__hint' });
+      sel.addEventListener('change', async () => {
+        const chosen = sel.value;
+        try {
+          await p.set(chosen);
+          err.textContent = '';
+          // Re-read rather than trust: the op may have been coerced or refused, and the
+          // control must show what is actually in force.
+          render();
+        } catch (e) {
+          // Put the control back and say why, rather than leaving it displaying a value
+          // the project never accepted.
+          sel.value = String(p.value ?? '');
+          err.textContent = e?.message || 'That could not be set.';
+        }
+      });
+      control.append(sel, err);
+      wrap.append(control);
+      return wrap;
     };
 
     /** One setting. Rebuilt wholesale after a write, so what is shown is what is stored. */
