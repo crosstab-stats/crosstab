@@ -76,6 +76,15 @@ In deployment the bundled `sw.js` injects the same COOP/COEP headers (GitHub
 Pages sends none), so the live site reloads once on first load to gain isolation;
 WebR downloads in the background the first time you run an analysis.
 
+### Testing
+
+`npm test` runs the unit suite (no browser needed). For manual testing there are
+two checklists: [`docs/TESTING.md`](./docs/TESTING.md) covers every feature and
+every one of the 116 plugin menu items, with a recipe per item and — because both
+demo datasets are deterministic — the exact expected values, plus how to run the
+same analysis in SPSS/Stata/R to check the arithmetic.
+[`docs/IPAD-TEST.md`](./docs/IPAD-TEST.md) is the narrower iPadOS Safari pass.
+
 ## Deployment
 
 The live instance is on **GitHub Pages** at
