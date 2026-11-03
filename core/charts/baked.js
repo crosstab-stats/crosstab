@@ -296,6 +296,19 @@ function normaliseParams(raw) {
  * Grouped under their own heading and placed LAST, because they are the expensive ones:
  * a reader scanning the panel for the title box should not pass a control that spins up R
  * on the way. The group name says what they cost.
+ *
+ * ## A parameter must not change what the TABLES say
+ *
+ * Presentation only — a layout, an arrangement, a projection. The reason is structural: a
+ * redraw returns an SVG and the host writes it to `model.svg` and nothing else, so a
+ * parameter that genuinely altered the analysis would leave the figure disagreeing with
+ * the tables printed beside it, which still look authoritative. Not an unlogged result —
+ * an inconsistent one.
+ *
+ * Anything that moves a number belongs in the menu, where re-running appends a new
+ * analysis carrying its own inputs into History and the exported script. An earlier
+ * decision (2026-10-24) closed this whole feature on a near-miss of that argument; see the
+ * Layer 3b entry in TODO for how the two were reconciled.
  */
 function paramControls(model) {
   if (!model.params?.length || !model.redraw) return [];

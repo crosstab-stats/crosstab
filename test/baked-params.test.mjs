@@ -31,6 +31,10 @@ const PANE = readFileSync('core/results-pane.js', 'utf8');
 const CONTROLS = readFileSync('core/chart-controls.js', 'utf8');
 const SNA = readFileSync('plugins/builtin-sna/index.js', 'utf8');
 
+/** Where a class method's body ends. Named because writing it inline means writing an
+ * escape sequence, and two of those were mangled in transit today. */
+const END_OF_METHOD = '\n  }';
+
 const SVG = '<svg viewBox="0 0 10 10"></svg>';
 const withParams = (params, redraw = { plugin: 'p', fn: 'f' }) =>
   bakedModel({ svg: SVG, params, redraw });
@@ -136,6 +140,27 @@ test('the pane is HANDED the redraw, it does not reach for the loader', () => {
 // ---------------------------------------------------------------------------------------
 // The first plugin to use it
 // ---------------------------------------------------------------------------------------
+
+test('a redraw can change the FIGURE and nothing else', () => {
+  // The safety property that reconciles #203 with the 2026-10-24 closure of Layer 3b.
+  // That decision closed the feature because "a parameter change produces different
+  // numbers" and so must be a logged step. The channel as built cannot produce a number:
+  // the plugin returns an SVG string, the host writes model.svg, and there is no path to
+  // a table, a statistic or another block.
+  //
+  // Which makes the REAL risk the opposite shape -- a parameter that altered the analysis
+  // would leave the figure disagreeing with the tables beside it, and those tables would
+  // still look authoritative. Hence the rule: presentation only. Asserted structurally
+  // here because the rule itself cannot be checked mechanically.
+  const at = PANE.indexOf('async #redrawFigure(');
+  const body = PANE.slice(at, PANE.indexOf(END_OF_METHOD, at));
+  assert.match(body, /item\.model\.svg = sanitizeHtml\(svg\)/, 'the figure is the only write');
+  for (const forbidden of ['appendTable', 'appendText', 'appendError', 'blocks']) {
+    assert.ok(!body.includes(forbidden), 'a redraw must not reach ' + forbidden);
+  }
+  // A reply that is not a figure is refused rather than written through.
+  assert.ok(body.includes("typeof svg === 'string'"));
+});
 
 test('builtin-sna offers a layout and nothing cosmetic', () => {
   assert.match(SNA, /id: 'layout'/);

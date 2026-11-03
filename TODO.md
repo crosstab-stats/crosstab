@@ -2308,7 +2308,43 @@ bottom; they are the project's memory and are not summarised away.
         not a row per category, and `legendBlock` has no shape for it. Giving the host a
         live colour-scale layer would be its own piece of work.
 
-      **CLOSED 2026-10-24 — answered, not deferred (owner's decision).** Layer 3b is not
+      **REOPENED AND BUILT 2026-11-02 as [[#203]] — and I did not see this closure until
+      afterwards, which is the part that needs saying.** The owner asked on 2026-11-02 for
+      *"the controls for r-baked plots where reasonable"*, I filed and built it, and only
+      found this paragraph on a later sweep. It sits **225 lines below** the sub-item
+      header, under a long investigation that reads as live, so the header and the
+      analysis are what a reader reaches first. That is the #181 pattern exactly — a
+      conclusion placed below the text it overrules — and it caught me in the same session
+      I spent correcting other instances of it.
+
+      The owner's instruction is newer and theirs to give, so #203 stands. But the
+      reasoning below deserves answering rather than overriding, and answering it changes
+      what the rule should be:
+
+      **The stated danger does not apply to what was built.** The argument is that a
+      parameter change "produces different numbers" and so must be a logged step. The
+      redraw channel as built **cannot produce a number at all**: a plugin's redraw
+      function returns an SVG string and the host writes it to `model.svg` and nothing
+      else (`core/results-pane.js`, `#redrawFigure`). It cannot append a table, alter a
+      statistic, or add a block. The one parameter shipped is a network LAYOUT, which
+      changes no reported value — the centrality tables come from the original run and are
+      untouched.
+
+      **The real risk is sharper than the one named, and nothing prevents it.** Because the
+      channel redraws only the picture, a parameter that genuinely altered the analysis — a
+      different k, another distance metric — would leave the figure disagreeing with the
+      tables printed beside it. Not an unlogged result: an INCONSISTENT one, which is
+      worse, because the numbers on screen would still look authoritative.
+
+      So the rule #203 should have stated, and now does: **a declared parameter must not
+      change what the tables say.** Presentation only — a layout, an arrangement, a
+      projection. Anything that moves a number stays in the menu, where re-running appends
+      a new analysis that carries its own inputs into History and the exported script,
+      which is what [[one-true-log-explicit-ops]] is for and what the argument below was
+      reaching for.
+
+      *Original closure, kept because its instinct was right even where its mechanism was
+      not:* Layer 3b is not
       being built. The menu already does the thing it was for: change the parameter, run
       again, get a new analysis.
 
