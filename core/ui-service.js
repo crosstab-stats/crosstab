@@ -38,7 +38,8 @@ const SELECTED_ONLY_MIN = 15;
  */
 
 import { pickFile as pickOneFile } from './pick-file.js';
-import { loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay } from './var-order.js';
+import { loadVarOrder, saveVarOrder, sortVars, loadVarDisplay, saveVarDisplay, varDisplay,
+  showAllRoles } from './var-order.js';
 import { makeVarToolbar, filterVars } from './var-toolbar.js';
 import { isCategorical, isQuantitative } from './var-role.js';
 import { escapeHtml } from './text.js';
@@ -187,11 +188,21 @@ export class UiService {
     // business knowing where its data came from.
     const canSpan = typeof this.#store.allVariableMeta === 'function';
     let allDatasets = canSpan && (this.#store.selectionSpread?.() ?? 0) > 1;
-    const metaFor = (spanning) => {
-      const raw = spanning ? this.#store.allVariableMeta() : this.#store.getVariableMeta();
-      return types?.length ? raw.filter((m) => fitsRole(m, types)) : raw;
+    // The role filter is a DEFAULT, not a veto (#205). Read when the picker opens, so a
+    // change to the remembered setting applies to the next picker without needing any
+    // surface to re-render.
+    let showAll = showAllRoles();
+    const rawFor = (spanning) => (spanning ? this.#store.allVariableMeta() : this.#store.getVariableMeta());
+    const metaFor = (spanning, all = showAll) => {
+      const raw = rawFor(spanning);
+      return types?.length && !all ? raw.filter((m) => fitsRole(m, types)) : raw;
     };
     let meta = metaFor(allDatasets);
+    // How many the filter WOULD hide, so the switch can be offered only when it would
+    // actually reveal something.
+    const hiddenCount = (spanning) => (types?.length
+      ? rawFor(spanning).filter((m) => !fitsRole(m, types)).length
+      : 0);
     // The sidebar/grid selection means "these are the variables I am working on",
     // which is a good default for the variables an analysis is ABOUT and a bad one
     // for a secondary role. Seeding it into an OPTIONAL input inverted that input's
@@ -290,6 +301,43 @@ export class UiService {
         bar.el.append(wrap);
       }
 
+      // The role switch (#205), beside the dataset-scope one because both change WHAT IS
+      // IN the list rather than how it is shown. Offered only when the filter is actually
+      // hiding something — otherwise it is dead chrome claiming there is more to see, the
+      // same rule the scope switch states for itself.
+      //
+      // Off by default because the filtered list IS the right first answer: it is what
+      // makes the common case a glance-and-OK. What changed is that it no longer refuses.
+      // Ticking it here is a PER-RUN override and does not rewrite the remembered setting
+      // — the same contract as the weight picker, where a project-level choice is
+      // pre-filled and stays opt-out-able for one run. The default lives on the Settings
+      // screen, under Variables.
+      if (types?.length && (hiddenCount(allDatasets) > 0 || showAll)) {
+        const wrap = document.createElement('label');
+        wrap.className = 'ct-vartools__scope';
+        const roleBox = document.createElement('input');
+        roleBox.type = 'checkbox';
+        roleBox.checked = showAll;
+        const txt = document.createElement('span');
+        txt.textContent = 'Show all variables';
+        wrap.append(roleBox, txt);
+        wrap.title = 'This analysis normally offers only variables whose measurement level '
+          + 'fits it. A continuous variable used as a category gives one row per distinct '
+          + 'value, and a few procedures are slow or fail outright on thousands of groups.';
+        roleBox.addEventListener('change', () => {
+          showAll = roleBox.checked;
+          meta = metaFor(allDatasets, showAll);
+          // Same rule as the scope switch: this replaces the list wholesale, so regrouping
+          // is what the user asked for. A variable that was ticked and is now hidden again
+          // is dropped rather than silently surviving into the result.
+          for (const name of [...ticked]) if (!meta.some((m) => m.name === name)) ticked.delete(name);
+          selected = meta.filter((m) => checked.has(m.name));
+          rest = meta.filter((m) => !checked.has(m.name));
+          render();
+        });
+        bar.el.append(wrap);
+      }
+
       // "Selected only" — the picker's own filter, for the long lists where the ticks are
       // scattered through hundreds of rows and checking what you have chosen means
       // scrolling the whole thing. Multi-select only: a radio picker holds at most one
@@ -368,6 +416,17 @@ export class UiService {
           badge.textContent = m.dataset;
           badge.title = `From the dataset “${m.dataset}”`;
           label.append(badge);
+        }
+        // Why this one is not normally offered (#205). The filter's signal is useful
+        // information — it is just not a veto — so a revealed row carries it quietly
+        // rather than looking identical to one that fits.
+        if (showAll && types?.length && !fitsRole(m, types)) {
+          const why = document.createElement('span');
+          why.className = 'ct-dialog__rolemiss';
+          why.textContent = roleMissReason(m);
+          why.title = 'Shown because “Show all variables” is on. This analysis expects a '
+            + 'different measurement level; you can change the level in Variable View.';
+          label.append(why);
         }
         if (disabled) {
           const taken = document.createElement('span');
@@ -781,6 +840,24 @@ export class UiService {
  * Variable View edits it, and Recode sets it. A numeric role is left alone — it
  * means arithmetic, and widening that would be a different (and wrong) claim.
  */
+/**
+ * Why a variable misses the role an input asked for, in two or three words (#205).
+ *
+ * Names the MEASURE, not the storage type, because the measure is what decides it and
+ * what the reader can change — "numeric" would be true of a nominal code too and would
+ * send someone looking in the wrong place. Deliberately short: this sits inline on a row
+ * and the tooltip carries the explanation.
+ */
+function roleMissReason(m) {
+  const ml = m?.measurementLevel;
+  if (ml === 'scale') return 'measured Scale';
+  if (ml === 'nominal') return 'measured Nominal';
+  if (ml === 'ordinal') return 'measured Ordinal';
+  // No measure recorded: the storage type is all there is to report, and saying so beats
+  // inventing a level the file never carried.
+  return m?.type === 'string' ? 'text' : `type ${m?.type || 'unknown'}`;
+}
+
 function fitsRole(m, types) {
   // ADDITIVE ONLY. An exact type match wins before anything below is consulted, so this
   // function can only ever widen what a picker offers — never narrow it. That is a

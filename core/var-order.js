@@ -137,6 +137,74 @@ const displaySetting = defineSetting({
   options: VAR_DISPLAY_OPTIONS,
 });
 
+/** What a variable picker offers — see {@link showAllRoles}. */
+const SHOW_ALL = ['fitting', 'all'];
+const SHOW_ALL_OPTIONS = [
+  ['fitting', 'Only variables that fit the analysis'],
+  ['all', 'All variables'],
+];
+
+/**
+ * Should a variable picker offer variables whose measurement level does not fit the role
+ * the analysis asked for? (#205)
+ *
+ * **The owner's challenge, which was right.** A categorical input hides a Scale-measured
+ * numeric, so crosstabbing income was impossible until you recoded it — and recoding
+ * changes nothing about the data, it just sets the measure, so the variable "magically"
+ * appeared. Asked why: *"I agree that a categorical analysis on income will have thousands
+ * of rows... But my challenge is: is that so bad? Is it CrossTab's duty to tell the person
+ * they CAN'T get that table?"*
+ *
+ * It is not. A thousand-row crosstab is BIG, not WRONG, and there are real reasons to ask
+ * for one — finding the 999 in an age column, seeing a variable's distinct values, learning
+ * how dirty a column is. Every tool this project chases is looser: SPSS treats measure as
+ * advisory for most procedures, Stata ignores it, R has no concept of it.
+ *
+ * And the project had already settled the principle elsewhere: *pre-select, never apply
+ * invisibly* — a sensible default, pre-filled into each run's own control, opt-out-able per
+ * run, because **the override is the win over SPSS, not the parity**. A hard filter is the
+ * opposite of that, and the role filter had been one since it was written.
+ *
+ * So: the filter stays as the DEFAULT, because it is genuinely the right first answer and
+ * what makes the common case a glance-and-OK. It stops being a veto.
+ *
+ * A remembered setting rather than only a per-picker checkbox, at the owner's request —
+ * *"set it once when they start a project and run with it always to their liking"* — which
+ * also puts it on the Settings screen beside the other two Variables settings.
+ *
+ * Editable there, NOT routed like `varlist.order`: the picker reads this when it opens, so
+ * a change applies to the next picker rather than needing a surface to re-render.
+ */
+const showAllSetting = defineSetting({
+  id: 'varlist.showAll',
+  key: 'crosstab.varlist.showall',
+  values: SHOW_ALL,
+  // The filter as it has always behaved. A default that changed what every existing
+  // project's pickers offer would be a worse answer than the problem.
+  fallback: 'fitting',
+  label: 'Variable pickers offer',
+  group: 'Variables',
+  hint: 'A categorical analysis normally hides continuous variables. Offering all of them '
+    + 'lets you ask anyway — a crosstab of a continuous variable gives one row per distinct '
+    + 'value, which is sometimes exactly what you want.',
+  options: SHOW_ALL_OPTIONS,
+});
+
+/** `'fitting'` | `'all'` — what pickers should offer. */
+export function loadShowAllRoles() {
+  return showAllSetting.get();
+}
+
+/** Remember the choice (the Settings screen writes through the registry instead). */
+export function saveShowAllRoles(value) {
+  showAllSetting.set(value);
+}
+
+/** True when pickers should ignore the role filter. */
+export function showAllRoles() {
+  return loadShowAllRoles() === 'all';
+}
+
 /** The remembered display, defaulting to `label` — what every surface did before the
  * choice existed, so an unset preference changes nothing. */
 export function loadVarDisplay() {

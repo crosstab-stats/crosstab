@@ -837,6 +837,9 @@
       /* A variable disabled because a prior `unique` input already took it. */
       .ct-dialog__vars li.ct-dialog__excluded label { opacity: .5; cursor: not-allowed; }
       .ct-dialog__taken { margin-left: auto; font-size: 11px; color: var(--ct-danger); font-style: italic; }
+      /* Why a variable is not normally offered for this analysis (#205). Muted, not a
+         warning colour: it is an explanation of a default, and the row IS selectable. */
+      .ct-dialog__rolemiss { margin-left: auto; font-size: 11px; color: var(--ct-muted); font-style: italic; }
       /* Which dataset a variable came from, when it is not the active one (#179). Colours
          are the muted-but-legible pair used for secondary text elsewhere: 4.6:1 on the row
          background, so it passes AA as small text rather than relying on the reader

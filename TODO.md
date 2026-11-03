@@ -2715,6 +2715,70 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#205 — the variable-role filter is a DEFAULT, not a veto. BUILT 2026-11-03.**
+      The owner asked why CrossTab is "such a stickler" about measurement level: a
+      categorical analysis hides a Scale-measured numeric, and recoding — which changes
+      nothing about the data — makes it appear. Then pushed back on the defence:
+
+      > *"I agree that a categorical analysis on income will have thousands of rows. But my
+      > challenge is: is that so bad? Is it CrossTab's duty to tell the person they CAN'T
+      > get that table? Could the picker gain a 'show all variables — ignore coding
+      > restrictions' option?"*
+
+      **Conceded, and the first answer I gave was worse than the question.** I had proposed
+      showing the mismatched variables greyed out with a reason — which still refuses. The
+      owner's shape lets you proceed, which is the right one.
+
+      **Why the challenge was right, beyond taste.** A thousand-row crosstab is BIG, not
+      WRONG, and there are real reasons to ask for one: finding the 999 in an age column,
+      seeing a variable's distinct values, learning how dirty a column is. Every tool this
+      project chases is looser — SPSS treats measure as advisory for most procedures, Stata
+      ignores it, R has no concept of it. And the project had **already settled the
+      principle**: *pre-select, never apply invisibly* — a sensible default, pre-filled into
+      each run's own control, opt-out-able per run, because *the override is the win over
+      SPSS, not the parity*. The role filter had been the exact opposite since it was
+      written, and I defended it on its merits without noticing that.
+
+      **What shipped.** The filter still runs by default — it is genuinely the right first
+      answer and what makes the common case a glance-and-OK, and a default that changed
+      what every existing project's pickers offer would be a worse answer than the problem.
+      What changed:
+      - A **"Show all variables"** switch in the picker's tool bar, beside the
+        dataset-scope one because both change what is IN the list rather than how it is
+        shown. Offered only when the filter is actually hiding something (plus when the
+        override is already on, or there would be no way to turn it back off) — the rule
+        the scope switch states for itself: *"a switch that could not change anything reads
+        as broken"*.
+      - A **remembered setting**, at the owner's request: *"make it a remembered setting,
+        like the weights, and store it in the same place so it is exposed on the unified
+        settings screen. That way people can just set it once when they start a project."*
+        So `varlist.showAll` is declared in `core/var-order.js` beside the other two
+        Variables settings and appears on the #198 Settings screen as a select. Editable
+        there rather than routed, because the picker reads it when it OPENS — no surface
+        has to re-render for a change to take effect.
+      - Ticking the box in a picker is a **per-run override** that does not rewrite the
+        setting — the weight-picker contract exactly.
+      - A revealed row carries a quiet **"measured Scale"** note with a tooltip saying why
+        it is not normally offered and where to change the level. The filter's signal is
+        useful information; it just is not a veto. Muted rather than a warning colour,
+        because it explains a default and the row IS selectable.
+
+      **`fitsRole` itself is untouched.** This changes who gets OFFERED, not what fits, so
+      the additive-only constraint still holds — it exists because widening a numeric role
+      to everything would offer race codes as a weight, and because a change that started
+      REMOVING variables from lists would break working projects to tidy a taxonomy.
+
+      **Browser-verified** on a dataset with `income` (Scale), `region` (numeric, Nominal)
+      and `sex` (factor), asking for a categorical role: by default the list is region +
+      sex and the switch is offered; ticking it adds `income` with "measured Scale" while
+      the fitting rows stay unbadged; with the setting stored as `all`, a FRESH picker opens
+      with the box already ticked and the switch still present. The setting shows on the
+      Settings screen under Variables as an editable select.
+
+      11 tests. Also worth recording: the honest caveat is in the tooltip rather than in a
+      refusal — a few R routines are slow or fail outright on thousands of groups, which is
+      a reason to say so, not a reason to decide for the user.
+
 - [x] **#204 — a continuous COLOUR SCALE as a host-drawn layer; the choropleth's key is
       no longer baked. BUILT 2026-11-02.** The one piece of chart work the 2026-10-24
       closure of Layer 3b explicitly left open: *"migration, one figure at a time, when a
