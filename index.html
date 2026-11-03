@@ -783,7 +783,21 @@
       .ct-join__manual-row button { border: 0; background: none; cursor: pointer; color: var(--ct-danger); font-size: 13px; }
       /* The Settings screen (#198): a scrolling list of label/control rows, grouped.
          Tokens only — no literal colours outside :root, per the theme audit. */
-      .ct-settings__body { max-height: 60vh; overflow-y: auto; margin: 0 0 12px; }
+
+      /* Width-aware (#208). The base `.ct-dialog` caps at 420px, which suits a prompt with
+         one question and is far too narrow for a two-column list of label + control: on a
+         1446px viewport the rows were wrapping and scrolling inside a third of the screen.
+         Capped rather than a bare 80vw, because an uncapped one puts a label and its
+         select at opposite ends of a 1150px line, which is harder to read rather than
+         easier — the same reason the project manager stops at 800px. */
+      .ct-settings { max-width: min(80vw, 900px); width: min(80vw, 900px); }
+      /* …but never NARROWER than the base dialog on a small screen, where 80vw is less
+         than the 92vw everything else gets. */
+      @media (max-width: 700px) {
+        .ct-settings { max-width: 92vw; width: 92vw; }
+      }
+
+      .ct-settings__body { max-height: 60vh; overflow-y: auto; overflow-x: hidden; margin: 0 0 12px; }
       .ct-settings__group {
         margin: 16px 0 6px; font-size: 11px; text-transform: uppercase;
         letter-spacing: .05em; color: var(--ct-muted);
@@ -802,9 +816,20 @@
       }
       .ct-settings__label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 220px; }
       .ct-settings__hint { color: var(--ct-muted); font-size: 12px; line-height: 1.4; }
-      .ct-settings__control { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      /* `min-width: 0` is what actually lets these shrink: a flex item defaults to
+         min-width:auto, so a <select> sized to its longest option ("Only variables that
+         fit the analysis") refuses to shrink and pushes the row wider than the body —
+         which is how a horizontal scrollbar appears inside a dialog that should never
+         have one. The max-widths are the same rule applied to the controls themselves. */
+      .ct-settings__control { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+      .ct-settings__control select,
+      .ct-settings__control input,
+      .ct-settings__control textarea { max-width: 100%; }
       .ct-settings__value { color: var(--ct-muted); }
-      .ct-settings__lines { min-width: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      /* A floor for legibility (a relay URL per line), but one that yields on a narrow
+         screen rather than forcing the dialog to scroll sideways. */
+      .ct-settings__lines { min-width: min(240px, 100%); width: 320px; max-width: 100%;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
       /* Stacks on a narrow screen rather than squeezing the control (1.4.10 reflow). */
       @media (max-width: 520px) {
         .ct-settings__row { flex-direction: column; align-items: stretch; }

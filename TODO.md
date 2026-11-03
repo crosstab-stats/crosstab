@@ -2715,6 +2715,47 @@ The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
 
+- [x] **#208 — the Settings screen was pinned to 420px on a 1446px viewport. FIXED
+      2026-11-03.** Owner, with a screenshot: *"settings screen is aggressively narrow on
+      wider screens. Can it be width-aware and just size to 80% or such?"*
+
+      **Cause:** `.ct-dialog` caps at `max-width: 420px`, which is right for a prompt with
+      one question and wrong for a two-column list of label + control. The screen never
+      opted out, so every row wrapped and scrolled inside a third of the screen.
+
+      Now `.ct-settings` is `min(80vw, 900px)`. **Capped rather than a bare 80vw**, and the
+      cap is the judgement worth stating: 80vw of this viewport is ~1150px, which puts a
+      label and its select at opposite ends of a very long line — harder to read, not
+      easier. It is the same reason the project manager stops at 800px. If 80% uncapped is
+      wanted, it is one value.
+
+      Below 700px the rule yields to `92vw`, because 80vw on a phone is NARROWER than the
+      92vw every other dialog gets — a width-aware rule that makes the small case worse
+      would be a poor trade.
+
+      **The horizontal scrollbar in the screenshot** is a second defect and I could not
+      reproduce it — measured `scrollWidth === clientWidth` in my own session before
+      changing anything, so something about that machine (zoom, font) tipped it over.
+      Rather than leave it to chance it is now structurally impossible:
+      - `.ct-settings__control` gets `min-width: 0`. A flex item defaults to
+        `min-width: auto`, so a `<select>` sized to its longest option ("Only variables
+        that fit the analysis") refuses to shrink and pushes the row wider than the body.
+        That is how a dialog that should never scroll sideways comes to have a scrollbar.
+      - the controls themselves get `max-width: 100%`;
+      - `.ct-settings__lines` traded its hard `min-width: 240px` for
+        `min-width: min(240px, 100%)` — a floor for legibility that yields rather than
+        forcing the dialog to scroll;
+      - and `.ct-settings__body` sets `overflow-x: hidden` as a backstop. Note that
+        `overflow-y: auto` alone does NOT leave the other axis visible — CSS computes it to
+        auto — which is why the scrollbar could appear without anyone asking for one.
+
+      **Verified by measurement at five widths** rather than by looking: 900, 600, 420, 340
+      and 280px all give `scrollWidth === clientWidth`, so zero horizontal overflow from a
+      wide desktop down to below a phone. The window-resize path in the harness reported
+      success without the page seeing it, so the narrow cases were tested by constraining
+      the dialog directly — which tests the thing that matters (can the content live in a
+      narrow box) independently of the media query.
+
 - [x] **#207 — project-level settings on the Settings screen, written as OPS. BUILT
       2026-11-03.** The owner's design, which dissolved a tension rather than trading one
       side of it away: *"Could we design the project-level settings (such as weights) as
