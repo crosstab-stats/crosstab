@@ -17,10 +17,30 @@ Designed for many sittings. Tick as you go. Anything odd goes in
 
 ```
 - [ ] **Name** — `menu path`
-      Recipe: what to click, with the exact variables to pick.
-      Expect: what correct output looks like.
-      Reference: how to get the same number out of other software.
+      Recipe:    what to click in CrossTab, with the exact variables to pick.
+      Expect:    what correct output looks like — often the exact numbers.
+      Reference: the same analysis in SPSS, as a click path.
+      Syntax:    the same thing as an SPSS command, if you prefer pasting.
 ```
+
+**Reference lines are click paths, not just commands.** Every statistical entry names
+the SPSS menu route — *Analyze ▸ Compare Means ▸ Independent-Samples T Test…*, which
+button to press next, which boxes to tick — because knowing CrossTab well is no help in
+finding a dialog in SPSS. Where SPSS genuinely cannot do something, the line says so
+outright and names what can: Stata, R, JASP, GeoDa, Mplus, Prism, G\*Power, the Distance
+software. 100 of the 118 statistical entries carry an SPSS path; the other 18 say why
+not.
+
+**To run a `Syntax:` line in SPSS** (quicker than clicking once you are used to it):
+File ▸ **New** ▸ **Syntax**, paste the command, then **Run ▸ All** — or select just the
+lines you want and press **Ctrl-R**. Commands end with a full stop; that is not a typo.
+`EXECUTE.` after a Transform command is what makes it take effect.
+
+**Module warnings.** Some SPSS procedures live in paid add-ons and simply will not be in
+your Analyze menu without them: **Complex Samples** (§28), **Forecasting** (§25),
+**Bootstrapping** (§32), **Missing Values** (§18's imputation), **Amos** (CFA/SEM), and
+**Power Analysis** (§32). The entries say which, so you are not left hunting for a menu
+that was never installed.
 
 Three things worth knowing before you start:
 
@@ -297,7 +317,11 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       Recipe: export to `.xlsx`, open it in Excel, then re-import. Try a workbook with
       several sheets.
       Expect: you are asked which sheet; values round-trip.
-      Reference: SPSS `GET DATA /TYPE=XLSX /SHEET=NAME 'Sheet1'`.
+      Reference: **SPSS** — File ▸ **Import Data** ▸ **Excel…** → pick the file → in the
+      *Read Excel File* dialog choose the **Worksheet**, tick **Read variable names from
+      first row of data** → **OK**. To write one back: File ▸ **Export** ▸ **Excel**.
+      Syntax: `GET DATA /TYPE=XLSX /FILE="d.xlsx" /SHEET=NAME "Sheet1"
+      /READNAMES=ON.`
 
 - [ ] **SPSS / Stata / SAS, reading** — `.sav` `.zsav` `.dta` `.por` `.xpt` `.sas7bdat`
       Recipe: import the `.sav` you exported in §0.
@@ -320,7 +344,9 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
 - [ ] **Parquet** — `.parquet`
       Recipe: export, re-import.
       Expect: round-trips; types preserved.
-      Reference: R `arrow::read_parquet`, or Python `pandas.read_parquet`.
+      Reference: **SPSS cannot read Parquet.** **R** — `arrow::read_parquet("f.parquet")`.
+      **Python** — `pandas.read_parquet("f.parquet")`. For a quick GUI look, **DuckDB**’s
+      CLI will do it in one line: `SELECT * FROM "f.parquet" LIMIT 10;`
 
 - [ ] **JSON Lines** — `.ndjson` / `.jsonl`
       Recipe: export, re-import, and open the file in a text editor.
@@ -350,21 +376,37 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       Expect: a new `income_k` column whose first value is **52** (income 52000); the two
       −99 cases come through as **missing, not −0.099**; a history step appears and
       **Edit ▸ Undo** removes the variable.
-      Reference: SPSS `COMPUTE income_k = income / 1000.` then `EXECUTE.`
+      Reference: **SPSS** — **Transform** ▸ **Compute Variable…** → **Target Variable** =
+      `income_k` → in **Numeric Expression** type `income / 1000` (or build it by
+      double-clicking `income` in the variable list) → **OK**. SPSS applies it
+      immediately in the dialog version.
+      Expect too: SPSS propagates **system-missing** through arithmetic the same way, so
+      the two −99 cases should come out missing there too — a useful cross-check that
+      the missing codes imported correctly.
+      Syntax: `COMPUTE income_k = income / 1000.` then `EXECUTE.`
 
 - [ ] **Recode into new variable…**
       Recipe: **Transform ▸ Recode into new variable…** → source `age`, target
       `age_band` → ranges: lowest–34 → 1, 35–49 → 2, 50–highest → 3 → OK.
       Expect: a new variable; **`age` is untouched**; value labels can be set on the
       result; counts are **10 / 12 / 8** (check with Frequencies).
-      Reference: SPSS `RECODE age (LO THRU 34=1)(35 THRU 49=2)(50 THRU HI=3)
-      INTO age_band.`
+      Reference: **SPSS** — **Transform** ▸ **Recode into Different Variables…** → move
+      `age` across → **Output Variable** Name = `age_band` → **Change** → **Old and New
+      Values…** → for each band pick *Range, LOWEST through value* `34` → New Value `1` →
+      **Add**; then *Range* `35` through `49` → `2` → **Add**; then *Range, value through
+      HIGHEST* `50` → `3` → **Add** → **Continue** → **OK**.
+      ⚠️ Use **Recode into Different Variables**, not *Recode into Same Variables* — the
+      latter overwrites `age` in place, which is exactly what CrossTab refuses to do.
+      Syntax: `RECODE age (LO THRU 34=1)(35 THRU 49=2)(50 THRU HI=3) INTO age_band.`
 
 - [ ] **Count values within cases…**
       Recipe: **Transform ▸ Count values within cases…** → target `n_high` → count the
       value 3 across `education` and `region`.
       Expect: a count per row, 0–2, with no missing.
-      Reference: SPSS `COUNT n_high = education region (3).`
+      Reference: **SPSS** — **Transform** ▸ **Count Values within Cases…** → **Target
+      Variable** = `n_high` → move `education` and `region` into **Numeric Variables** →
+      **Define Values…** → *Value* `3` → **Add** → **Continue** → **OK**.
+      Syntax: `COUNT n_high = education region (3).`
 
 - [ ] 🔢 **Aggregate / collapse…**
       Recipe: **Transform ▸ Aggregate / collapse…** → `groupby = education`,
@@ -372,7 +414,11 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       Expect, exactly: 3 rows — **30350.00 / 43836.36 / 60355.56**. Hand-rolled
       JavaScript arithmetic, so check it: those are the same group means the one-way
       ANOVA reports in §15. They must agree with each other.
-      Reference: SPSS `AGGREGATE OUTFILE=* /BREAK=education
+      Reference: **SPSS** — **Data** ▸ **Aggregate…** → `education` into **Break
+      Variable(s)**, `income` into **Summaries of Variable(s)** → click **Function…** →
+      **Mean of values** → **Continue** → choose **Create a new dataset containing only
+      the aggregated variables** → name it → **OK**.
+      Syntax: `AGGREGATE OUTFILE=* MODE=REPLACE /BREAK=education
       /income_mean=MEAN(income).`
 
 - [ ] **Select cases…**
@@ -380,8 +426,14 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       **Descriptive Statistics ▸ Frequencies…** on `gender`.
       Expect: the filter is visible in the UI and analyses honour it — gender comes back
       **2 / 12**, N = 14, not 15 / 15, N = 30. Switch it off again and all 30 return.
-      Reference: SPSS `SELECT IF (age > 40).` — but note SPSS *deletes* unselected cases
-      unless you use `FILTER`; CrossTab's is reversible, which is the better behaviour.
+      Reference: **SPSS** — **Data** ▸ **Select Cases…** → **If condition is satisfied**
+      → **If…** → type `age > 40` → **Continue** → under *Output* choose **Filter out
+      unselected cases** → **OK**. A `filter_$` variable appears and the excluded rows
+      get struck through in Data View.
+      ⚠️ Choose **Filter**, not **Delete unselected cases** — Delete is destructive and
+      permanent once you save. CrossTab’s filter is always reversible, so Filter is the
+      comparable behaviour.
+      Syntax: `FILTER OFF.` `USE ALL.` `SELECT IF (age > 40).` `EXECUTE.`
 
 - [ ] **Extract columns to a new dataset…**
       Recipe: **Transform ▸ Extract columns to a new dataset…** → pick `gender` and
@@ -395,7 +447,14 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       Expect: the new column lands on all 30 rows; it appears in **Edit ▸ History…** as
       **one undoable step**; a non-matching key produces missing rather than a silent
       drop.
-      Reference: SPSS `MATCH FILES /FILE=* /TABLE='other.sav' /BY education.`
+      Reference: **SPSS** — **Data** ▸ **Merge Files** ▸ **Add Variables…** → pick the
+      other dataset → **Continue** → tick **Match cases on key variables in sorted
+      files**, choose **Non-active dataset is keyed table** → move `education` into **Key
+      Variables** → **OK**.
+      ⚠️ SPSS requires **both files sorted on the key** first (Data ▸ Sort Cases…) and
+      will refuse or mis-merge otherwise. CrossTab does not — so a difference here is
+      most likely an unsorted SPSS file, not a CrossTab bug.
+      Syntax: `MATCH FILES /FILE=* /TABLE="other.sav" /BY education.`
 
 - [ ] **Weight cases…**
       Recipe: **Transform ▸ Compute variable…** to make `w = 2`, then
@@ -405,7 +464,14 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       records it.
       Then: make a weight with a zero and a negative value in it.
       Expect: those cases are **dropped outright**, not counted as fractions.
-      Reference: SPSS `WEIGHT BY w.`
+      Reference: **SPSS** — **Data** ▸ **Weight Cases…** → **Weight cases by** → move `w`
+      into **Frequency Variable** → **OK**. A **Weight On** indicator appears in the
+      status bar at the bottom right; that indicator staying on by accident is the
+      classic SPSS footgun, which is part of why CrossTab surfaces the weight in each
+      run’s own dialog.
+      Expect too: SPSS also drops cases with a missing, zero or negative weight rather
+      than counting fractions of a case — so the two should agree exactly.
+      Syntax: `WEIGHT BY w.` and `WEIGHT OFF.` to clear it.
 
 - [ ] **Run R script…**
       Recipe: **Transform ▸ Run R script…** → type `summary(data)` → Run. Then run
@@ -475,8 +541,12 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       Recipe: same, choosing **SPSS (.sps)**. Paste it into an SPSS syntax window and
       run it against the `.sav` from §0.
       Expect: it runs and produces comparable output. Same best-effort contract.
-      Reference: this is also a convenient way to generate the SPSS commands for the
-      arithmetic checks further down — export the script and read it.
+      Reference: **to run the exported file in SPSS** — File ▸ **Open** ▸ **Syntax…** →
+      pick the `.sps` → in the syntax window, **Run** ▸ **All**. Check the first lines
+      point at the right data file; adjust the path if you moved it.
+      Expect too: this is also the quickest way to get the SPSS commands for any
+      arithmetic check further down — export the script and read it rather than typing
+      the syntax out.
 
 - [ ] **R syntax export**
       Recipe: **File ▸ Export analysis script…** → **R**. Run the resulting `.R` in
@@ -484,7 +554,11 @@ Everything goes through one searchable picker: **File ▸ Import data…** and
       Expect: runnable R that reproduces the analyses. This is the most faithful of the
       three script exports, since the analyses were computed in R to begin with — which
       also makes it the best way to get the exact code for an arithmetic check.
-      Reference: compare its output to the app's own output, line for line.
+      Reference: **to run it** — open the `.R` in RStudio (or `Rscript the-file.R`),
+      having first exported the data as CSV so the paths line up. Compare its output to
+      the app’s own, line for line. Because the analyses were computed in R to begin
+      with, this should match to the last digit — making it the sharpest of the three
+      script exports as a correctness check.
 
 - [ ] **A stale analysis**
       Recipe: run **Descriptive Statistics ▸ Descriptives…** on `income`. Then
@@ -781,7 +855,10 @@ referenced*. "Loaded" and "active" are not states.
       (26.7 / 40.0 / 33.3); `region` 11 / 10 / 9 (36.7 / 33.3 / 30.0). Value labels
       shown (Male/Female, High school/Bachelor/Postgraduate, North/Central/South),
       cumulative percent reaching 100.0.
-      Reference: SPSS `FREQUENCIES VARIABLES=gender education region.`
+      Reference: **SPSS** — Analyze ▸ Descriptive Statistics ▸ Frequencies… → move
+      `gender`, `education` and `region` into **Variable(s)** → leave **Display
+      frequency tables** ticked → **OK**.
+      Syntax: `FREQUENCIES VARIABLES=gender education region.`
 
 - [ ] **Frequencies ▸ Statistics panel** — same dialog, second page.
       Recipe: `vars = age`; tick Mean, Median, Mode, Sum, Std. Deviation, Variance,
@@ -795,14 +872,21 @@ referenced*. "Loaded" and "active" are not states.
       And the quartiles above are SPSS's definition (R's `type = 6`); R's *default*
       `type = 7` gives **32.25 / 39.5 / 49.75** instead. If you see those, the plugin is
       using R's default rather than SPSS's.
-      Reference: SPSS `FREQUENCIES VARIABLES=age /STATISTICS=ALL.`
+      Reference: **SPSS** — Analyze ▸ Descriptive Statistics ▸ Frequencies… → `age`
+      into **Variable(s)** → the **Statistics…** button → tick Mean, Median, Mode, Sum,
+      Std. deviation, Variance, S.E. mean, Range, Minimum, Maximum and **Quartiles** →
+      **Continue** → **OK**.
+      Syntax: `FREQUENCIES VARIABLES=age /STATISTICS=ALL.`
 
 - [ ] **Frequencies, weighted** — same dialog, `weight` input.
       Recipe: `vars = education`, `weight =` any positive numeric variable.
       Expect: counts become weighted case counts (N = sum of weights, non-integer is
       fine); **the caption names the weight**; cases with missing/zero/negative weight
       are dropped entirely, not counted as fractions.
-      Reference: SPSS `WEIGHT BY w.` then `FREQUENCIES VARIABLES=education.`
+      Reference: **SPSS** — first **Data ▸ Weight Cases…** → *Weight cases by* → your
+      weight variable → **OK** (a WEIGHT indicator appears in the status bar). Then run
+      Analyze ▸ Descriptive Statistics ▸ Frequencies… as above.
+      Syntax: `WEIGHT BY w.` then `FREQUENCIES VARIABLES=education.`
 
 - [ ] **Crosstabs…** — `Descriptive Statistics ▸ Crosstabs…`
       Recipe: `rowvar = gender`, `colvar = education`, percentages = row, measures =
@@ -811,7 +895,11 @@ referenced*. "Loaded" and "active" are not states.
       Expected counts **4 / 6 / 5** in both rows. Pearson χ² = **8.1000**, df = **2**,
       p = **.0174**. Cramér's V = **.5196**. Likelihood-ratio χ² = **8.9169**, p = **.0116**.
       A warning that some expected counts are < 5 is correct and should be shown.
-      Reference: SPSS `CROSSTABS /TABLES=gender BY education /STATISTICS=CHISQ PHI
+      Reference: **SPSS** — Analyze ▸ Descriptive Statistics ▸ Crosstabs… → `gender`
+      into **Row(s)**, `education` into **Column(s)** → **Statistics…** → tick
+      **Chi-square** and **Phi and Cramer’s V** → **Continue** → **Cells…** → tick
+      **Observed**, **Expected**, **Row** and **Column** → **Continue** → **OK**.
+      Syntax: `CROSSTABS /TABLES=gender BY education /STATISTICS=CHISQ PHI
       /CELLS=COUNT EXPECTED ROW COLUMN.`
 
 - [ ] **Crosstabs 2×2 and the continuity correction** — the case where SPSS adds a row.
@@ -821,37 +909,52 @@ referenced*. "Loaded" and "active" are not states.
       p = **.0132**; **Yates continuity-corrected χ² = 4.2614, p = .0390**; Fisher's
       exact p = **.0352**, OR = **11.2622**. For a 2×2 SPSS prints the corrected row too
       — if CrossTab reports only the uncorrected value on a 2×2 that is a real gap.
-      Reference: same `CROSSTABS` command; SPSS adds "Continuity Correction" and
-      "Fisher's Exact Test" automatically for 2×2.
+      Reference: **SPSS** — make the 2×2 first with **Transform ▸ Recode into Different
+      Variables…** (`education` → `hs`: Old value 1 → New 1; All other values → 2 →
+      **Add** → **Change** → **OK**). Then the same Crosstabs dialog with `gender` × `hs`.
+      Expect too: for a 2×2 SPSS adds the **Continuity Correction** and **Fisher’s Exact
+      Test** rows to the same table with no extra ticking — that is what you compare.
+      Syntax: `CROSSTABS /TABLES=gender BY hs /STATISTICS=CHISQ.`
 
 - [ ] **Descriptives…** — `Descriptive Statistics ▸ Descriptives…`
       Recipe: `vars = age, income`.
       Expect, exactly: `age` N = **30**, min **25**, max **61**, mean **41.0000**,
       SD **10.8881**. `income` **N = 28** (not 30 — the two −99s), min **24000**,
       max **66200**, mean **45292.8571**, SD **12432.9886**.
-      Reference: SPSS `DESCRIPTIVES VARIABLES=age income /STATISTICS=MEAN STDDEV MIN MAX.`
+      Reference: **SPSS** — Analyze ▸ Descriptive Statistics ▸ Descriptives… → `age`
+      and `income` into **Variable(s)** → **Options…** → tick Mean, Std. deviation,
+      Minimum, Maximum → **Continue** → **OK**.
+      Syntax: `DESCRIPTIVES VARIABLES=age income /STATISTICS=MEAN STDDEV MIN MAX.`
 
 - [ ] **Explore (confidence interval for the mean)…** — same menu.
       Recipe: `vars = age, income`, `level = 95`.
       Expect, exactly: `age` mean 41.0000, 95% CI **[36.9343, 45.0657]**;
       `income` mean 45292.8571, 95% CI **[40471.8474, 50113.8668]**.
       Then add `by = gender` and expect the same statistics per group.
-      Reference: SPSS `EXAMINE VARIABLES=age income /PLOT NONE
-      /STATISTICS DESCRIPTIVES /CINTERVAL 95.`
+      Reference: **SPSS** — Analyze ▸ Descriptive Statistics ▸ Explore… → `age` and
+      `income` into **Dependent List** (and `gender` into **Factor List** for the
+      by-group version) → under *Display* choose **Statistics** → **Statistics…** → tick
+      **Descriptives** with *Confidence Interval for Mean* **95%** → **Continue** → **OK**.
+      Read the **Descriptives** table: the CI is the "95% Confidence Interval for Mean"
+      Lower/Upper Bound rows.
+      Syntax: `EXAMINE VARIABLES=age income /PLOT NONE /STATISTICS DESCRIPTIVES
+      /CINTERVAL 95.`
 
 - [ ] **Inequality (Gini / Theil / Lorenz)…** — `Descriptive Statistics ▸ …`
       Recipe: `x = income`.
       Expect: Gini between 0 and 1 (for this data ≈ 0.15 — a low, plausible figure),
       Theil ≥ 0, and a Lorenz curve that starts at (0,0), ends at (1,1) and bows below
       the diagonal.
-      Reference: Stata `ineqdeco income` (SSC) or R `ineq::Gini(income)`. SPSS has no
-      native Gini.
+      Reference: **no SPSS equivalent.** **Stata** — `ssc install ineqdeco` once, then
+      `ineqdeco income`. **R** — `ineq::Gini(income)` and `ineq::Theil(income)`.
+      For the Lorenz curve: Stata `lorenz estimate income` then `lorenz graph`.
 
 - [ ] **Segregation indices…** — same menu.
       Recipe: `groupA` and `groupB` as two count variables by area.
       Expect: dissimilarity index in [0,1]; identical distributions → 0.
-      Reference: R `seg` package, or compute D by hand:
-      `0.5 * Σ |a_i/A − b_i/B|`. No SPSS equivalent.
+      Reference: **no mainstream GUI.** **R** — the `seg` package. Or by hand, which is
+      easy enough to be the better check here: the dissimilarity index is
+      `0.5 * sum(|a_i/A - b_i/B|)` across areas — do it in a spreadsheet and compare.
 
 ## 15. Comparison *(6 items)*
 
@@ -861,7 +964,11 @@ referenced*. "Loaded" and "active" are not states.
       mean difference = 1.0000, 95% CI of the mean **[36.9343, 45.0657]**.
       ⚠️ SPSS reports the CI **of the difference** — `[−3.0657, 5.0657]` — not of the
       mean. Both are right; make sure the label matches what is shown.
-      Reference: SPSS `T-TEST /TESTVAL=40 /VARIABLES=age.`
+      Reference: **SPSS** — Analyze ▸ Compare Means ▸ One-Sample T Test… → `age` into
+      **Test Variable(s)** → set **Test Value** to `40` → **OK**.
+      Expect too: SPSS reports the CI **of the difference** — `[−3.0657, 5.0657]` — not of
+      the mean. Both are right; just read the column heading before calling a mismatch.
+      Syntax: `T-TEST /TESTVAL=40 /VARIABLES=age.`
 
 - [ ] **Independent-samples t-test…** — same menu.
       Recipe: `y = income`, `g = gender`, `g1 = Male`, `g2 = Female`.
@@ -874,7 +981,13 @@ referenced*. "Loaded" and "active" are not states.
       ⚠️ That Levene figure is **mean-centred**, which is what SPSS does. R's
       `car::leveneTest` defaults to **median**-centred and will give a different number.
       If CrossTab disagrees with SPSS here, check the centring before filing.
-      Reference: SPSS `T-TEST GROUPS=gender(1 2) /VARIABLES=income.`
+      Reference: **SPSS** — Analyze ▸ Compare Means ▸ Independent-Samples T Test… →
+      `income` into **Test Variable(s)**, `gender` into **Grouping Variable** →
+      **Define Groups…** → Group 1 = `1`, Group 2 = `2` → **Continue** → **OK**.
+      Expect too: **Levene’s test appears automatically** in the left of the output
+      table, and SPSS prints both the "Equal variances assumed" and "not assumed" rows —
+      no extra ticking needed.
+      Syntax: `T-TEST GROUPS=gender(1 2) /VARIABLES=income.`
 
 - [ ] **Paired-samples t-test…** — same menu.
       Recipe: needs two commensurate variables — `Transform ▸ Compute` an
@@ -882,7 +995,9 @@ referenced*. "Loaded" and "active" are not states.
       Expect: mean difference exactly **−2.0000**, SD of differences **0**, and a
       graceful refusal or an infinite/undefined t rather than a crash (zero variance is
       the edge case worth checking). Then try a noisier computed pair for a real t.
-      Reference: SPSS `T-TEST PAIRS=age WITH age_plus (PAIRED).`
+      Reference: **SPSS** — Analyze ▸ Compare Means ▸ Paired-Samples T Test… → click
+      the two variables so they land as **Variable1** and **Variable2** of Pair 1 → **OK**.
+      Syntax: `T-TEST PAIRS=age WITH age_plus (PAIRED).`
 
 - [ ] **One-way ANOVA…** — same menu.
       Recipe: `y = income`, `g = education`.
@@ -891,7 +1006,11 @@ referenced*. "Loaded" and "active" are not states.
       **F = 149.5**, p = **1.24 × 10⁻¹⁴**. Group means **30350.00 / 43836.36 / 60355.56**.
       Levene's (mean-centred) F = **0.0519**, p = **.9495**.
       Also check: post-hoc comparisons if offered, and that N = 28.
-      Reference: SPSS `ONEWAY income BY education /STATISTICS HOMOGENEITY
+      Reference: **SPSS** — Analyze ▸ Compare Means ▸ One-Way ANOVA… → `income` into
+      **Dependent List**, `education` into **Factor** → **Options…** → tick
+      **Descriptive** and **Homogeneity of variance test** → **Continue** →
+      **Post Hoc…** → tick **Tukey** → **Continue** → **OK**.
+      Syntax: `ONEWAY income BY education /STATISTICS DESCRIPTIVES HOMOGENEITY
       /POSTHOC=TUKEY ALPHA(0.05).`
 
 - [ ] **Factorial ANOVA…** — `Comparison ▸ Factorial ANOVA…`
@@ -903,8 +1022,12 @@ referenced*. "Loaded" and "active" are not states.
       unbalanced data. This plugin is already validated for Type III against desktop R
       (`scripts/validation/factorial-type3.R`) — so if it disagrees with SPSS, suspect
       the comparison, not the plugin.
-      Reference: SPSS `UNIANOVA income BY gender education
-      /DESIGN=gender education gender*education.`
+      Reference: **SPSS** — Analyze ▸ General Linear Model ▸ Univariate… → `income` into
+      **Dependent Variable**, `gender` and `education` into **Fixed Factor(s)** →
+      **Model…** → leave **Full factorial** and **Type III** (both defaults) →
+      **Continue** → **Options…** → tick **Descriptive statistics** → **Continue** → **OK**.
+      Syntax: `UNIANOVA income BY gender education /DESIGN=gender education
+      gender*education.`
 
 - [ ] **Repeated-measures ANOVA…** — same menu.
       Recipe: compute three related variables (e.g. `t1 = age`, `t2 = age + 3`,
@@ -912,8 +1035,12 @@ referenced*. "Loaded" and "active" are not states.
       Expect: within-subjects effect; **Mauchly's test of sphericity**; and the
       Greenhouse–Geisser and Huynh–Feldt corrected rows. Already validated against
       desktop R (`scripts/validation/sphericity-reference.R`).
-      Reference: SPSS `GLM t1 t2 t3 /WSFACTOR=time 3 /PRINT=ETASQ
-      /EMMEANS=TABLES(time).`
+      Reference: **SPSS** — Analyze ▸ General Linear Model ▸ Repeated Measures… →
+      **Within-Subject Factor Name** = `time`, **Number of Levels** = `3` → **Add** →
+      **Define** → move `t1`, `t2`, `t3` into the three slots → **OK**.
+      Expect too: **Mauchly’s Test of Sphericity** and the Greenhouse–Geisser /
+      Huynh–Feldt rows are printed automatically.
+      Syntax: `GLM t1 t2 t3 /WSFACTOR=time 3 /PRINT=ETASQ.`
 
 ## 16. Compare Means *(2 items)*
 
@@ -923,15 +1050,21 @@ referenced*. "Loaded" and "active" are not states.
       means** adjusted for `age`. Compare the unadjusted means (§15's 30350 / 43836 /
       60356) with the adjusted ones — they should differ, since age correlates with
       income at r = .95.
-      Reference: SPSS `UNIANOVA income BY education WITH age
+      Reference: **SPSS** — Analyze ▸ General Linear Model ▸ Univariate… → `income` into
+      **Dependent Variable**, `education` into **Fixed Factor(s)**, `age` into
+      **Covariate(s)** → **Options…** → move `education` into **Display Means for** →
+      **Continue** → **OK**. The adjusted means are the **Estimated Marginal Means** table.
+      Syntax: `UNIANOVA income BY education WITH age
       /EMMEANS=TABLES(education) WITH(age=MEAN) /DESIGN=age education.`
 
 - [ ] **Repeated-measures / mixed ANOVA…** — same menu.
       Recipe: `within = t1, t2, t3` (from §15), `between = gender`.
       Expect: within effect, between effect, and the within × between interaction;
       sphericity corrections present.
-      Reference: SPSS `GLM t1 t2 t3 BY gender /WSFACTOR=time 3.`
-      (Uses `afex`/`emmeans` under the hood — SPSS is the better check here.)
+      Reference: **SPSS** — Analyze ▸ General Linear Model ▸ Repeated Measures… set up as
+      in §15, then additionally move `gender` into **Between-Subjects Factor(s)** → **OK**.
+      Read the *Tests of Within-Subjects Effects* table for `time` and `time*gender`.
+      Syntax: `GLM t1 t2 t3 BY gender /WSFACTOR=time 3.`
 
 ## 17. Correlation *(2 items)*
 
@@ -942,7 +1075,11 @@ referenced*. "Loaded" and "active" are not states.
       ⚠️ Kendall has three variants (tau-a, tau-b, tau-c). The figure above is **tau-b**
       (tie-corrected), which is also what SPSS reports. A noticeably different value may
       just be a different variant.
-      Reference: SPSS `CORRELATIONS /VARIABLES=age income.` and
+      Reference: **SPSS** — Analyze ▸ Correlate ▸ Bivariate… → `age` and `income` into
+      **Variables** → tick **Pearson** (then re-run ticking **Spearman**, then
+      **Kendall’s tau-b**) → **OK**. For the Pearson CI you need SPSS 27+:
+      **Confidence interval** ▸ tick *Estimate confidence interval* in the same dialog.
+      Syntax: `CORRELATIONS /VARIABLES=age income.` and
       `NONPAR CORR /VARIABLES=age income /PRINT=BOTH.`
 
 - [ ] **Partial / part correlation…** — same menu.
@@ -951,7 +1088,13 @@ referenced*. "Loaded" and "active" are not states.
       association), df = n − 2 − (number of controls) = 25.
       Then switch to **part (semi-partial)** and confirm the value changes — the two are
       different statistics and must not return the same number.
-      Reference: SPSS `PARTIAL CORR /VARIABLES=age income BY education /SIGNIFICANCE=TWOTAIL.`
+      Reference: **SPSS** — Analyze ▸ Correlate ▸ Partial… → `age` and `income` into
+      **Variables**, `education` into **Controlling for** → **Options…** → tick
+      **Zero-order correlations** (so you can see both at once) → **Continue** → **OK**.
+      Expect too: SPSS’s PARTIAL CORR does **not** do part (semi-partial) correlations.
+      For those use Analyze ▸ Regression ▸ Linear… ▸ **Statistics…** ▸ tick
+      **Part and partial correlations** — they appear in the Coefficients table.
+      Syntax: `PARTIAL CORR /VARIABLES=age income BY education /SIGNIFICANCE=TWOTAIL.`
 
 ## 18. Regression *(21 items)*
 
@@ -961,8 +1104,12 @@ referenced*. "Loaded" and "active" are not states.
       `age` **514.7** (SE 145.6, t = 3.535, p = .0016); `education` **8563.7**
       (SE 1971.0, t = 4.345, p = .0002). Residual SE **3000** on **25** df.
       R² = **.9461**, adjusted R² = **.9418**, F(2, 25) = **219.4**, p < .0001.
-      Reference: SPSS `REGRESSION /DEPENDENT income /METHOD=ENTER age education
-      /STATISTICS COEFF OUTS R ANOVA COLLIN.`
+      Reference: **SPSS** — Analyze ▸ Regression ▸ Linear… → `income` into
+      **Dependent**, `age` and `education` into **Independent(s)**, Method = **Enter** →
+      **Statistics…** → tick **Estimates**, **Confidence intervals**, **Model fit** and
+      **Collinearity diagnostics** → **Continue** → **OK**.
+      Syntax: `REGRESSION /STATISTICS COEFF OUTS CI(95) R ANOVA COLLIN
+      /DEPENDENT income /METHOD=ENTER age education.`
 
 - [ ] **Binary Logistic…** — `Regression ▸ Binary Logistic…`
       Recipe: `dv = gender`, `modelled = Female`, `ivs = age, income`.
@@ -977,73 +1124,118 @@ referenced*. "Loaded" and "active" are not states.
       level choice deliberately.
       Also check: `cats` + `ref` (categorical predictors with a chosen reference
       category), and the `opts` extras.
-      Reference: SPSS `LOGISTIC REGRESSION VARIABLES gender WITH age income
-      /PRINT=CI(95).` SPSS models the **higher** code by default — mind the direction.
+      Reference: **SPSS** — Analyze ▸ Regression ▸ Binary Logistic… → `gender` into
+      **Dependent**, `age` and `income` into **Covariates** → **Options…** → tick
+      **CI for exp(B) 95%** → **Continue** → **OK**. For a categorical predictor use
+      **Categorical…** → move it across → set **Reference Category** to First or Last →
+      **Change** → **Continue**.
+      ⚠️ SPSS models the **higher** code of the dependent (so Female = 2 here, matching
+      the numbers above). It gives you no choice in the dialog — to model the other
+      level you must recode. CrossTab asks you outright, so make sure the two agree
+      before comparing signs.
+      Syntax: `LOGISTIC REGRESSION VARIABLES gender WITH age income /PRINT=CI(95).`
 
 - [ ] **Ordinal logistic regression…** — `Regression ▸ …`
       Recipe: `dv = education` (ordered), `ivs = age, income`.
       Expect: threshold/intercept terms (k − 1 = 2 of them) plus one slope per
       predictor; a proportional-odds assumption note.
-      Reference: SPSS `PLUM education WITH age income /LINK=LOGIT /PRINT=PARAMETER.`
-      (Analyze ▸ Regression ▸ Ordinal.) ⚠️ `MASS::polr` reports slopes with the
-      **opposite sign convention** to SPSS PLUM — a uniform sign flip is expected, not
-      a bug.
+      Reference: **SPSS** — Analyze ▸ Regression ▸ Ordinal… → `education` into
+      **Dependent**, `age` and `income` into **Covariate(s)** → **Output…** → tick
+      **Parameter estimates** and **Test of parallel lines** → **Continue** → **OK**.
+      ⚠️ SPSS PLUM prints `location` coefficients with the **opposite sign convention**
+      to R’s `MASS::polr`. A uniform sign flip across every predictor is expected; a
+      flip on only some of them is not.
+      Syntax: `PLUM education WITH age income /LINK=LOGIT /PRINT=PARAMETER TPARALLEL.`
 
 - [ ] **Multinomial logistic regression…** — same menu.
       Recipe: `dv = region`, `base = North`, `ivs = age, income`.
       Expect: two contrasts (Central vs North, South vs North), each with its own
       coefficients; changing `base` re-expresses them.
-      Reference: SPSS `NOMREG region (BASE=1) WITH age income /PRINT=PARAMETER.`
+      Reference: **SPSS** — Analyze ▸ Regression ▸ Multinomial Logistic… → `region` into
+      **Dependent** → click **Reference Category…** → choose **First Category** (to match
+      `base = North`) → **Continue** → `age` and `income` into **Covariate(s)** → **OK**.
+      Syntax: `NOMREG region (BASE=FIRST ORDER=ASCENDING) WITH age income
+      /PRINT=PARAMETER.`
 
 - [ ] **Poisson regression…** — `Regression ▸ …`
       Recipe: `dv = household_size` (spatial demo), `ivs = income_k, commute_min`.
       Expect: log-link coefficients, IRRs if offered, deviance and AIC.
-      Reference: SPSS `GENLIN household_size WITH income_k commute_min
+      Reference: **SPSS** — Analyze ▸ Generalized Linear Models ▸ Generalized Linear
+      Models… → on the **Type of Model** tab pick **Poisson loglinear** → **Response**
+      tab: `household_size` as Dependent Variable → **Predictors** tab: the numeric
+      predictors into **Covariates** → **Model** tab: move them in as **Main effects** →
+      **Statistics** tab: tick **Include exponential parameter estimates** for IRRs →
+      **OK**.
+      Syntax: `GENLIN household_size WITH income_k commute_min
       /MODEL income_k commute_min DISTRIBUTION=POISSON LINK=LOG.`
-      Or Stata `poisson household_size income_k commute_min`.
 
 - [ ] **Negative binomial regression…** — same menu.
       Recipe: same variables.
       Expect: an extra **dispersion/theta** parameter, and an AIC that should *beat*
       Poisson's when the data are overdispersed (here they may not be — equal fit is a
       legitimate result).
-      Reference: Stata `nbreg household_size income_k commute_min`, or SPSS `GENLIN …
-      DISTRIBUTION=NEGBIN(MLE)`.
+      Reference: **SPSS** — Analyze ▸ **Generalized Linear Models** ▸ **Generalized
+      Linear Models…** → **Type of Model** tab: pick **Negative binomial** and set its
+      parameter to **Estimate value** (not the default fixed 1) so the dispersion is
+      fitted → **Response** tab: `household_size` as Dependent → **Predictors** tab: the
+      numeric predictors into **Covariates** → **Model** tab: move them in as main
+      effects → **OK**.
+      **Stata** — `nbreg household_size income_k commute_min`.
+      Syntax: `GENLIN household_size WITH income_k commute_min
+      /MODEL income_k commute_min DISTRIBUTION=NEGBIN(MLE) LINK=LOG.`
+      Syntax: `GENLIN household_size WITH income_k commute_min
+      /MODEL income_k commute_min DISTRIBUTION=NEGBIN(MLE) LINK=LOG.`
+      **Stata** — `nbreg household_size income_k commute_min`.
 
 - [ ] **Cluster-robust regression…** — `Regression ▸ …`
       Recipe: `y = income_k`, `ivs = satisfaction, commute_min`, `cluster = district`
       (spatial demo).
       Expect: **coefficients identical to OLS**, standard errors different. That is the
       sharpest check available — if the point estimates move, something is wrong.
-      Reference: Stata `regress income_k satisfaction commute_min, vce(cluster district)`.
-      R: `lmtest::coeftest(m, vcov = sandwich::vcovCL(m, cluster = ~district))`.
+      Reference: **Stata is the clean comparator** — `regress income_k satisfaction
+      commute_min, vce(cluster district)`. SPSS has no cluster-robust option on
+      Analyze ▸ Regression ▸ Linear; the nearest is Analyze ▸ Generalized Estimating
+      Equations with `district` as the subject variable, which is a **different
+      estimator** and will not match. **R** —
+      `lmtest::coeftest(m, vcov = sandwich::vcovCL(m, cluster = ~district))`.
 
 - [ ] **Robust (HC) regression…** — `Econometrics ▸ Robust (HC) regression…`
       Recipe: `dv = income`, `ivs = age, education`.
       Expect: same coefficients as §18's Linear (**6959.8 / 514.7 / 8563.7**), different
       SEs. Note which HC variant (HC0–HC3) is used.
-      Reference: Stata `regress income age education, robust` (= HC1).
-      R: `coeftest(m, vcov = vcovHC(m, type = "HC1"))`.
+      Reference: **SPSS 27 and later** — Analyze ▸ Regression ▸ Linear… → the
+      **Bootstrap/Robust** options (the `/ROBUST` subcommand). If your version does not
+      offer it, use **Stata** — `regress income age education, robust` (that is HC1).
+      **R** — `lmtest::coeftest(m, vcov = sandwich::vcovHC(m, type = "HC1"))`.
+      ⚠️ HC0, HC1, HC2 and HC3 give different standard errors on n = 28. Note which
+      variant CrossTab reports before comparing — Stata’s `robust` is HC1, R’s
+      `vcovHC` default is HC3.
 
 - [ ] **Quantile regression…** — `Regression ▸ Quantile regression…`
       Recipe: `y = income`, `ivs = age, education`, `taus = 0.25, 0.5, 0.75`.
       Expect: three sets of coefficients; the median (τ = .5) set should sit near the
       OLS estimates but not equal them.
-      Reference: Stata `qreg income age education, quantile(.5)`.
-      R: `quantreg::rq(income ~ age + education, tau = 0.5)`.
+      Reference: **no SPSS equivalent.** **Stata** — `qreg income age education,
+      quantile(.25)` and again for `.5` and `.75`. **R** —
+      `quantreg::rq(income ~ age + education, tau = c(.25, .5, .75))` (the package this
+      wraps, so extract the generated R and compare directly).
 
 - [ ] **Tobit (censored) regression…** — same menu.
       Recipe: `y = income`, `ivs = age, education`, `left = 30000`.
       Expect: coefficients larger in magnitude than OLS (censoring attenuates OLS), plus
       a sigma estimate.
-      Reference: Stata `tobit income age education, ll(30000)`.
+      Reference: **no SPSS equivalent.** **Stata** — `tobit income age education,
+      ll(30000)`. **R** — `AER::tobit(income ~ age + education, left = 30000)`.
 
 - [ ] **Heckman selection model…** — same menu.
       Recipe: `y = income`, `outIv = age`, `sel =` a binary selection variable,
       `selIv = education`.
       Expect: the outcome equation, the selection equation, and **rho / lambda** (the
       inverse Mills ratio term).
-      Reference: Stata `heckman income age, select(sel = education)`.
+      Reference: **no SPSS equivalent.** **Stata** — `heckman income age, select(sel =
+      education)` for the ML version, or add `, twostep` for the two-step. **R** —
+      `sampleSelection::heckit`. ⚠️ ML and two-step give different standard errors;
+      check which CrossTab ran.
 
 - [ ] **Multiple imputation regression…** — `Regression ▸ …`
       Recipe: `y = income` (it has 2 missing), `ivs = age, education`, `m = 5`.
@@ -1051,52 +1243,76 @@ referenced*. "Loaded" and "active" are not states.
       plus fraction-of-missing-information or similar diagnostics. Re-running with the
       same `m` should be reproducible (check whether a seed is exposed; if the numbers
       wander between runs with no seed, that is a finding).
-      Reference: SPSS Missing Values module (`MULTIPLE IMPUTATION`), or Stata
-      `mi impute chained … ; mi estimate: regress income age education`.
+      Reference: **SPSS** (Missing Values module) — Analyze ▸ Multiple Imputation ▸
+      **Impute Missing Data Values…** → variables into **Variables in Model** →
+      **Imputations** = 5 → choose a **New Dataset** for the output → **OK**. Then run
+      Analyze ▸ Regression ▸ Linear on that dataset: SPSS splits by `Imputation_` and
+      adds a **Pooled** row automatically, which is the row to compare.
+      **Stata** — `mi set wide; mi register imputed income; mi impute chained`
+      `(regress) income = age education, add(5); mi estimate: regress income age education`.
 
 - [ ] **Marginal effects (AME / MEM)…** — `Regression ▸ …`
       Recipe: `dv = gender`, `yes = Female`, `ivs = age, income`, family = binomial,
       kind = AME; then kind = MEM.
       Expect: AME ≠ MEM (average of the marginal effects vs the effect at the means);
       both on the probability scale, so values roughly within ±1.
-      Reference: Stata `logit female age income` then `margins, dydx(*)` (AME) and
-      `margins, dydx(*) atmeans` (MEM). R: `margins` / `marginaleffects`.
+      Reference: **no SPSS equivalent for AME.** **Stata** is the standard here —
+      `logit female age income` then `margins, dydx(*)` for the AME and
+      `margins, dydx(*) atmeans` for the MEM. **R** — `marginaleffects::avg_slopes(m)`
+      and `slopes(m, newdata = "mean")`. SPSS’s EMMEANS gives predicted *values*, not
+      marginal effects — do not substitute it.
 
 - [ ] **Mediation (X → M → Y)…** — `Regression ▸ …`
       Recipe: `x = education`, `m = age`, `y = income`, se = bootstrap.
       Expect: direct, indirect and total effects, with **total ≈ direct + indirect**
       (check that identity — it is a free arithmetic test), and a bootstrap CI for the
       indirect effect.
-      Reference: Hayes **PROCESS** macro for SPSS, model 4. Or R
-      `lavaan` with a defined `ab := a*b` parameter. Stata `sem`.
+      Reference: **SPSS with the PROCESS macro** (Hayes, free from processmacro.org;
+      install it once via Extensions ▸ Utilities ▸ Install Custom Dialog) — then
+      Analyze ▸ Regression ▸ **PROCESS** → **Model number 4** → Y = `income`,
+      X = `education`, M = `age` → Bootstrap samples = 5000 → **OK**.
+      **R** — `lavaan` with an `ab := a*b` defined parameter. **Stata** — `sem` with
+      `estat teffects`.
 
 - [ ] **Moderation (X × W)…** — same menu.
       Recipe: `y = income`, `x = age`, `w = education`.
       Expect: the interaction term, and simple slopes / conditional effects at levels
       of `w`.
-      Reference: PROCESS model 1, or SPSS `UNIANOVA` with the product term.
+      Reference: **SPSS with PROCESS** — Analyze ▸ Regression ▸ **PROCESS** →
+      **Model number 1** → Y = `income`, X = `age`, W = `education` → under *Options*
+      tick **mean center** and **Johnson-Neyman** → **OK**.
+      Without PROCESS: Transform ▸ Compute the product term yourself, then
+      Analyze ▸ Regression ▸ Linear with `age`, `education` and `age_x_education`.
 
 - [ ] **Difference-in-differences…** — `Regression ▸ …`
       Recipe: needs a treat and a post indicator — compute both, then `y = income`,
       `treat`, `treated` level, `post`, `after` level.
       Expect: the **interaction** coefficient is the DiD estimate; the two main effects
       are reported too.
-      Reference: Stata `didregress (income) (treat#post)`, or plain
-      `regress income treat##post`.
+      Reference: **Stata** — `didregress (income) (treat), group(treat) time(post)`,
+      or the transparent version `regress income treat##post` where the
+      **interaction coefficient is the DiD estimate**. SPSS: compute the interaction by
+      hand and use Analyze ▸ Regression ▸ Linear, or
+      Analyze ▸ General Linear Model ▸ Univariate with both as fixed factors.
 
 - [ ] **Regression discontinuity…** — same menu.
       Recipe: `y = income`, `run = age`, `cutoff = 40`.
       Expect: a local estimate at the cutoff with a bandwidth reported; the bandwidth
       choice should be visible and changeable.
-      Reference: Stata/R `rdrobust` (same package CrossTab wraps — so extract its R and
-      compare directly).
+      Reference: **no SPSS equivalent.** **Stata / R** — `rdrobust`, the same package
+      CrossTab wraps: `rdrobust(y, x, c = 40)` in R or `rdrobust y x, c(40)` in Stata.
+      Because it is the same package, extract the generated R from
+      **Edit ▸ History…** and expect an exact match, not an approximate one.
 
 - [ ] **Matching (propensity / nearest neighbour)…** — same menu.
       Recipe: `y = income`, `treat`, `treated` level, `covs = age, education`.
       Expect: a balance table before/after matching, matched n, and the treatment
       effect. Covariate balance should **improve** after matching.
-      Reference: R `MatchIt` (the wrapped package), Stata `teffects psmatch` or
-      `psmatch2`.
+      Reference: **no SPSS equivalent** (the PS Matching extension exists but is a
+      third-party R wrapper). **Stata** — `teffects psmatch (income) (treat age
+      education)`, or `psmatch2 treat age education, outcome(income)`. **R** —
+      `MatchIt::matchit(treat ~ age + education)` then `summary()` for the balance table
+      — the package this wraps.
 
 - [ ] **Linear mixed model…** — `Regression ▸ Linear mixed model…`
       Recipe: `y = income_k`, `fixed = satisfaction, commute_min`, `group = district`
@@ -1104,17 +1320,30 @@ referenced*. "Loaded" and "active" are not states.
       Expect: fixed effects with SEs, random-effect variances, and an **ICC** between
       0 and 1. The random-slope version should report a slope variance and a
       correlation.
-      Reference: SPSS `MIXED income_k WITH satisfaction commute_min
+      Reference: **SPSS** — Analyze ▸ Mixed Models ▸ **Linear…** → in the first dialog
+      move `district` into **Subjects** → **Continue** → `income_k` into **Dependent
+      Variable**, the predictors into **Covariate(s)** → **Fixed…** → move them in as
+      main effects → **Continue** → **Random…** → tick **Include intercept**, move
+      `district` into **Combinations** → **Continue** → **Statistics…** → tick
+      **Parameter estimates** and **Covariances of random effects** → **OK**.
+      ⚠️ Compare the **estimates and variance components** first. SPSS defaults to
+      Satterthwaite-style denominator df and `lmerTest` to its own approximation, so the
+      p-values can differ slightly while the model is identical.
+      Syntax: `MIXED income_k WITH satisfaction commute_min
       /FIXED=satisfaction commute_min /RANDOM=INTERCEPT | SUBJECT(district)
-      /METHOD=REML.` ⚠️ `lme4` and SPSS MIXED can differ slightly in df method —
-      compare the **estimates and variances**, not the p-values, first.
+      /METHOD=REML /PRINT=SOLUTION.`
 
 - [ ] **Logistic mixed model…** — same menu.
       Recipe: `y = gender`, `yes = Female`, `fixed = age`, `group = region`.
       Expect: log-odds fixed effects plus a group variance. With only 3 regions and
       30 cases expect a convergence warning — a *readable* warning is the pass
       condition, not silence and not a crash.
-      Reference: Stata `melogit`, R `glmer(..., family = binomial)`.
+      Reference: **SPSS** — Analyze ▸ Mixed Models ▸ **Generalized Linear Mixed
+      Models…** → **Data Structure** tab: drag `region` to **Subjects** → **Fields &
+      Effects** tab: Target = `gender`, target distribution **Binary logistic** → add
+      `age` as a fixed effect → add a random intercept for `region` → **Run**.
+      **Stata** — `melogit female age || region:`. **R** —
+      `lme4::glmer(female ~ age + (1 | region), family = binomial)`.
 
 - [ ] **Meta-analysis…** — `Regression ▸ Meta-analysis…`
       Recipe: needs an effect-size column and a precision column — make a small
@@ -1122,16 +1351,22 @@ referenced*. "Loaded" and "active" are not states.
       `yi`, `prec = sei`, precType = SE, model = random.
       Expect: pooled estimate with CI, **τ² / I² / Q** heterogeneity statistics, and a
       forest plot. Fixed-effect mode should give a *narrower* CI than random-effects.
-      Reference: Stata `meta set yi sei` then `meta summarize`, or R
-      `metafor::rma(yi, sei = sei)` (the wrapped package). RevMan for the Cochrane view.
-      No SPSS equivalent.
+      Reference: **SPSS 28 and later** added Analyze ▸ **Meta Analysis** ▸ Continuous
+      Outcomes ▸ *Raw Means / Effect Sizes…*; if your version has no Meta Analysis menu,
+      use one of: **Stata** — `meta set yi sei, random` then `meta summarize` and
+      `meta forestplot`; **R** — `metafor::rma(yi, sei = sei)` (the package this wraps);
+      or **RevMan** for the Cochrane presentation.
+      Expect too: whichever you use, fixed-effect mode must give a **narrower** CI than
+      random-effects on the same data — a free check that the model switch is wired.
 
 - [ ] **Response surface (second-order)…** — `Regression ▸ …`
       Recipe: `y = income_k`, `factors = satisfaction, commute_min`.
       Expect: linear, quadratic and cross-product terms; a stationary-point analysis
       and eigenvalues saying whether it is a maximum, minimum or saddle.
-      Reference: Minitab or Design-Expert (the field standards), or R `rsm::rsm`.
-      No SPSS equivalent.
+      Reference: **no SPSS equivalent.** The field standards are **Minitab** (Stat ▸ DOE ▸
+      Response Surface ▸ Analyze Response Surface Design) and **Design-Expert**. **R** —
+      `rsm::rsm(y ~ SO(x1, x2))` then `summary()` for the stationary point and
+      eigenvalues — the package this wraps.
 ## 19. Categorical *(6 items)*
 
 - [ ] **Chi-square goodness-of-fit…** — `Categorical ▸ …`
@@ -1139,8 +1374,11 @@ referenced*. "Loaded" and "active" are not states.
       Expect, exactly: observed **11 / 10 / 9**, χ² = **0.2000**, df = **2**,
       p = **.9048**. Then supply unequal expected proportions (e.g. `0.5, 0.3, 0.2`)
       and confirm the statistic changes and that the proportions are normalised.
-      Reference: SPSS `NPAR TESTS /CHISQUARE=region.` and
-      `/EXPECTED=0.5 0.3 0.2`.
+      Reference: **SPSS** — Analyze ▸ Nonparametric Tests ▸ **Legacy Dialogs** ▸
+      Chi-square… → `region` into **Test Variable List** → leave *Expected Values* on
+      **All categories equal** → **OK**. For unequal expectations choose **Values** and
+      **Add** each one in category order.
+      Syntax: `NPAR TESTS /CHISQUARE=region.` and `/EXPECTED=0.5 0.3 0.2`.
 
 - [ ] **One-proportion test…** — same menu.
       Recipe: `variable = gender`, `category = Female`, `p0 = 0.5`.
@@ -1148,8 +1386,13 @@ referenced*. "Loaded" and "active" are not states.
       cannot reject). Then try `p0 = 0.3` and expect a significant result.
       Note whether it reports the **exact binomial** or the normal approximation — both
       are defensible, but the label must match the method.
-      Reference: SPSS `NPAR TESTS /BINOMIAL(0.5)=gender.` (exact).
-      R: `binom.test(15, 30, 0.5)` vs `prop.test(15, 30, 0.5)`.
+      Reference: **SPSS** — Analyze ▸ Nonparametric Tests ▸ **Legacy Dialogs** ▸
+      Binomial… → `gender` into **Test Variable List** → **Test Proportion** = `0.50` →
+      **OK**. That gives the **exact** binomial p.
+      Expect too: SPSS 27+ also has Analyze ▸ Compare Means and Proportions ▸
+      **One-Sample Proportions…** for the normal-approximation version — a different
+      p-value by design.
+      Syntax: `NPAR TESTS /BINOMIAL(0.5)=gender.`
 
 - [ ] **Two-proportion test…** — same menu.
       Recipe: `outcome = education` recoded to `hs` (see §14), `success = 2`,
@@ -1157,23 +1400,35 @@ referenced*. "Loaded" and "active" are not states.
       Expect: the two proportions (**8/15 = .5333** and **14/15 = .9333**), their
       difference, a CI for the difference, and a p-value consistent with §14's 2×2
       (χ² = 6.1364 uncorrected, p = .0132).
-      Reference: R `prop.test(c(8, 14), c(15, 15))`. SPSS: via Crosstabs with
-      `/STATISTICS=CHISQ`.
+      Reference: **SPSS 27 and later** — Analyze ▸ Compare Means and Proportions ▸
+      **Independent-Samples Proportions…** → `hs` as the test variable with its success
+      level, `gender` as the grouping variable. On older versions go through
+      Analyze ▸ Descriptive Statistics ▸ Crosstabs… ▸ **Statistics…** ▸ **Chi-square**,
+      which gives the same test if not the same framing.
+      **R** — `prop.test(c(8, 14), c(15, 15))`.
 
 - [ ] **McNemar's test (paired)…** — same menu.
       Recipe: two binary variables measured on the same cases — compute
       `rich1 = income > 40000` and `rich2 = income > 45000`.
       Expect: the 2×2 agreement table, and the test driven **only by the discordant
       cells**. Check that reversing the two variables gives the same p (it must).
-      Reference: SPSS `NPAR TESTS /MCNEMAR=rich1 WITH rich2.`
+      Reference: **SPSS** — Analyze ▸ Nonparametric Tests ▸ **Legacy Dialogs** ▸
+      **2 Related Samples…** → click `rich1` then `rich2` so they pair up → **untick
+      Wilcoxon** and **tick McNemar** → **OK**.
+      Syntax: `NPAR TESTS /MCNEMAR=rich1 WITH rich2 (PAIRED).`
 
 - [ ] **Log-linear model…** — same menu.
       Recipe: `vars = gender, education, region`, model = saturated, then independence.
       Expect: cell counts with fitted values, parameter estimates, and a
       goodness-of-fit (deviance/Pearson) that is **0 for the saturated model** — a
       useful free check.
-      Reference: SPSS `GENLOG gender education region /MODEL=POISSON
-      /DESIGN gender education region.` (or `HILOGLINEAR`.)
+      Reference: **SPSS** — Analyze ▸ **Loglinear** ▸ **General…** → the three variables
+      into **Factor(s)** → **Model…** → **Saturated** for the saturated fit, or
+      **Custom** with only main effects for independence → **Continue** → **Options…** →
+      tick **Estimates** → **Continue** → **OK**. Analyze ▸ Loglinear ▸ **Model
+      Selection…** does the hierarchical backward elimination instead.
+      Syntax: `GENLOG gender education region /MODEL=POISSON
+      /DESIGN gender education region.`
 
 - [ ] **Risk / odds ratios (2×2)…** — `Categorical ▸ Risk / odds ratios (2×2)…`
       Recipe: `exposure = gender`, `exposed = Male`, `outcome = hs`, `case = 1`.
@@ -1184,8 +1439,16 @@ referenced*. "Loaded" and "active" are not states.
       ⚠️ **Test the level choice deliberately.** This table was once labelled backwards
       for non-0/1 coded variables (#186) — swap `exposed` and `case` to the other levels
       and confirm the numbers move the way they should, rather than trusting the layout.
-      Reference: SPSS `CROSSTABS /TABLES=gender BY hs /STATISTICS=RISK.`
-      Stata `cs hs gender` (cohort) / `cc hs gender` (case-control).
+      Reference: **SPSS** — Analyze ▸ Descriptive Statistics ▸ Crosstabs… → exposure
+      into **Row(s)**, outcome into **Column(s)** → **Statistics…** → tick **Risk** →
+      **Continue** → **OK**. The "Risk Estimate" table gives the odds ratio and both
+      relative risks with CIs.
+      ⚠️ SPSS keys the table off the **first row and first column as they sort**, so the
+      OR can come out inverted relative to CrossTab’s explicit `exposed`/`case` choice.
+      If one reports 11.26 and the other 0.089, that is the same result read the other
+      way round — check before filing.
+      **Stata** — `cs outcome exposure` (cohort) or `cc outcome exposure` (case-control).
+      Syntax: `CROSSTABS /TABLES=gender BY hs /STATISTICS=RISK.`
 
 ## 20. Nonparametric *(3 items)*
 
@@ -1197,20 +1460,34 @@ referenced*. "Loaded" and "active" are not states.
       p. Ties are present here, so the tie-corrected variance matters. This plugin has a
       validated ranking path (`scripts/validation/mannwhitney-subset-ranks.R`) — ranks
       must be computed on the **subset actually analysed**, not on all 30 cases.
-      Reference: SPSS `NPAR TESTS /M-W= income BY gender(1 2).`
+      Reference: **SPSS** — Analyze ▸ Nonparametric Tests ▸ **Legacy Dialogs** ▸
+      **2 Independent Samples…** → `income` into **Test Variable List**, `gender` into
+      **Grouping Variable** → **Define Groups…** → `1` and `2` → **Continue** → tick
+      **Mann-Whitney U** → **Exact…** → choose **Exact** to get the exact p as well →
+      **Continue** → **OK**.
+      Expect too: SPSS prints **U**, **Wilcoxon W**, **Z** and an asymptotic p, plus the
+      exact p if you asked. R’s `W = 43.5` is SPSS’s **U**.
+      Syntax: `NPAR TESTS /M-W= income BY gender(1 2) /METHOD=EXACT.`
 
 - [ ] **Wilcoxon signed-rank (paired)…** — same menu.
       Recipe: `x1 = age`, `x2 =` a computed `income/1000`.
       Expect, exactly: V = **12.5**, p < .0001.
       Then pair a variable with itself and expect a graceful "no non-zero differences"
       message rather than a crash.
-      Reference: SPSS `NPAR TESTS /WILCOXON=age WITH income_k (PAIRED).`
+      Reference: **SPSS** — Analyze ▸ Nonparametric Tests ▸ **Legacy Dialogs** ▸
+      **2 Related Samples…** → click the two variables so they pair → tick **Wilcoxon**
+      (the default) → **OK**.
+      Syntax: `NPAR TESTS /WILCOXON=age WITH income_k (PAIRED).`
 
 - [ ] **Kruskal-Wallis (k groups)…** — same menu.
       Recipe: `y = income`, `g = education`.
       Expect, exactly: χ² = **23.8801**, df = **2**, p < .0001. Mean ranks per group
       should be monotonically increasing here.
-      Reference: SPSS `NPAR TESTS /K-W=income BY education(1 3).`
+      Reference: **SPSS** — Analyze ▸ Nonparametric Tests ▸ **Legacy Dialogs** ▸
+      **K Independent Samples…** → `income` into **Test Variable List**, `education`
+      into **Grouping Variable** → **Define Range…** → Minimum `1`, Maximum `3` →
+      **Continue** → tick **Kruskal-Wallis H** → **OK**.
+      Syntax: `NPAR TESTS /K-W=income BY education(1 3).`
 
 ## 21. Assumptions *(2 items)*
 
@@ -1219,15 +1496,24 @@ referenced*. "Loaded" and "active" are not states.
       Expect: W and p per variable, N = 30 for age and **28** for income. `age` is
       near-uniform so expect a *low* W with a possibly significant p — a significant
       result is a correct finding here, not a malfunction.
-      Reference: SPSS `EXAMINE VARIABLES=age income /PLOT NPPLOT.` (Shapiro–Wilk
-      appears in the Tests of Normality table.)
+      Reference: **SPSS** — Analyze ▸ Descriptive Statistics ▸ **Explore…** → `age` and
+      `income` into **Dependent List** → **Plots…** → tick **Normality plots with
+      tests** → **Continue** → **OK**. Read the **Tests of Normality** table; SPSS prints
+      Kolmogorov–Smirnov beside Shapiro–Wilk, so take the right column.
+      Syntax: `EXAMINE VARIABLES=age income /PLOT NPPLOT.`
 
 - [ ] **Homogeneity of variance (Levene's)…** — same menu.
       Recipe: `outcome = income`, `groups = education`.
       Expect, exactly: F = **0.0519**, p = **.9495** — *if* mean-centred, which is what
       SPSS does. A median-centred (Brown–Forsythe) variant would give a different
       number; the output should say which it is.
-      Reference: SPSS `ONEWAY income BY education /STATISTICS HOMOGENEITY.`
+      Reference: **SPSS** — Analyze ▸ Compare Means ▸ One-Way ANOVA… → `income` into
+      **Dependent List**, `education` into **Factor** → **Options…** → tick
+      **Homogeneity of variance test** → **Continue** → **OK**.
+      ⚠️ SPSS’s "Based on Mean" row is the one quoted above. It also prints "Based on
+      Median" (Brown–Forsythe), which is what R’s `car::leveneTest` gives by **default** —
+      so three numbers are in play and you must match the row to the method.
+      Syntax: `ONEWAY income BY education /STATISTICS HOMOGENEITY.`
 
 ## 22. Scale *(3 items)*
 
@@ -1243,9 +1529,14 @@ referenced*. "Loaded" and "active" are not states.
       covariance), not an error — these four variables are not a scale, which is exactly
       why they make a good test. The pass condition is that it reports the numbers above
       without choking on the negative.
-      Reference: SPSS `RELIABILITY /VARIABLES=satisfaction commute_min income_k
-      household_size /MODEL=ALPHA /SUMMARY=TOTAL.` SPSS's "Cronbach's Alpha" is the raw
-      one; "Based on Standardized Items" is the second.
+      Reference: **SPSS** — Analyze ▸ **Scale** ▸ **Reliability Analysis…** → the four
+      variables into **Items** → **Model** = **Alpha** → **Statistics…** → tick
+      **Scale**, **Scale if item deleted** and **Correlations** → **Continue** → **OK**.
+      Expect too: SPSS’s "Cronbach’s Alpha" column is the **raw** figure (.147) and
+      "Cronbach’s Alpha Based on Standardized Items" is the second (.161). The
+      alpha-if-deleted column is in the **Item-Total Statistics** table.
+      Syntax: `RELIABILITY /VARIABLES=satisfaction commute_min income_k household_size
+      /MODEL=ALPHA /SUMMARY=TOTAL /STATISTICS=CORR.`
 
 - [ ] **Inter-rater agreement…** — `Scale ▸ Inter-rater agreement…`
       Recipe: compute two rater columns that mostly agree, then `vars = r1, r2`,
@@ -1254,9 +1545,15 @@ referenced*. "Loaded" and "active" are not states.
       variant differing from unweighted on ordinal data.
       Also check the **`weight` input accepts a labelled weight variable** (#188 — a
       labelled weight was once not selectable).
-      Reference: SPSS `CROSSTABS /TABLES=r1 BY r2 /STATISTICS=KAPPA.` (Cohen's only;
-      SPSS has no native Fleiss or Krippendorff.) R `irr` package — the one wrapped
-      here — for the rest.
+      Reference: **SPSS, for Cohen’s kappa only** — Analyze ▸ Descriptive Statistics ▸
+      Crosstabs… → `r1` into **Row(s)**, `r2` into **Column(s)** → **Statistics…** → tick
+      **Kappa** → **Continue** → **OK**. For **ICC**: Analyze ▸ Scale ▸ Reliability
+      Analysis… → **Statistics…** → tick **Intraclass correlation coefficient** and pick
+      the model (Two-Way Mixed / Absolute Agreement is the usual choice).
+      ⚠️ SPSS has **no Fleiss kappa and no Krippendorff’s alpha** natively (there are
+      third-party extension bundles). For those, **R** — `irr::kappam.fleiss()` and
+      `irr::kripp.alpha()`, which is the package CrossTab wraps.
+      Syntax: `CROSSTABS /TABLES=r1 BY r2 /STATISTICS=KAPPA.`
 
 - [ ] **Inter-coder agreement from codings…** — same menu.
       Recipe: in the **Coding** workspace, have two coders code the same documents,
@@ -1266,9 +1563,12 @@ referenced*. "Loaded" and "active" are not states.
       **specific disagreements** (#202) so you can go look at them.
       Expect too: a clear message when there is only one coder, rather than a spurious
       perfect-agreement result.
-      Reference: no mainstream GUI does this from coded qualitative data —
-      **Dedoose** and NVivo's coding-comparison query are the comparators. For
-      arithmetic, export the per-unit code assignments and run `irr::kappa2` in R.
+      Reference: **no mainstream GUI does this from coded qualitative data.** The
+      comparators are **Dedoose** (Analyze ▸ Training Center for its own kappa) and
+      **NVivo** (Explore ▸ Coding Comparison query, which gives kappa and percentage
+      agreement per node per pair of coders).
+      For the arithmetic: quantitise to a column per code (§36.4), export it, and run
+      `irr::kappa2(cbind(coderA, coderB))` in R on the same per-unit assignments.
 
 ## 23. Graphs *(11 items)* 🔢
 
@@ -1283,26 +1583,42 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Expect: bars spanning 25–61 for `age`, with the bar counts summing to **30**; for
       `income` they must sum to **28** (the two −99s are missing, not zero). A sensible
       bin count — Sturges on n = 30 gives **6** bins.
-      Reference: SPSS `GRAPH /HISTOGRAM=age.` Bin *boundaries* legitimately differ
-      between packages; the **total** must not.
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Histogram…** → `age` into
+      **Variable** → **OK**. (Chart Builder route: Graphs ▸ Chart Builder… ▸ Histogram
+      gallery ▸ drag the first icon up ▸ drag `age` to the X axis ▸ OK.)
+      ⚠️ Bin *boundaries* legitimately differ between packages — SPSS picks its own
+      anchor. The **total** of the bar counts must not differ: 30 for `age`, 28 for
+      `income`.
+      Syntax: `GRAPH /HISTOGRAM=age.`
 
 - [ ] **Bar chart…**
       Recipe: **Graphs ▸ Bar chart…** → `v = education` → OK.
       Expect, exactly: three bars of **8 / 12 / 10**, labelled High school / Bachelor /
       Postgraduate on the axis (value labels, not the codes 1/2/3).
-      Reference: SPSS `GRAPH /BAR(SIMPLE)=COUNT BY education.`
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Bar…** → **Simple** →
+      *Data in Chart Are* **Summaries for groups of cases** → **Define** →
+      **Category Axis** = `education`, *Bars Represent* = **N of cases** → **OK**.
+      Syntax: `GRAPH /BAR(SIMPLE)=COUNT BY education.`
 
 - [ ] **Line chart…**
       Recipe: **Graphs ▸ Line chart…** → `v = age` → OK.
       Expect: one point per case in **file order** (45, 33, 28, 52 …), 30 points, joined.
-      Reference: SPSS `GRAPH /LINE(SIMPLE)=VALUE(age).`
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Line…** → **Simple** →
+      *Data in Chart Are* **Values of individual cases** → **Define** → *Line Represents*
+      = `age` → **OK**. That is the setting that gives one point per case in file order
+      rather than a summary.
+      Syntax: `GRAPH /LINE(SIMPLE)=VALUE(age).`
 
 - [ ] **Scatter…**
       Recipe: **Graphs ▸ Scatter…** → `x = age`, `y = income` → OK.
       Expect: **28 points** (two dropped for missing income) and a visibly strong
       positive relationship — r = .9515. If a fit line is offered, its slope should match
       a simple regression of income on age.
-      Reference: SPSS `GRAPH /SCATTERPLOT(BIVAR)=age WITH income.`
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Scatter/Dot…** → **Simple
+      Scatter** → **Define** → **Y Axis** = `income`, **X Axis** = `age` → **OK**. For
+      the fit line, double-click the chart in the output to open the Chart Editor →
+      Elements ▸ **Fit Line at Total**.
+      Syntax: `GRAPH /SCATTERPLOT(BIVAR)=age WITH income.`
 
 - [ ] **Trends over time…**
       Recipe: **Graphs ▸ Trends over time…** → `x = age`, `g = gender`,
@@ -1310,7 +1626,11 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       percent.
       Expect: one line per group; the values change with each summary; in **percent**
       mode the lines sum to 100 within each x.
-      Reference: SPSS `GRAPH /LINE(MULTIPLE)=MEAN(income) BY age BY gender.`
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Line…** → **Multiple** →
+      **Summaries for groups of cases** → **Define** → **Category Axis** = `age`,
+      **Define Lines by** = `gender`, *Lines Represent* = **Other statistic** → move
+      `income` in and set it to **Mean** → **OK**.
+      Syntax: `GRAPH /LINE(MULTIPLE)=MEAN(income) BY age BY gender.`
 
 - [ ] **Boxplot…**
       Recipe: **Graphs ▸ Boxplot…** → `y = age` → OK. Then again with `g = gender`.
@@ -1320,13 +1640,20 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       ⚠️ Whichever quartile definition it uses, it must be **the same one** the
       Frequencies Statistics panel uses (§14). Two different definitions inside one app
       is the real bug to look for here.
-      Reference: SPSS `EXAMINE VARIABLES=age /PLOT BOXPLOT /STATISTICS NONE.`
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Boxplot…** → **Simple** →
+      **Summaries of separate variables** → **Define** → `age` into **Boxes Represent**
+      → **OK**. For the grouped version choose **Summaries for groups of cases** with
+      `gender` as the Category Axis.
+      Syntax: `EXAMINE VARIABLES=age /PLOT BOXPLOT /STATISTICS NONE.`
 
 - [ ] **Pie chart…**
       Recipe: **Graphs ▸ Pie chart…** → `v = region` → OK.
       Expect, exactly: three slices of **36.7 / 33.3 / 30.0 %** (11 / 10 / 9 cases),
       summing to 100.
-      Reference: SPSS `GRAPH /PIE=COUNT BY region.`
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Pie…** → **Summaries for
+      groups of cases** → **Define** → **Define Slices by** = `region`, *Slices Represent*
+      = **N of cases** → **OK**.
+      Syntax: `GRAPH /PIE=COUNT BY region.`
 
 - [ ] **Bar chart with error bars…**
       Recipe: **Graphs ▸ Bar chart with error bars…** → `y = income`, `g = gender` → OK.
@@ -1336,22 +1663,33 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       **10427.10**; its 95% CI is roughly ±2.16 × SEM (t₍₁₃₎ = 2.160). All three must
       differ from each other, and turning the bars off must leave the bar **heights**
       unchanged.
-      Reference: SPSS `GRAPH /BAR(SIMPLE)=MEAN(income) BY gender /INTERVAL CI(95.0).`
+      Reference: **SPSS** — Graphs ▸ **Legacy Dialogs** ▸ **Error Bar…** → **Simple** →
+      **Summaries for groups of cases** → **Define** → **Variable** = `income`,
+      **Category Axis** = `gender`, then set *Bars Represent* to **Confidence interval
+      for mean** (95%), and re-run choosing **Standard error of mean** and **Standard
+      deviation** — that dropdown is exactly the switch being tested → **OK**.
+      Syntax: `GRAPH /ERRORBAR(CI 95)=income BY gender.`
 
 - [ ] **Violin plot…**
       Recipe: **Graphs ▸ Violin plot…** → `y = income`, `g = gender` → OK. Then turn on
       the data-point overlay.
       Expect: a density silhouette per group, **open axes** (the Prism convention — no
       box frame), and the individual points overlaid when asked. 14 points per group.
-      Reference: GraphPad **Prism** is the convention being matched; R
-      `ggplot2::geom_violin` for the shape.
+      Reference: **no SPSS equivalent** — neither Chart Builder nor the Legacy Dialogs
+      draw violins. **GraphPad Prism** is the convention being matched: New ▸ Column
+      table ▸ enter the groups ▸ Graph type **Violin plot**. **R** —
+      `ggplot(d, aes(gender, income)) + geom_violin() + geom_jitter()`.
 
 - [ ] **Dot plot (column scatter)…**
       Recipe: **Graphs ▸ Dot plot (column scatter)…** → `y = income`, `g = gender` → OK.
       Expect: every case as its own point, jittered or offset so none are hidden —
       **14 visible points per group**. Count them; overplotting that hides cases is the
       failure.
-      Reference: Prism's column scatter.
+      Reference: **GraphPad Prism** — New ▸ Column table ▸ Graph type **Scatter dot
+      plot**, which is the convention here. **SPSS** gets close with Graphs ▸ Legacy
+      Dialogs ▸ Scatter/Dot… ▸ **Simple Dot**, but it bins rather than jittering, so the
+      "every case visible" property is not directly comparable. **R** —
+      `geom_jitter(width = 0.15)`.
 
 - [ ] **Before-after plot…**
       Recipe: first **Transform ▸ Compute variable…** twice to make `t1 = age` and
@@ -1360,7 +1698,10 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Expect: one line per case joining its two values, all sloping up by 5; with
       `idVar` set the lines are identifiable. The case with a missing value is **dropped
       visibly**, not drawn down to zero — that is the thing to check.
-      Reference: Prism's before-after plot.
+      Reference: **GraphPad Prism** — New ▸ Column table ▸ Graph type **Before-after**.
+      **SPSS** approximates it with Graphs ▸ Legacy Dialogs ▸ Line… ▸ **Multiple** ▸
+      **Values of individual cases**, with `t1` and `t2` as the lines. **R** —
+      `geom_line(aes(group = id))` over a long-format pair.
 
 ## 24. Multivariate *(10 items)*
 
@@ -1375,7 +1716,15 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       changes, that is worth recording as a reproducibility gap (it matters for the
       History/replay promise). Also confirm `standardize = no` gives a *different*
       answer — unstandardised, `income_k` dominates by scale.
-      Reference: SPSS `QUICK CLUSTER satisfaction commute_min income_k household_size
+      Reference: **SPSS** — first standardise, because **QUICK CLUSTER does not**:
+      Analyze ▸ Descriptive Statistics ▸ Descriptives… → the four variables → tick
+      **Save standardized values as variables** → **OK** (this creates `Zsatisfaction`
+      and friends). Then Analyze ▸ **Classify** ▸ **K-Means Cluster…** → the four `Z`
+      variables into **Variables** → **Number of Clusters** = `3` → **Save…** → tick
+      **Cluster membership** → **Continue** → **OK**.
+      ⚠️ That standardise-first step is the most common reason a k-means result does not
+      match: unstandardised, `income_k` dominates purely by scale.
+      Syntax: `QUICK CLUSTER Zsatisfaction Zcommute_min Zincome_k Zhousehold_size
       /CRITERIA=CLUSTER(3) /PRINT=INITIAL CLUSTER.`
 
 - [ ] **Factor analysis…** — `Multivariate ▸ Factor analysis…`
@@ -1391,8 +1740,18 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       ⚠️ **Loading signs are arbitrary** — a whole column flipped is not a bug.
       Compare absolute values. Also note SPSS's default extraction is PCA with
       eigenvalue > 1, which here would retain **2** components.
-      Reference: SPSS `FACTOR /VARIABLES=… /EXTRACTION PC /ROTATION VARIMAX
-      /PRINT INITIAL EXTRACTION ROTATION.`
+      Reference: **SPSS** — Analyze ▸ **Dimension Reduction** ▸ **Factor…** → the four
+      variables into **Variables** → **Extraction…** → Method **Principal components**,
+      and either leave *Based on Eigenvalue > 1* or set **Fixed number of factors** = 2 →
+      **Continue** → **Rotation…** → **Varimax** → **Continue** → **Descriptives…** →
+      tick **Initial solution** → **Continue** → **OK**.
+      Expect too: the eigenvalues above are the **Total Variance Explained** table’s
+      "Initial Eigenvalues" column. SPSS’s default (eigenvalue > 1) retains **2**
+      components here. ⚠️ Loading **signs are arbitrary** — a whole flipped column is not
+      a difference; compare absolute values.
+      Syntax: `FACTOR /VARIABLES=satisfaction commute_min income_k household_size
+      /EXTRACTION PC /CRITERIA FACTORS(2) /ROTATION VARIMAX /PRINT INITIAL EXTRACTION
+      ROTATION.`
 
 - [ ] **MANOVA…** — `Multivariate ▸ MANOVA…`
       Recipe: `dvs = age, income`, `group = education`.
@@ -1400,43 +1759,70 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Hotelling's trace, Roy's largest root** — each with F, df and p; plus the
       univariate follow-ups. With 2 DVs and 3 groups the four tests will *not* be
       identical (they coincide only when the hypothesis df is 1).
-      Reference: SPSS `GLM age income BY education /PRINT=HOMOGENEITY.`
+      Reference: **SPSS** — Analyze ▸ **General Linear Model** ▸ **Multivariate…** →
+      `age` and `income` into **Dependent Variables**, `education` into **Fixed
+      Factor(s)** → **Options…** → tick **Homogeneity tests** → **Continue** → **OK**.
+      Expect too: all four multivariate tests (Pillai, Wilks, Hotelling, Roy) print
+      automatically in the *Multivariate Tests* table, with the univariate follow-ups
+      below in *Tests of Between-Subjects Effects*.
+      Syntax: `GLM age income BY education /PRINT=HOMOGENEITY.`
 
 - [ ] **Confirmatory factor analysis…** — `Multivariate ▸ Confirmatory factor analysis…`
       Recipe: spatial demo, `items =` the four numeric variables, `factorName = F1`.
       Expect: standardised loadings, and fit indices — **χ², df, CFI, TLI, RMSEA,
       SRMR**. With four weakly-correlated items expect *good* fit for a 1-factor model
       (there is little covariance to explain) and small loadings. Both are correct.
-      Reference: R `lavaan::cfa` (the wrapped package — extract the generated syntax and
-      compare directly). SPSS needs the separate **Amos** product; Stata `sem`.
+      Reference: **not in SPSS itself** — it needs **IBM SPSS Amos**, a separate product:
+      draw the latent with its four indicators, then Analyze ▸ Calculate Estimates, and
+      read CFI/TLI/RMSEA from View ▸ Text Output ▸ Model Fit. **R** —
+      `lavaan::cfa("F1 =~ satisfaction + commute_min + income_k + household_size")`,
+      the package CrossTab wraps — so extract its generated syntax from
+      **Edit ▸ History…** and expect an exact match. **Stata** — `sem (F1 -> ...)`.
 
 - [ ] **Latent growth curve…** — same menu.
       Recipe: `waves = t1, t2, t3` (computed in §15), `quadratic = no`, then yes.
       Expect: intercept and slope means and variances, and their covariance; the
       quadratic version adds a second-order term.
-      Reference: Mplus is the field standard; `lavaan::growth` is what this wraps.
+      Reference: **Mplus** is the field standard (`MODEL: i s | t1@0 t2@1 t3@2;`).
+      **R** — `lavaan::growth()`, the function this wraps. **Stata** — `sem` with
+      latent intercept and slope, or `mixed` for the equivalent random-coefficient form.
+      Not available in SPSS without Amos.
 
 - [ ] **Structural equation model (syntax)…** — same menu.
       Recipe: `vars =` four numeric variables, `model =` lavaan syntax, e.g.
       `income_k ~ satisfaction + commute_min`.
       Expect: parameter estimates and fit indices; a **syntax error in the model text
       produces a readable error**, not a silent empty result. Test that deliberately.
-      Reference: `lavaan` directly, or Stata `sem`.
+      Reference: **IBM SPSS Amos** (draw the model), or **R** — `lavaan::sem(model)`
+      with the same syntax string you typed in, which makes this the easiest of the SEM
+      family to check: paste the identical model text into lavaan. **Stata** — `sem`.
 
 - [ ] **Correspondence analysis…** — `Multivariate ▸ Correspondence analysis…`
       Recipe: `rowvar = gender`, `colvar = education`.
       Expect: row and column scores on 2 dimensions, **total inertia = χ²/n =
       8.1000/30 = .2700**, and a biplot. That inertia identity is a free arithmetic
       check against §14.
-      Reference: SPSS `CORRESPONDENCE TABLE=gender(1 2) BY education(1 3).`
-      (Analyze ▸ Dimension Reduction ▸ Correspondence Analysis.)
+      Reference: **SPSS** — Analyze ▸ **Dimension Reduction** ▸ **Correspondence
+      Analysis…** → `gender` into **Row** → **Define Range…** → Minimum 1, Maximum 2 →
+      **Update** → **Continue**; same for `education` into **Column** with 1–3 →
+      **Statistics…** → tick **Correspondence table** and **Row/Column profiles** →
+      **Continue** → **Plots…** → tick **Biplot** → **Continue** → **OK**.
+      Expect too: total inertia = χ²/n = 8.1000/30 = **.2700**, which is a free
+      cross-check against §14.
+      Syntax: `CORRESPONDENCE TABLE=gender(1 2) BY education(1 3).`
 
 - [ ] **Multidimensional scaling (MDS)…** — same menu.
       Recipe: spatial demo, `vars =` four numeric variables, `label = zip_code`.
       Expect: a 2-D configuration plot plus a **stress** value; stress should fall as
       dimensions increase.
-      Reference: SPSS `PROXSCAL` or `ALSCAL` (Analyze ▸ Scale ▸ Multidimensional
-      Scaling).
+      Reference: **SPSS** — Analyze ▸ **Scale** ▸ **Multidimensional Scaling
+      (PROXSCAL)…** → choose **Create proximities from data** → the four variables into
+      **Variables** → **Define** the distance measure (Euclidean) → **Model…** → set
+      **Dimensions** minimum 2 maximum 2 → **Continue** → **Plots…** → tick **Common
+      space** → **OK**. (The older ALSCAL dialog sits beside it and reports Kruskal’s
+      stress instead — different number, same idea.)
+      Syntax: `PROXSCAL VARIABLES=satisfaction commute_min income_k household_size
+      /SHAPE=LOWER /INITIAL=SIMPLEX /CRITERIA=DIMENSIONS(2,2).`
 
 - [ ] **Network analysis (edge list)…** — `Multivariate ▸ Network analysis…`
       Recipe: build a tiny edge list dataset (`from`, `to` columns, ~10 edges with one
@@ -1445,8 +1831,11 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       and a graph figure. **The hub must have the highest degree** — the simplest
       possible sanity check. Then `directed = yes` and confirm in-degree and out-degree
       separate.
-      Reference: UCINET or Gephi for the field; R `igraph` (wrapped here) for exact
-      numbers. No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **Gephi** is the easiest GUI check: File ▸
+      Import spreadsheet ▸ *Edges table* ▸ then Statistics ▸ run **Average Degree** and
+      **Betweenness Centrality**. **UCINET** is the other field standard. **R** —
+      `igraph::degree()`, `betweenness()`, `closeness()`, `edge_density()` — the package
+      this wraps.
 
 - [ ] **Diversity & ordination…** — `Multivariate ▸ Diversity & ordination…`
       Recipe: a species-abundance table (make ~8 sites × 5 species), `species =` the
@@ -1454,8 +1843,11 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Expect: **Shannon H′, Simpson, species richness** per site, plus an ordination
       plot. Sanity checks that cost nothing: a site with one species present has
       H′ = **0**; richness equals the count of non-zero columns.
-      Reference: R `vegan::diversity` (wrapped here). PRIMER or PAST are the field
-      standards. No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **PAST** (free, palaeontological statistics) is
+      the quickest GUI: paste the site × species matrix, then Diversity ▸ **Diversity
+      indices**. **PRIMER** is the commercial standard. **R** —
+      `vegan::diversity(m, "shannon")`, `diversity(m, "simpson")`,
+      `specnumber(m)` — the package this wraps.
 
 ## 25. Time Series *(8 items)*
 
@@ -1463,55 +1855,88 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Recipe: `series = age` (as a stand-in series), `maxlag = 10`.
       Expect: ACF at **lag 0 = exactly 1.0**, confidence bands drawn at ±1.96/√n, and
       PACF alongside. That lag-0 value is a free check.
-      Reference: SPSS `ACF VARIABLES=age /MXAUTO 10.` (Analyze ▸ Forecasting ▸
-      Autocorrelations — needs the Forecasting module.) R `acf(x, lag.max = 10)`.
+      Reference: **SPSS** (Forecasting module) — Analyze ▸ **Forecasting** ▸
+      **Autocorrelations…** → the series into **Variables** → tick **Autocorrelations**
+      and **Partial autocorrelations** → **Options…** → *Maximum Number of Lags* = `10` →
+      **Continue** → **OK**.
+      Syntax: `ACF VARIABLES=age /MXAUTO 10 /PARTIAL.`
 
 - [ ] **Stationarity tests (ADF, KPSS)…** — same menu.
       Recipe: `series = age`.
       Expect: ADF statistic and p, KPSS statistic and p, with their **opposite null
       hypotheses** stated (ADF null = non-stationary; KPSS null = stationary). If the
       output does not say which null is which, that is a usability finding.
-      Reference: Stata `dfuller` / `kpss`; R `tseries::adf.test` / `kpss.test`.
+      Reference: **no SPSS equivalent.** **Stata** — `dfuller age, lags(1)` and
+      `kpss age`. **R** — `tseries::adf.test(x)` and `tseries::kpss.test(x)`, the
+      package this wraps. **EViews** — View ▸ Unit Root Test.
+      ⚠️ Their nulls are opposite (ADF: non-stationary; KPSS: stationary), so "both
+      significant" is a real and common state, not a contradiction.
 
 - [ ] **Decomposition (STL)…** — same menu.
       Recipe: a series with a visible cycle; `frequency = 12`.
       Expect: trend + seasonal + remainder panels, and **trend + seasonal + remainder ≈
       the original** at every point (additive identity — check a couple of points).
-      Reference: R `stl()`; SPSS `SEASON` (Forecasting module).
+      Reference: **SPSS** (Forecasting module) — Analyze ▸ **Forecasting** ▸ **Seasonal
+      Decomposition…** → the series into **Variables** → *Model* **Additive** →
+      **OK**. It saves the components back as new variables (`SAF`, `STC`, `ERR`).
+      ⚠️ **This is not STL.** SPSS runs a Census Method I / X-11 style decomposition, a
+      different algorithm, so the components will not match term for term. The matching
+      reference is **R** — `stl(ts(x, frequency = 12), s.window = "periodic")`.
+      Either way the additive identity holds, which is the part worth checking.
+      Syntax: `SEASON VARIABLES=x /MODEL=ADDITIVE /MA=CENTERED.`
 
 - [ ] **ARIMA forecast (auto)…** — same menu.
       Recipe: `series =` a trending series, `h = 6`, `frequency = 1`.
       Expect: a chosen (p,d,q) order, coefficients, AIC, and 6 forecasts with widening
       prediction intervals. **Intervals must widen** with the horizon.
-      Reference: R `forecast::auto.arima` (wrapped here). SPSS `TSMODEL` with
-      `MODELTYPE=ARIMA` and Expert Modeler, Forecasting module.
+      Reference: **SPSS** (Forecasting module) — Analyze ▸ **Forecasting** ▸ **Create
+      Traditional Models…** → the series into **Dependent Variables** → **Method** =
+      **Expert Modeler** (or ARIMA with an explicit order) → **Statistics** tab: tick
+      **Parameter estimates** → **Plots** tab: tick **Series** with *Confidence
+      intervals* → **Options** tab: set the forecast horizon → **OK**.
+      ⚠️ SPSS’s Expert Modeler and R’s `auto.arima` use different selection criteria and
+      will sometimes pick **different orders** on the same series. Compare the fit of a
+      *specified* order if you want an exact check.
+      Syntax: `TSMODEL /MODELSUMMARY PRINT=[MODELFIT] /AUXILIARY CILEVEL=95
+      /MODELDETAILS PRINT=[PARAMETERS].`
 
 - [ ] **Mann-Kendall trend + Sen's slope…** — `Time Series ▸ …`
       Recipe: `series =` a monotonically increasing variable.
       Expect: S, tau, p, and Sen's slope. **A perfectly monotonic series gives
       tau = 1.0** — do that case first, it is unambiguous.
-      Reference: R `trend::mk.test` and `trend::sens.slope` (wrapped here); XLSTAT
-      for a GUI. No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **R** — `trend::mk.test(x)` and
+      `trend::sens.slope(x)`, the package this wraps. **XLSTAT** has it as a GUI add-in
+      for Excel (Time ▸ Mann-Kendall trend test), which is the usual route in
+      environmental work. **Stata** — the `mktrend` user package.
 
 - [ ] **Cointegration (Johansen)…** — same menu.
       Recipe: `series =` 2–3 related series, `ecdet = const`, `K = 2`.
       Expect: trace and max-eigenvalue statistics with critical values at 10/5/1%, and
       a stated number of cointegrating relations.
-      Reference: Stata `vecrank`; EViews; R `urca::ca.jo` (wrapped). No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **Stata** — `vecrank y1 y2, lags(2) trend(constant)`
+      gives the trace and max-eigenvalue statistics with critical values. **EViews** —
+      View ▸ Cointegration Test. **R** — `urca::ca.jo(data, type = "trace", K = 2,
+      ecdet = "const")`, the package this wraps.
 
 - [ ] **GARCH volatility…** — same menu.
       Recipe: `series =` a return-like series, `q = 1`, `p = 1`, dist = normal.
       Expect: omega, alpha, beta estimates with **alpha + beta < 1** (the stationarity
       condition) and a conditional-volatility plot. Then try the t distribution and
       confirm the shape parameter appears.
-      Reference: Stata `arch y, arch(1) garch(1)`; EViews; R `fGarch::garchFit`.
+      Reference: **no SPSS equivalent.** **Stata** — `arch y, arch(1) garch(1)`.
+      **EViews** — Estimate Equation ▸ Method **ARCH**. **R** —
+      `fGarch::garchFit(~ garch(1, 1), data = x)`, the package this wraps.
+      Expect too: whichever you use, **alpha + beta < 1** or the model is not
+      stationary — a free check on the output.
 
 - [ ] **Vector autoregression (VAR)…** — `Time Series ▸ …`
       Recipe: `series =` 2–3 series, `lag = 2`, `type = const`, `horizon = 10`.
       Expect: one equation per series, Granger-causality tests if offered, and
       **impulse-response functions** over 10 periods. A stable VAR's IRFs should decay.
-      Reference: Stata `var y1 y2, lags(1/2)` then `irf create`; R `vars::VAR`
-      (wrapped). No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **Stata** — `var y1 y2, lags(1/2)` then
+      `irf create m, step(10) set(m)` and `irf graph irf`. **EViews** — Quick ▸ Estimate
+      VAR. **R** — `vars::VAR(data, p = 2, type = "const")` then `irf(fit, n.ahead = 10)`,
+      the package this wraps.
 
 ## 26. Econometrics *(3 items — "Robust (HC)" is in §18)*
 
@@ -1522,8 +1947,15 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       (first-stage F), Wu–Hausman endogeneity, and Sargan** (only when
       over-identified; with exactly one instrument Sargan is not computable and should
       say so rather than print a zero).
-      Reference: Stata `ivregress 2sls income age (education = z)` then
-      `estat firststage` / `estat endogenous`. R `AER::ivreg` (wrapped).
+      Reference: **SPSS can do the estimates** — Analyze ▸ Regression ▸ **2-Stage Least
+      Squares…** → `income` into **Dependent**, `education` into **Explanatory**, your
+      instrument into **Instrumental** (and `age` into *both* Explanatory and
+      Instrumental, since exogenous controls are their own instruments) → **OK**.
+      ⚠️ SPSS gives you **no weak-instrument F, no Wu–Hausman and no Sargan** — the three
+      things that decide whether the IV is any good. For those use **Stata** —
+      `ivregress 2sls income age (education = z)` then `estat firststage` and
+      `estat endogenous` / `estat overid`. **R** — `AER::ivreg(...)` then
+      `summary(fit, diagnostics = TRUE)`, the package this wraps.
 
 - [ ] **Panel regression (FE / RE)…** — same menu.
       Recipe: spatial demo as a pseudo-panel: `dv = income_k`,
@@ -1532,8 +1964,12 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Expect: FE drops anything time-invariant and reports within-R²; RE reports theta
       and the between/within variance split. **FE and RE coefficients must differ**;
       if they are identical something is not switching.
-      Reference: Stata `xtset district t` then `xtreg income_k satisfaction
-      commute_min, fe` / `, re`. R `plm` (wrapped).
+      Reference: **SPSS has no xtreg.** Random effects can be approximated with
+      Analyze ▸ Mixed Models ▸ Linear… (random intercept by `district`), but fixed
+      effects would mean entering dummies by hand. **Stata** is the comparator —
+      `xtset district t` then `xtreg income_k satisfaction commute_min, fe` and again
+      `, re`, with `hausman` to compare them. **R** —
+      `plm(..., model = "within")` / `"random"`, the package this wraps.
 
 ## 27. Survival *(2 items)*
 
@@ -1543,14 +1979,25 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Expect: a step-function survival curve starting at **S(0) = 1.0**, median survival
       with CI, censoring marks, and a log-rank χ² with df = groups − 1.
       Free checks: the curve never increases; with no censoring the final S hits 0.
-      Reference: SPSS `KM time BY group /STATUS=status(1) /PRINT TABLE MEAN
-      /COMPARE.` (Analyze ▸ Survival ▸ Kaplan-Meier.)
+      Reference: **SPSS** — Analyze ▸ **Survival** ▸ **Kaplan-Meier…** → `time` into
+      **Time**, `status` into **Status** → click **Define Event…** → *Single value* `1` →
+      **Continue** → `group` into **Factor** → **Compare Factor…** → tick **Log rank** →
+      **Continue** → **Options…** → tick **Survival table(s)**, **Mean and median
+      survival** and the **Survival** plot → **Continue** → **OK**.
+      Syntax: `KM time BY group /STATUS=status(1) /PRINT TABLE MEAN /PLOT SURVIVAL
+      /COMPARE.`
 
 - [ ] **Cox proportional hazards…** — same menu.
       Recipe: same data, `preds =` one or two covariates.
       Expect: coefficients with **hazard ratios = exp(β)** (check that identity
       yourself), SEs, a likelihood-ratio test, and ideally a PH-assumption diagnostic.
-      Reference: SPSS `COXREG time /STATUS=status(1) /METHOD=ENTER x.`
+      Reference: **SPSS** — Analyze ▸ **Survival** ▸ **Cox Regression…** → `time` into
+      **Time**, `status` into **Status** → **Define Event…** → `1` → **Continue** → the
+      predictors into **Covariates** → **Options…** → tick **CI for exp(B) 95%** →
+      **Continue** → **OK**. The *exp(B)* column is the hazard ratio.
+      Expect too: check `exp(B)` equals `exp` of the coefficient yourself — a free
+      arithmetic test that costs one calculator keystroke.
+      Syntax: `COXREG time /STATUS=status(1) /METHOD=ENTER x /PRINT=CI(95).`
 
 ## 28. Survey *(3 items)*
 
@@ -1562,23 +2009,39 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       means should differ unless the weight is constant — set the weight to a constant
       column of 1s and confirm you get the plain mean **45292.8571** back. That is the
       best single test of a weighting path.
-      Reference: Stata `svyset [pw=w], strata(s) psu(c)` then `svy: mean income`.
-      SPSS needs the **Complex Samples** module (`CSPLAN` + `CSDESCRIPTIVES`);
-      plain `WEIGHT BY` gives the right point estimate but the **wrong** SE.
+      Reference: **SPSS** (Complex Samples module) — two steps. First Analyze ▸
+      **Complex Samples** ▸ **Prepare for Analysis…** → *Create a plan file* → name it →
+      **Next** → put `strata` into **Stratify By**, `cluster` into **Clusters**, the
+      weight into **Sample Weight** → **Next** through the rest → **Finish**. Then
+      Analyze ▸ **Complex Samples** ▸ **Descriptives…** → select that plan file →
+      `income` into **Measures** → **OK**.
+      ⚠️ **Data ▸ Weight Cases is not a substitute.** It gives the right point estimate
+      and the **wrong standard error** — it treats the weights as case replication and
+      ignores the design entirely. That mismatch is the single most common fake bug in
+      survey work.
+      **Stata** — `svyset cluster [pw=w], strata(strata)` then `svy: mean income`.
 
 - [ ] **Weighted crosstab…** — same menu.
       Recipe: `rowvar = gender`, `colvar = education`, `weight`, optional strata/cluster.
       Expect: weighted proportions with design-based CIs and a **Rao–Scott adjusted**
       chi-square — not the naive Pearson χ² on weighted counts.
-      Reference: Stata `svy: tabulate gender education, row se`.
-      SPSS `CSTABULATE`.
+      Reference: **SPSS** — Analyze ▸ **Complex Samples** ▸ **Crosstabs…** → the plan
+      file from above → `gender` into **Rows**, `education` into **Columns** →
+      **Statistics…** → tick **Row percentages** and their **Standard error** and
+      **Confidence interval** → **Continue** → **OK**.
+      Expect too: the chi-square reported must be the **Rao–Scott adjusted** one, not a
+      naive Pearson χ² on weighted counts.
+      **Stata** — `svy: tabulate gender education, row se`.
 
 - [ ] **Survey regression…** — same menu.
       Recipe: `dv = income`, `ivs = age, education`, family = gaussian, `weight`;
       then `dv = gender`, `yes = Female`, family = binomial.
       Expect: design-based SEs; with a constant weight and no strata/cluster the
       **coefficients should match ordinary regression** (§18: 6959.8 / 514.7 / 8563.7).
-      Reference: Stata `svy: regress` / `svy: logistic`. SPSS `CSGLM` / `CSLOGISTIC`.
+      Reference: **SPSS** — Analyze ▸ **Complex Samples** ▸ **General Linear Model…**
+      for the gaussian case, or **Logistic Regression…** for the binary one; both take
+      the plan file first, then the dependent and predictors as usual.
+      **Stata** — `svy: regress income age education` and `svy: logistic female age`.
 
 ## 29. Spatial *(3 items)*
 
@@ -1587,15 +2050,24 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Expect: Moran's I in roughly [−1, 1], its expectation **E[I] = −1/(n−1)**, a
       variance, a z-score and p. Check E[I] against that formula — it is exact.
       Randomly-arranged values should give I ≈ E[I].
-      Reference: **GeoDa** (the field's GUI standard), ArcGIS Pro ▸ Spatial
-      Autocorrelation, or R `spdep::moran.test` (wrapped here). No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **GeoDa** (free) is the field’s GUI: File ▸ Open
+      your data → Tools ▸ **Weights Manager** ▸ *Create* ▸ **K-Nearest Neighbors** with
+      k = 4 → Create → then **Space** ▸ **Univariate Moran’s I** → pick the variable and
+      the weights you just made. Right-click the scatterplot ▸ *Randomization* ▸ 999
+      permutations for the pseudo p-value.
+      **R** — `spdep::moran.test(x, nb2listw(knn2nb(knearneigh(coords, k = 4))))`, the
+      package this wraps. **ArcGIS Pro** — Spatial Statistics ▸ Spatial Autocorrelation
+      (Global Moran’s I).
 
 - [ ] **Spatial lag regression…** — same menu.
       Recipe: `outcome`, `preds`, coordinates, `k = 4`.
       Expect: the **spatial autoregressive parameter ρ** with a significance test, plus
       the usual coefficients and a log-likelihood/AIC. ρ must be reported — it is the
       whole point of the model.
-      Reference: GeoDa, or R `spatialreg::lagsarlm` (wrapped).
+      Reference: **GeoDa** — create the weights as above, then **Regression** ▸ set the
+      dependent and covariates ▸ tick **Spatial Lag** ▸ select the weights file ▸ Run.
+      Read **rho** and its significance from the output window.
+      **R** — `spatialreg::lagsarlm(y ~ x, listw = w)`, the package this wraps.
 
 - [ ] **Choropleth map…** — same menu.
       Recipe: spatial demo (it ships ZIP boundaries), `region = zip_code`,
@@ -1604,8 +2076,12 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       report of **how many regions failed to join** the boundary file. A silent
       drop is the bug to look for here: deliberately misspell `keyprop` and confirm it
       tells you nothing matched rather than drawing an empty map.
-      Reference: **GeoDa** or **QGIS** for the same shading from the same boundary file;
-      R `sf::plot` / `tmap`. No SPSS equivalent.
+      Reference: **GeoDa** — open the boundary file, Table ▸ **Merge** your data on the
+      ZIP key, then **Map** ▸ **Quantile Map** (or Natural Breaks) ▸ pick the variable
+      and the number of classes. **QGIS** — Layer Properties ▸ Symbology ▸ **Graduated**
+      ▸ classify. Both will also tell you how many features failed to join, which is
+      exactly the behaviour being checked here.
+      **R** — `sf` + `tmap::tm_shape() + tm_polygons("income_k", style = "quantile")`.
 
 
 ## 30. Ecology *(2 items)*
@@ -1617,9 +2093,14 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       half-width**, density/abundance if effort and area are given, and a histogram of
       distances with the fitted curve over it. Density must scale sensibly when you
       halve `area`.
-      Reference: the **Distance** software (distancesampling.org) is the field
-      standard; R `mrds` is what this wraps — extract the generated R and compare.
-      No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **Distance for Windows** (free, from
+      distancesampling.org) is the field standard: File ▸ New Project ▸ import the
+      observations as a *flat file* with the perpendicular distances ▸ then in the
+      Analyses tab create a new analysis ▸ Model Definition ▸ **Key function:
+      Half-normal**, set the truncation ▸ **Run**. Read the effective strip half-width
+      and the density estimate from the results pane.
+      **R** — `mrds::ddf(dsmodel = ~mcds(key = "hn", formula = ~1), data = d,
+      meta.data = list(width = 100))`, the package this wraps.
 
 - [ ] **Occupancy / N-mixture…** — same menu.
       Recipe: repeat-visit detection columns (`v1, v2, v3` of 0/1), model = occupancy,
@@ -1628,7 +2109,13 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       the point of the model is that these are not the same thing, so confirm both
       appear. Naive occupancy (any detection / n sites) should be **lower** than the
       estimated ψ.
-      Reference: **PRESENCE** or **MARK**, or R `unmarked::occu`. No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **PRESENCE** (free, Patuxent) is the
+      purpose-built GUI: enter the detection history matrix ▸ Run ▸ *Single-season*
+      model. **MARK** does it too. **R** — `unmarked::occu(~1 ~1, umf)` for occupancy
+      and `unmarked::pcount(~1 ~1, umf, K = kmax)` for N-mixture.
+      Expect too: whichever you use, naive occupancy (any detection ÷ sites) should be
+      **lower** than the estimated ψ — that is the whole point of the model, and a free
+      check on the output.
 
 ## 31. Bayesian *(4 items)*
 
@@ -1638,25 +2125,42 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       check the label), and posterior means close to the OLS estimates
       (**6959.8 / 514.7 / 8563.7**) under weak priors. A large divergence from OLS with
       default priors would be a finding.
-      Reference: JASP (the closest GUI), Stata `bayes: regress`, or R `rstanarm`/
-      `BayesFactor`.
+      Reference: **SPSS 25 and later** — Analyze ▸ **Bayesian Statistics** ▸ **Linear
+      Regression…** → `income` into **Dependent**, `age` and `education` into
+      **Covariates** → under *Bayesian Analysis* choose **Use both methods** so you get
+      the posterior beside the frequentist fit → **OK**.
+      **JASP** (free) — Regression ▸ **Bayesian Linear Regression**. **R** —
+      `rstanarm::stan_glm()` or `BayesFactor::lmBF()`.
+      ⚠️ Read the label: these are **credible** intervals, not confidence intervals.
 
 - [ ] **Bayes factor: t-test…** — same menu.
       Recipe: `y = income`, `group = gender`, `g1 = Male`, `g2 = Female`.
       Expect: a BF₁₀ well above 1 (the frequentist p was .0057), and its reciprocal
       BF₀₁ reported or derivable. Check that **BF₀₁ = 1/BF₁₀**.
-      Reference: **JASP** ▸ Bayesian Independent Samples T-Test (default Cauchy prior
-      r = .707) — the standard comparator. R `BayesFactor::ttestBF`.
+      Reference: **JASP** is the standard comparator (free, jasp-stats.org) — T-Tests ▸
+      **Bayesian Independent Samples T-Test** → `income` as the variable, `gender` as the
+      grouping variable → the default prior is a **Cauchy with r = 0.707**, which is the
+      number everyone quotes.
+      **SPSS 25+** — Analyze ▸ Bayesian Statistics ▸ **Independent-Samples Normal…**
+      also yields a Bayes factor. ⚠️ SPSS’s default priors differ from JASP’s, so the two
+      give **different BF values on the same data** and neither is wrong. Match the prior
+      before comparing. **R** — `BayesFactor::ttestBF(x, y)`.
+      Expect too: BF₀₁ must equal 1/BF₁₀ — a free check whichever tool you use.
 
 - [ ] **Bayes factor: correlation…** — same menu.
       Recipe: `x = age`, `y = income`.
       Expect: a very large BF (r = .95, n = 28).
-      Reference: JASP ▸ Bayesian Correlation; R `BayesFactor::correlationBF`.
+      Reference: **JASP** — Regression ▸ **Bayesian Correlation** (or Bayesian
+      Correlation Pairs) → `age` and `income`. **SPSS 25+** — Analyze ▸ Bayesian
+      Statistics ▸ **Pearson Correlation…**. **R** —
+      `BayesFactor::correlationBF(age, income)`. Same prior caveat as above.
 
 - [ ] **Vector autoregression (BVAR)…** — same menu.
       Recipe: 2–3 series, `lags = 2`, `horizon = 10`.
       Expect: posterior coefficient summaries and forecasts with credible bands.
-      Reference: Stata `bayes: var`; R `BVAR`/`bvartools`.
+      Reference: **not in SPSS or JASP.** **Stata** — `bayes: var y1 y2, lags(1/2)`.
+      **R** — the `BVAR` or `bvartools` packages. **EViews** — Quick ▸ Estimate VAR ▸
+      VAR Type **Bayesian VAR**.
 
 ## 32. Resampling *(5 items)*
 
@@ -1668,24 +2172,38 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       ⚠️ Resampling is random — **run it twice**. Small variation is correct; the
       question is whether a seed is exposed for reproducibility, since History claims to
       replay analyses. If not, note it.
-      Reference: SPSS **Bootstrapping** module (`BOOTSTRAP /SAMPLING=SIMPLE
-      /VARIABLES=income` + `DESCRIPTIVES`); Stata `bootstrap r(mean), reps(2000): sum
-      income`; R `boot` (wrapped here).
+      Reference: **SPSS** (Bootstrapping module) — the trick is that bootstrapping is a
+      **button inside** the ordinary dialogs, not a menu of its own: Analyze ▸
+      Descriptive Statistics ▸ **Explore…** → `income` into Dependent List → click
+      **Bootstrap…** → tick **Perform bootstrapping**, *Number of samples* = `2000`,
+      *Confidence Intervals* = **Percentile** → **Continue** → **OK**. The bootstrap
+      results appear as extra columns beside the Descriptives table.
+      **Stata** — `bootstrap r(mean), reps(2000): summarize income`. **R** — `boot`,
+      the package this wraps.
+      ⚠️ Resampling is random: run it twice. Small variation is correct. The question
+      worth recording is whether a **seed** is exposed, because History promises to
+      replay analyses and it cannot keep that promise without one.
 
 - [ ] **Bootstrap a statistic…** — same menu.
       Recipe: `x = income`, `stat = median`, `reps = 2000`; then try each other `stat`.
       Expect: each statistic's bootstrap distribution; the median's CI will be wider
       and chunkier than the mean's — correct, not a defect.
-      Reference: Stata `bootstrap r(p50), reps(2000): summarize income, detail`;
-      R `boot(income, function(x, i) median(x[i]), R = 2000)`.
+      Reference: **SPSS** — same **Bootstrap…** button; for the median use Analyze ▸
+      Descriptive Statistics ▸ Explore… (its *Percentiles* output is bootstrapped too).
+      **Stata** — `bootstrap r(p50), reps(2000): summarize income, detail`. **R** —
+      `boot(income, function(x, i) median(x[i]), R = 2000)`.
+      Expect too: the median’s CI will be wider and chunkier than the mean’s in every
+      package — correct, not a defect.
 
 - [ ] **Bootstrap a correlation…** — same menu.
       Recipe: `x = age`, `y = income`, `reps = 2000`.
       Expect: centred near **r = .9515**, with an asymmetric CI (correlations near 1
       are skewed) whose upper bound stays **≤ 1**. A CI exceeding 1 is a real bug.
-      Reference: Stata `bootstrap r(rho), reps(2000): correlate age income`;
-      R `boot` with `cor(x[i], y[i])`. SPSS: the Bootstrapping module on
-      `CORRELATIONS`.
+      Reference: **SPSS** — Analyze ▸ Correlate ▸ **Bivariate…** → `age` and `income` →
+      click **Bootstrap…** → tick **Perform bootstrapping**, 2000 samples, **Percentile**
+      → **Continue** → **OK**.
+      **Stata** — `bootstrap r(rho), reps(2000): correlate age income`. **R** — `boot`
+      with `cor(x[i], y[i])`.
 
 - [ ] **Permutation test (2 groups)…** — same menu.
       Recipe: `y = income`, `group = gender`, `g1 = Male`, `g2 = Female`,
@@ -1693,7 +2211,15 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       Expect: observed difference **−12414.29**, and a permutation p in the
       neighbourhood of the t-test's **.0057**. The permutation null should be centred on
       zero.
-      Reference: Stata `permute`; R `coin::oneway_test`.
+      Reference: **SPSS has no true permutation test.** The nearest is the Monte Carlo
+      option on an exact test: Analyze ▸ Nonparametric Tests ▸ Legacy Dialogs ▸
+      **2 Independent Samples…** → set it up as in §20 → **Exact…** → choose
+      **Monte Carlo** with 5000 samples → **Continue** → **OK**. That resamples the
+      *rank* statistic rather than the mean difference, so it is close but not the same
+      test.
+      **Stata** — `permute gender diff = (r(mu_1) - r(mu_2)), reps(5000): ttest income,
+      by(gender)`. **R** — `coin::oneway_test(income ~ gender,
+      distribution = approximate(nresample = 5000))`.
 
 - [ ] **Power by simulation (t-test)…** — same menu.
       Recipe: `n = 30`, `d = 0.5`, `alpha = 0.05`, `reps = 5000`.
@@ -1701,8 +2227,16 @@ title, axis titles, legend, palette, size, and that the edits survive save and r
       *per group* is ~.478; for n = 30 *total* it is ~.32 — so **check which n means
       what**, that ambiguity is worth a finding in itself). Power must rise with n and
       with d.
-      Reference: **G\*Power** (the field standard) or R `pwr::pwr.t.test(n = 30, d =
-      0.5, sig.level = 0.05)` → power = .4779 for n per group.
+      Reference: **G\*Power** (free) is the field standard and the easiest check:
+      *Test family* = **t tests** → *Statistical test* = **Means: Difference between two
+      independent means (two groups)** → *Type of power analysis* = **Post hoc** →
+      Tail(s) **Two**, Effect size d **0.5**, α **0.05**, Sample size group 1 **30**,
+      group 2 **30** → **Calculate** → Power = **0.4779**.
+      **SPSS 27+** — Analyze ▸ **Power Analysis** ▸ Means ▸ Independent-Samples T Test.
+      **R** — `pwr::pwr.t.test(n = 30, d = 0.5, sig.level = 0.05)`.
+      ⚠️ That 0.478 is for n = 30 **per group**. For n = 30 *total* (15 each) power is
+      about 0.32. Check which the plugin means by `n` — the ambiguity is worth a finding
+      in itself.
 
 ## 33. Single-Case Design *(3 items)* 🔢
 
@@ -1722,9 +2256,13 @@ the job here is to confirm the *shipped UI* produces those numbers.
       closed-form SD_S but computes Z from a tie-corrected variance), and **NAP's
       p-value is a normal approximation with continuity correction**, not the exact
       test. Neither is a bug — do not file them.
-      Reference: R `scan::nap(...)`, `pnd`, `tau_u`, `ird`. Or the online Tau-U
-      calculator at singlecaseresearch.org — but expect *that* to differ, since it
-      makes different choices than scan.
+      Reference: **no SPSS equivalent.** **R** — `install.packages("scan")`, then build
+      the data with `scdf()` and run `nap()`, `pnd()`, `tau_u()` and `ird()`. That is the
+      package this was ported from line by line, so expect an **exact** match, not an
+      approximate one.
+      Also: the **Tau-U calculator** at singlecaseresearch.org is the common web tool —
+      but ⚠️ expect *it* to differ from both, because it makes different choices about
+      baseline trend correction than `scan` does.
 
 - [ ] **Multiple-baseline graph…** — same menu.
       Recipe: same data with a `caseVar` of 3 cases.
@@ -1732,13 +2270,18 @@ the job here is to confirm the *shipped UI* produces those numbers.
       across a phase change** (the two SCED drawing conventions, applied by default).
       Panel height, condition labels, points/lines and palette are editable, and edits
       survive save/reload.
-      Reference: R `scan::plot.scdf` draws the same conventions — compare the shape, not
-      pixels. The What Works Clearinghouse SCED standards are the written authority.
+      Reference: **R** — `scan::plot(scdf_object)` draws the same two conventions
+      (staggered phase lines, no line across a phase change). Compare the shape, not
+      pixels. The written authority is the **What Works Clearinghouse** Single-Case
+      Design standards, which is where those conventions come from.
+      No SPSS equivalent — its charts cannot stagger phase lines per panel.
 
 - [ ] **Multiple-baseline graph, several measures…** — same menu.
       Recipe: add a `measure` variable with 2+ levels.
       Expect: panels grouped by case *and* measure, conventions preserved.
-      Reference: as above — `scan::plot.scdf` with several dependent variables.
+      Reference: **no SPSS equivalent** — its charts cannot stagger phase lines per
+      panel. **R** — `scan::plot()` with several dependent variables panels them by case
+      and measure the same way; compare the shape, not pixels.
 
 ## 34. Text *(7 items)*
 
@@ -1749,14 +2292,21 @@ Load the **demo (qual)** dataset — it has `response` (open-ended) and `site`.
       Expect: a ranked table; no stopwords ("the", "and") present; nothing shorter than
       3 characters. Set stopwords = none and confirm "the" reappears — that is the test
       that the option is wired, not decorative.
-      Reference: R `tidytext` (wrapped). Or check a handful of counts by hand.
+      Reference: **no SPSS equivalent** (IBM’s Text Analytics for Surveys was a separate,
+      now-discontinued product). **AntConc** (free) is the quickest GUI check: File ▸
+      Open File(s) ▸ load the texts ▸ **Word List** tab ▸ Start — then load a stopword
+      list under Settings ▸ Tool Preferences ▸ Word List to reproduce the filtering.
+      **R** — `tidytext::unnest_tokens()` + `anti_join(stop_words)` + `count()`, the
+      package this wraps.
 
 - [ ] **Word cloud…** — same menu.
       Recipe: `text = response`, `topn = 50`, try each `layout` and `themes`.
       Expect: size proportional to frequency; no overlapping text; the most frequent
       word from the table above is the largest here (cross-check the two).
-      Reference: R `wordcloud::wordcloud` for the same input; the frequencies themselves
-      come from the check above, which is the part worth validating.
+      Reference: **R** — `wordcloud::wordcloud(words, freq)`. There is no SPSS
+      equivalent and no particular standard; the frequencies feeding it are the part
+      worth validating, and you already did that in the check above — so cross-check the
+      largest word here against the top row there.
 
 - [ ] **Sentiment analysis…** — same menu.
       Recipe: `text = response`, `doc = site`.
@@ -1764,38 +2314,64 @@ Load the **demo (qual)** dataset — it has `response` (open-ended) and `site`.
       the output (bing/afinn/nrc give materially different scales — unlabelled scores
       are not interpretable). Write one obviously positive and one obviously negative
       response and confirm the signs.
-      Reference: R `tidytext::get_sentiments`. Provalis or LIWC for the commercial view.
+      Reference: **no SPSS equivalent.** **R** — `tidytext::get_sentiments("bing")`
+      (or `"afinn"`, or `"nrc"`) joined to the tokens, the package this wraps.
+      **LIWC** (commercial) and **Provalis WordStat** are the established GUI tools.
+      ⚠️ bing is ±1 per word, afinn is −5…+5, and nrc is categorical — so the three give
+      completely different scales. An unlabelled score is uninterpretable, which is why
+      the check above asks that the lexicon be named.
 
 - [ ] **TF-IDF (distinctive terms)…** — same menu.
       Recipe: `text = response`, `doc = site`, `topn = 15`.
       Expect: terms distinctive to each site. A word appearing in **every** document
       has IDF = 0 and must therefore score 0 — a free check.
-      Reference: R `tidytext::bind_tf_idf` (what this wraps), or Python
-      `sklearn.feature_extraction.text.TfidfVectorizer`. ⚠️ those two use **different IDF
-      smoothing** by default, so expect the ranking to agree and the absolute values not
-      to.
+      Reference: **no SPSS equivalent, and no mainstream GUI** — TF-IDF is a scripting
+      job everywhere. **R** — `tidytext::bind_tf_idf(term, document, n)`, the function
+      this wraps. **Python** — `sklearn.feature_extraction.text.TfidfVectorizer`.
+      ⚠️ Those two use **different IDF smoothing** by default (sklearn adds 1 to both
+      numerator and denominator), so expect the *ranking* to agree and the absolute
+      values not to. Against the R one, expect an exact match.
+      ⚠️ Those two use **different IDF smoothing** by default (sklearn adds 1 to the
+      numerator and denominator), so expect the *ranking* to agree and the absolute
+      values not to.
 
 - [ ] **Keyword in context (KWIC)…** — same menu.
       Recipe: `text = response`, `term =` a word you know occurs, `window = 5`.
       Expect: each occurrence with 5 words either side; the count matches the word
       frequency table. A term that does not occur gives an empty result with a clear
       message.
-      Reference: R `quanteda::kwic(txt, "term", window = 5)`. NVivo's text-search query
-      and AntConc's concordance view are the GUI comparators.
+      Reference: **AntConc** (free) — Open File(s) ▸ **Concordance** tab ▸ type the
+      term ▸ Start, and set the window under Tool Preferences. **NVivo** — Explore ▸
+      **Text Search** query ▸ Reference view. **R** —
+      `quanteda::kwic(tokens(txt), "term", window = 5)`.
 
 - [ ] **Topic modeling (LDA)…** — same menu.
       Recipe: `text = response`, `k = 3`, `topn = 10`.
       Expect: 3 topics with top terms, and per-document topic probabilities **summing
       to 1** per document. LDA is stochastic — run twice and note whether a seed is
       exposed.
-      Reference: R `topicmodels::LDA` (wrapped); MALLET is the other standard.
+      Reference: **no SPSS equivalent.** **R** — `topicmodels::LDA(dtm, k = 3)`, the
+      package this wraps, then `tidy(fit, matrix = "beta")` for the top terms and
+      `matrix = "gamma"` for the per-document probabilities. **MALLET** (Java,
+      command-line) is the other standard.
+      ⚠️ LDA is stochastic. Fix `control = list(seed = 1)` in R and check whether the
+      plugin exposes a seed at all; without one, History cannot replay it.
 
 - [ ] **Content-analysis dictionary…** — same menu.
       Recipe: write a small dictionary file (categories → word lists), `text =
       response`, `dict =` that file, `doc = site`.
       Expect: counts per category per document; a word in two categories counts in
       both; an empty category reports 0 rather than being dropped.
-      Reference: LIWC or Provalis WordStat are the commercial comparators.
+      Reference: **no SPSS equivalent.** **LIWC** (commercial) is the reference
+      implementation — load the texts, pick or load a dictionary, Analyze. **Provalis
+      WordStat** and **Yoshikoder** (free) are the other GUI tools. **R** —
+      `quanteda::dfm_lookup(dfm, dictionary(list(cat1 = c("word1", "word2"))))`.
+      Expect too: a word listed in two categories must count in **both**, and an empty
+      category must report 0 rather than vanishing — both checkable by hand on a
+      three-word dictionary, which is the quickest validation here.
+      Expect too: a word listed in two categories must count in **both**, and an empty
+      category must report 0 rather than vanishing — both are easy to check by hand on a
+      three-word dictionary.
 
 ## 35. Analyze — mixture models *(3 items)*
 
@@ -1807,19 +2383,31 @@ Load the **demo (qual)** dataset — it has `response` (open-ended) and `site`.
       variable in the dataset. Re-run with the **same seed** → identical output
       (that is the point of exposing the seed). Then `classes = 3` and confirm BIC
       changes.
-      Reference: R `poLCA` (wrapped here). **Mplus** and **Latent GOLD** are the field
-      standards. No SPSS equivalent.
+      Reference: **no SPSS equivalent.** **Latent GOLD** is the most approachable GUI
+      (File ▸ Open data ▸ right-click the dataset ▸ Cluster model ▸ set classes ▸
+      Estimate). **Mplus** is the field standard:
+      `VARIABLE: CLASSES = c(2); CATEGORICAL = u1-u3; ANALYSIS: TYPE = MIXTURE;`.
+      **R** — `poLCA(cbind(u1, u2, u3) ~ 1, data, nclass = 2)`, the package this wraps.
+      Expect too: compare **BIC** across class counts rather than any single solution —
+      that is how the class number is actually chosen.
 
 - [ ] **Latent profile analysis (continuous items)…** — same menu.
       Recipe: spatial demo, `items =` the four numeric variables, `classes = 2`, seed.
       Expect: class means per item, proportions, fit indices, saved membership.
-      Reference: Mplus; R `flexmix`/`mclust`.
+      Reference: **no SPSS equivalent.** **Latent GOLD** for a GUI (File ▸ Open data ▸
+      right-click the dataset ▸ **Cluster** model ▸ set the number of classes ▸
+      **Estimate**). **Mplus** — the same MIXTURE setup as LCA without the CATEGORICAL
+      line. **R** — `mclust::Mclust(items, G = 2)` or `tidyLPA::estimate_profiles()`;
+      CrossTab wraps `flexmix`.
 
 - [ ] **Growth mixture model (classes of trajectory)…** — same menu.
       Recipe: `waves = t1, t2, t3`, `classes = 2`, seed.
       Expect: a distinct intercept/slope trajectory per class, class proportions, fit
       indices.
-      Reference: **Mplus** (this is Mplus's signature analysis); R `flexmix`/`lcmm`.
+      Reference: **Mplus** — this is its signature analysis:
+      `CLASSES = c(2); ANALYSIS: TYPE = MIXTURE; MODEL: %OVERALL% i s | t1@0 t2@1 t3@2;`.
+      **R** — `lcmm::hlme(..., ng = 2, mixture = ~ time)`, or `flexmix` as wrapped here.
+      No SPSS equivalent, with or without Amos.
 ## 36. Qualitative coding (CAQDAS)
 
 Qualitative work is first-class here, not a side feature — test it at the same depth as

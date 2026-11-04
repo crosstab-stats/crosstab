@@ -154,7 +154,7 @@ for (; i < lines.length; i++) {
     // Only the real labels, and only past position 0: prose legitimately opens with
     // "Then …", and treating that as a label left the item with an empty name and its
     // text orphaned in the body.
-    const firstLab = rest.search(/(Recipe:|Then:|Expect(?:,\s*exactly)?:|Reference:|⚠️)/);
+    const firstLab = rest.search(/(Recipe:|Then:|Expect(?:,\s*exactly)?:|Reference:|Syntax:|⚠️)/);
     const headEnd = firstLab > 0 ? firstLab : rest.length;
     const headText = rest.slice(0, headEnd).trim();
     tail = rest.slice(headEnd).trim();
@@ -167,7 +167,7 @@ for (; i < lines.length; i++) {
     // `Then:` marks a second step inside one check ("…now change it from the toolbar
     // instead"). Matched with its colon so the much commoner mid-sentence "Then run it
     // again…" is left alone.
-    const re = /(Recipe:|Then:|Expect, exactly:|Expect too:|Expect for [^:]+:|Expect:|Reference:|⚠️)/g;
+    const re = /(Recipe:|Then:|Expect, exactly:|Expect too:|Expect for [^:]+:|Expect:|Reference:|Syntax:|⚠️)/g;
     let m; let last = 0; let lastKey = null;
     while ((m = re.exec(tail))) {
       if (lastKey !== null) segs.push([lastKey, tail.slice(last, m.index).trim()]);
@@ -183,7 +183,8 @@ for (; i < lines.length; i++) {
       if (!key) return `<p class="free">${inline(v)}</p>`;
       const cls = /^Expect/.test(key) ? 'expect'
         : key === 'Reference' ? 'ref'
-          : key === 'Then' ? 'then' : 'recipe';
+          : key === 'Syntax' ? 'syntax'
+            : key === 'Then' ? 'then' : 'recipe';
       return `<div class="row row--${cls}"><span class="row__k">${esc(key)}</span><div class="row__v">${inline(v)}</div></div>`;
     }).join('');
 
@@ -333,11 +334,13 @@ ul.checks{list-style:none;margin:0 0 18px;padding:0;display:flex;flex-direction:
 .chk__where{font:500 12.5px var(--mono);color:var(--accent);font-weight:500}
 .chk__where code{background:none;padding:0;color:var(--accent)}
 .chk__body{margin-top:8px;display:flex;flex-direction:column;gap:6px}
-.row{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px;font-size:14.5px}
+.row{display:grid;grid-template-columns:82px minmax(0,1fr);gap:10px;font-size:14.5px}
 .row__k{font:600 10.5px var(--sans);letter-spacing:.07em;text-transform:uppercase;
   color:var(--muted);padding-top:4px}
 .row--expect .row__k{color:var(--accent)}
 .row--then .row__k{color:var(--muted)}
+.row--syntax .row__k{color:var(--muted)}
+.row--syntax .row__v{font-size:13.5px}
 .row--then{padding-top:2px;border-top:1px dashed var(--line);margin-top:2px}
 .row--ref .row__k{color:var(--muted)}
 .row__v{color:var(--ink-2);min-width:0}
