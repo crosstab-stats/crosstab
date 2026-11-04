@@ -36,7 +36,10 @@ function inline(s) {
   t = esc(t);
   t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
     (_, txt, href) => `<a href="${href}" target="_blank" rel="noopener">${txt}</a>`);
-  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // `[^*]+` could not cross a nested single asterisk, so `**bold with *italic* inside**`
+  // failed to match and left its markers in the output. Allow anything that is not a
+  // closing `**`, non-greedily, and let the italic pass below handle the inner pair.
+  t = t.replace(/\*\*((?:(?!\*\*)[\s\S])+?)\*\*/g, '<strong>$1</strong>');
   t = t.replace(/(^|[\s(])\*([^*]+)\*/g, '$1<em>$2</em>');
   t = t.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(code[+i])}</code>`);
   // The escaped asterisks, back as themselves.
@@ -151,7 +154,7 @@ for (; i < lines.length; i++) {
     // Only the real labels, and only past position 0: prose legitimately opens with
     // "Then …", and treating that as a label left the item with an empty name and its
     // text orphaned in the body.
-    const firstLab = rest.search(/(Recipe:|Expect(?:,\s*exactly)?:|Reference:|⚠️)/);
+    const firstLab = rest.search(/(Recipe:|Then:|Expect(?:,\s*exactly)?:|Reference:|⚠️)/);
     const headEnd = firstLab > 0 ? firstLab : rest.length;
     const headText = rest.slice(0, headEnd).trim();
     tail = rest.slice(headEnd).trim();
@@ -161,7 +164,10 @@ for (; i < lines.length; i++) {
 
     // Break the tail on the known labels.
     const segs = [];
-    const re = /(Recipe:|Expect, exactly:|Expect too:|Expect for [^:]+:|Expect:|Reference:|⚠️)/g;
+    // `Then:` marks a second step inside one check ("…now change it from the toolbar
+    // instead"). Matched with its colon so the much commoner mid-sentence "Then run it
+    // again…" is left alone.
+    const re = /(Recipe:|Then:|Expect, exactly:|Expect too:|Expect for [^:]+:|Expect:|Reference:|⚠️)/g;
     let m; let last = 0; let lastKey = null;
     while ((m = re.exec(tail))) {
       if (lastKey !== null) segs.push([lastKey, tail.slice(last, m.index).trim()]);
@@ -175,7 +181,9 @@ for (; i < lines.length; i++) {
       if (k === '⚠️') return `<div class="trap"><span class="trap__i" aria-hidden="true">⚠</span><div>${inline(v)}</div></div>`;
       const key = k.replace(/:$/, '');
       if (!key) return `<p class="free">${inline(v)}</p>`;
-      const cls = /^Expect/.test(key) ? 'expect' : key === 'Reference' ? 'ref' : 'recipe';
+      const cls = /^Expect/.test(key) ? 'expect'
+        : key === 'Reference' ? 'ref'
+          : key === 'Then' ? 'then' : 'recipe';
       return `<div class="row row--${cls}"><span class="row__k">${esc(key)}</span><div class="row__v">${inline(v)}</div></div>`;
     }).join('');
 
@@ -329,6 +337,8 @@ ul.checks{list-style:none;margin:0 0 18px;padding:0;display:flex;flex-direction:
 .row__k{font:600 10.5px var(--sans);letter-spacing:.07em;text-transform:uppercase;
   color:var(--muted);padding-top:4px}
 .row--expect .row__k{color:var(--accent)}
+.row--then .row__k{color:var(--muted)}
+.row--then{padding-top:2px;border-top:1px dashed var(--line);margin-top:2px}
 .row--ref .row__k{color:var(--muted)}
 .row__v{color:var(--ink-2);min-width:0}
 .row--ref .row__v{font-size:13.5px}

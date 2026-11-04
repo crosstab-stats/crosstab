@@ -45,357 +45,734 @@ marked 🔢 and deserve the closest look: **SCED**, **Plots**, **Aggregate**,
 
 ## 0. Setup
 
-- [ ] **Serve the app.** `npm run dev` → <http://localhost:8080/>. The committed dev
-      server sets the COOP/COEP headers WebR needs; a plain static server will not do.
-- [ ] **Activate the plugins.** Edit ▸ Plugins… ▸ tick everything (or the categories
-      you are about to test). **Nothing below appears in a menu until its plugin is
-      activated** — an empty menu bar is the expected state on a fresh profile, not a
-      bug. *(Note: I activated all 64 in your browser while mapping the menus, so this
-      may already be done.)*
-- [ ] **Load the demo data.** Launcher ▸ **demo (quant)**, or File ▸ New project ▸ demo.
-      30 cases: `gender` (1 Male / 2 Female), `education` (1 High school / 2 Bachelor /
-      3 Postgraduate), `region` (1 North / 2 Central / 3 South), `age`, `income`.
-      **`income` carries user-missing codes −99 and −98**, and two cases are −99, so
-      every income statistic should run on **N = 28**, not 30. That is the single most
-      useful thing in the dataset: if an analysis reports N = 30 for income, it is
-      ignoring designated missing values.
-- [ ] **Get the same data into SPSS.** File ▸ Export data… ▸ SPSS (.sav) — that keeps
-      the value labels and the missing codes, so SPSS applies them too. (CSV works but
-      you then have to re-declare −99/−98 as missing in SPSS, which is a common source
-      of fake mismatches.)
-- [ ] **For the battery analyses** (reliability, factor, cluster) load the **spatial
-      demo** instead: 60 cases, `satisfaction` (1–10), `commute_min`, `income_k`,
-      `household_size`, plus `zip_code` and `district`. Also deterministic.
-- [ ] **Desktop R is the tie-breaker.** `C:\Program Files\R\R-4.6.0\bin\Rscript.exe`.
-      For a wrapper plugin you can extract the exact R it generated (Edit ▸ History ▸
-      the analysis row shows the R) and run that same text locally — that should match
-      to the last digit, which is a far sharper test than eyeballing SPSS.
+- [ ] **Serve the app**
+      Recipe: in the repo, run `npm run dev`, then open <http://localhost:8080/>.
+      Expect: the app loads. Use this and not `python -m http.server` — the bundled dev
+      server sends the COOP/COEP headers WebR needs, and Python mis-types `.js` on
+      Windows so the app will not boot at all.
 
-> **The reference scripts.** `scripts/validation/demo-reference.R` and
-> `demo-reference-spatial.R` regenerate every number quoted in this document. Run them
-> against the CSVs exported from the two demo datasets if you ever want to re-derive
-> them.
+- [ ] **Activate the plugins**
+      Recipe: **Edit ▸ Plugins…** → tick everything (or just the categories you are
+      about to test) → close the dialog. Look at the menu bar before and after.
+      Expect: before, the menu bar is File / Edit / Transform / Help only. After, about
+      22 category menus appear (Descriptive Statistics, Comparison, Regression, Graphs,
+      Time Series …). **Nothing below appears until its plugin is activated** — an empty
+      menu bar on a fresh profile is correct, not a bug. *(I activated all 64 in your
+      browser while mapping the menus, so this may already be done.)*
+
+- [ ] **Load the demo data**
+      Recipe: **Launcher ▸ demo (quant)**. If you are already in the app,
+      **File ▸ New project** and pick the demo seed. Then click the **Data** tab.
+      Expect: 30 rows; columns `gender` (1 Male / 2 Female), `education` (1 High school /
+      2 Bachelor / 3 Postgraduate), `region` (1 North / 2 Central / 3 South), `age`,
+      `income`.
+      Then: click the **Variables** tab and look at `income`'s missing-values cell.
+      Expect: **−99 and −98 are declared missing**, and two cases hold −99. So every
+      income statistic should run on **N = 28**, not 30. If an analysis reports N = 30
+      for income, it is ignoring designated missing values — that is the single most
+      useful trap in this dataset.
+
+- [ ] **Get the same data into SPSS**
+      Recipe: **File ▸ Export data…** → type "SPSS" in the picker → **SPSS (.sav)** →
+      save. Open that `.sav` in SPSS.
+      Expect: value labels and the −99/−98 missing codes arrive with it, so SPSS applies
+      them too.
+      Reference: a CSV export also works, but then you must re-declare the missing codes
+      in SPSS (Variable View ▸ Missing) — forgetting to is the most common source of a
+      *fake* mismatch.
+
+- [ ] **Load the spatial demo for the battery analyses**
+      Recipe: **File ▸ New project**, pick the **spatial** demo seed (reliability, factor
+      analysis and cluster analysis need several numeric variables, which the 30-case
+      demo does not have).
+      Expect: 60 cases; `satisfaction` (1–10), `commute_min`, `income_k`,
+      `household_size`, `zip_code`, `district` (CA-03 × 27, CA-06 × 18, CA-07 × 15).
+      Also deterministic, so the quoted values hold.
+
+- [ ] **Have desktop R ready as the tie-breaker**
+      Recipe: `C:\Program Files\R\R-4.6.0\bin\Rscript.exe`. To regenerate every number
+      quoted in this document:
+      `node scripts/validation/dump-demo-csv.mjs .` then
+      `Rscript scripts/validation/demo-reference.R` and
+      `…/demo-reference-spatial.R`.
+      Expect: the figures below, to the digit.
+      Reference: for a wrapper plugin there is a sharper test than SPSS — open
+      **Edit ▸ History…**, find the analysis row, read the **R it generated**, and run
+      that exact text in desktop R. That should match to the last digit; SPSS only
+      should match to the method.
 
 ---
 
 ## 1. Boot and launcher
 
-- [ ] **Cold load.** Hard-reload (Ctrl-Shift-R).
-      Expect: launcher appears; no error overlay; no reload loop. On GitHub Pages
-      *one* self-reload at first visit is expected (the service worker claiming
-      cross-origin isolation); a repeating loop is the red flag.
-- [ ] **Launcher shows the plugin list** with load/activate state, and the discipline
-      pinning.
-      Expect: activation ≠ merely catalogued; pinning a discipline filters the list.
-- [ ] **Onboarding path.** Launcher ▸ demo (quant) / demo (qual) / blank.
-      Expect: each lands in a usable project; the demo/blank seeds are **not** autosaved
-      as if they were your work (only real edits create a save).
-- [ ] **Boot survives a broken plugin.** Edit ▸ Plugins… ▸ Add from file… ▸ pick a
-      deliberately malformed `.js`.
-      Expect: it lands in `failed` with a readable reason; the app still boots; other
-      plugins unaffected.
-- [ ] **Boot survives a broken `deploy.json`.** Put garbage in it, reload.
-      Expect: app boots with defaults. Nothing in that file may break a boot.
+- [ ] **Cold load**
+      Recipe: hard-reload with **Ctrl-Shift-R**.
+      Expect: launcher appears, no error overlay, no reload loop. On the live GitHub
+      Pages site *one* self-reload at first visit is expected (the service worker
+      claiming cross-origin isolation); a *repeating* loop is the red flag.
+
+- [ ] **The launcher's plugin list**
+      Recipe: on the launcher screen, read the plugin list; tick a few; pin a discipline
+      from the discipline selector.
+      Expect: load state and activation state are shown as **different things** (a
+      plugin can be catalogued without being activated); pinning a discipline filters
+      the list to that discipline's plugins.
+
+- [ ] **Each onboarding path**
+      Recipe: from the launcher take **demo (quant)**, then (new project)
+      **demo (qual)**, then **blank**.
+      Expect: each lands in a usable project.
+      Then: load a demo and **immediately reload the page without editing anything**.
+      Expect: you are back at the launcher — a demo or blank seed is **not** autosaved
+      as though it were your work. Make one real edit first and it *is* saved.
+
+- [ ] **Boot survives a broken plugin**
+      Recipe: save a file called `broken.js` containing just `this is not javascript`.
+      **Edit ▸ Plugins… ▸ Add from file…** → pick it. Then reload the page.
+      Expect: it is listed as **failed** with a readable reason; the app still boots;
+      every other plugin still works. It must not be able to take the app down.
+
+- [ ] **Boot survives a broken `deploy.json`**
+      Recipe: put `{{{garbage` in `deploy.json` at the repo root, reload.
+      Expect: the app boots on defaults. Nothing in that file may break a boot — that is
+      its contract.
 
 ## 2. Projects and persistence
 
-- [ ] **Autosave.** Change a value in the Data grid, wait, reload the page.
-      Expect: the change is still there.
-- [ ] **New project / switch / recent.** File ▸ New project, then File ▸ Recent projects.
-      Expect: switching keeps each project's data, output and codebook separate.
-- [ ] **Rename.** File ▸ Manage projects… ▸ inline-rename.
-      Expect: sticks across reload.
-- [ ] **Delete → recycle bin → restore.** Manage projects… ▸ delete ▸ restore.
-      Expect: restores with data and output intact.
-- [ ] **Store in… (location).** File ▸ Store in… ▸ pick a local folder (File System
-      Access) / OPFS / Dropbox / WebDAV.
-      Expect: the project moves; the catalog still lists it; reload finds it.
-- [ ] **Storage pressure.** Fill storage (or simulate), keep working.
-      Expect: a clear warning, not a silent write failure.
-- [ ] **Project health.** File ▸ Manage projects… on a project with a missing asset.
-      Expect: health reports the problem rather than failing to open.
-- [ ] **Copy dataset / copy to project.** File ▸ Copy dataset…
-      Expect: the dataset (and its variable metadata) arrives in the target project.
+- [ ] **Autosave**
+      Recipe: in the **Data** tab, double-click a cell, change the value, press Enter.
+      Wait two seconds, then reload the page.
+      Expect: the new value is still there.
+
+- [ ] **New project, switch, recent**
+      Recipe: **File ▸ New project**, load the demo, rename something. Then
+      **File ▸ Recent projects** → switch back to the first project, and back again.
+      Expect: each project keeps its own data, output and codebook; nothing bleeds
+      across.
+
+- [ ] **Rename a project**
+      Recipe: **File ▸ Manage projects…** → click the project's name → type a new one →
+      Enter. Reload.
+      Expect: the new name stuck.
+
+- [ ] **Delete, then restore from the recycle bin**
+      Recipe: **File ▸ Manage projects…** → delete a project → find it in the recycle
+      bin → restore.
+      Expect: it comes back with its data *and* its output intact.
+
+- [ ] **Change where a project is stored**
+      Recipe: **File ▸ Store in…** → pick a local folder (File System Access), then try
+      OPFS, then Dropbox or WebDAV if you have them configured.
+      Expect: the project moves; **File ▸ Manage projects…** still lists it; a reload
+      finds it in its new home.
+
+- [ ] **Storage pressure**
+      Recipe: import a very large file (or several) until storage is nearly full, then
+      keep editing.
+      Expect: an explicit warning. The failure mode to hunt for is a **silent** write
+      failure that looks like a successful save.
+
+- [ ] **Project health on a damaged project**
+      Recipe: open a project, then delete one of its asset files from the storage
+      folder behind the app's back. Reopen it via **File ▸ Manage projects…**.
+      Expect: health reports the missing asset and the project still opens. It must not
+      refuse to open or throw.
+
+- [ ] **Copy a dataset to another project**
+      Recipe: **File ▸ Copy dataset…** → choose a dataset and a target project → confirm.
+      Open the target.
+      Expect: the dataset arrives **with its variable metadata** — labels, value labels
+      and missing codes, not just the numbers.
 
 ## 3. Settings — including the "two places must agree" cases
 
-The Settings screen is **Edit ▸ Settings…**. Every row either edits in place, routes
-you to the real control, or reports a secret's state without printing it.
+The screen is **Edit ▸ Settings…**. Each row either edits in place, routes you to the
+real control, or reports a secret's state without printing it.
 
-- [ ] **Width.** Open it on a wide window.
-      Expect: ~80% of the viewport up to 900px; no horizontal scrollbar on the page;
-      narrow windows (<700px) fall back to 92vw. *(#208)*
-- [ ] **Screen layout** — set to Small screen mode.
-      Expect: layout changes immediately; **Edit ▸ ☐ Small screen mode** now shows
-      ticked. Set it back from the *menu* and the Settings row follows. *(Two places,
-      one value.)*
-- [ ] **Variable list order** — set to "Name (A–Z)". *(#210)*
-      Expect: the Data grid columns AND the Variables tab re-order immediately, and the
-      **toolbar dropdown above each variable list** now reads the same choice. Change it
-      from the toolbar instead → the Settings row agrees. Try `Name (Z–A)` and `Label`.
-- [ ] **Show variables as** — set to "Name".
-      Expect: grid headers drop the label half; toolbar dropdown agrees both ways.
-- [ ] **Variable pickers offer** — set to "All variables". *(#205)*
-      Expect: a *categorical* analysis (e.g. Crosstabs) now offers `income` even though
-      it is scale-coded. Set back to "Fitting variables" → `income` disappears from that
-      picker again. The setting is remembered across reloads.
-- [ ] **Frequency weight (project-level)** — pick a variable. *(#207)*
-      Expect: it writes an **op in the project log** — Edit ▸ History shows a weight
-      step, Undo reverses it, and the row agrees with **Transform ▸ Weight cases…**.
-      This is the one that must behave like a dataset property, not a device preference.
-- [ ] **Scope hint.** Read the screen.
-      Expect: it distinguishes device settings from project settings, so the weight row
-      is not mistaken for a preference. *(#206)*
-- [ ] **Encrypt at rest** — a routed row with a `Configure…` button.
-      Expect: opens the encryption dialog; the row then reports the new state.
-- [ ] **TURN server** — `Configure…` / `Change…`. *(#209)*
-      Expect: opens an editor; fields are **never pre-filled** with the stored
-      credential; it refuses a `stun:` URL and refuses a half-filled credential pair;
-      the row reports only *Configured* / *Not configured* — the credential appears
-      nowhere on screen.
-- [ ] **Rendezvous relays** — a multi-line box.
-      Expect: blank lines are not entries; round-trips.
-- [ ] **Debug logging** — tick it.
-      Expect: **Edit ▸ ☑ Debug logging** agrees; Edit ▸ Save debug log… produces a file.
-- [ ] **A lifecycle flag stays hidden.** Nothing like `screen.autoNoteSeen` appears
-      anywhere on the screen.
-- [ ] **Clearing restores the default**, not a stored copy of it: clear Screen layout
-      → the viewport decides again.
+- [ ] **Width on a wide window**
+      Recipe: maximise the window, then **Edit ▸ Settings…**.
+      Expect: the dialog is about 80% of the viewport, capped at 900px — not a narrow
+      420px column. No horizontal scrollbar on the page. Narrow the window below 700px
+      and it falls back to 92vw. *(#208)*
+
+- [ ] **Screen layout, from both ends**
+      Recipe: **Edit ▸ Settings…** → Screen layout → **Small screen mode**. Close the
+      dialog and open the **Edit** menu.
+      Expect: **☑ Small screen mode** is now ticked, and the layout actually changed.
+      Then: click that menu item to turn it off, and reopen Settings.
+      Expect: the Settings row now reads the default. One value, two places, agreeing in
+      both directions.
+
+- [ ] **Variable list order** *(#210)*
+      Recipe: load the demo, click the **Data** tab, note the column order
+      (gender, education, region, age, income). **Edit ▸ Settings…** → Variable list
+      order → **Name (A–Z)**.
+      Expect: the Data grid columns re-order to age, education, gender, income, region
+      **immediately**, the **Variables** tab re-orders too, and the little **order
+      dropdown in the toolbar above each variable list** now reads "Name (A–Z)".
+      Then: change it from that toolbar dropdown instead, and reopen Settings.
+      Expect: the Settings row agrees. Try **Name (Z–A)** and **Label (A–Z)** as well.
+
+- [ ] **Show variables as**
+      Recipe: **Edit ▸ Settings…** → Show variables as → **Name**.
+      Expect: grid headers drop the label half (just `gender`, not "Gender" + `gender`).
+      Set it to **Both** from the toolbar dropdown and confirm Settings agrees.
+
+- [ ] **Variable pickers offer** *(#205)*
+      Recipe: **Descriptive Statistics ▸ Crosstabs…** and look for `income` in the row
+      variable list — it is scale-coded, so it is not offered. Cancel.
+      **Edit ▸ Settings…** → Variable pickers offer → **All variables**. Reopen
+      Crosstabs.
+      Expect: `income` is now offered, and running it produces a very long table — which
+      is the point: the restriction is a default, not a veto.
+      Then: set it back to **Fitting variables** → `income` disappears from that picker
+      again. Reload the page and confirm the choice was remembered.
+
+- [ ] **Frequency weight — a project setting that writes an op** *(#207)*
+      Recipe: **Edit ▸ Settings…** → Frequency weight → pick a variable → close.
+      Then **Edit ▸ History…**.
+      Expect: a **weight step appears in the history**, because a weight is a property of
+      the dataset and not a device preference. **Edit ▸ Undo** reverses it. Open
+      **Transform ▸ Weight cases…** and it shows the same variable. Change it *there*
+      and the Settings row follows.
+
+- [ ] **The scope hint** *(#206)*
+      Recipe: read the Settings screen top to bottom.
+      Expect: it distinguishes device settings from project settings, so the Frequency
+      weight row is not mistaken for a preference.
+
+- [ ] **Encrypt at rest (a routed row)**
+      Recipe: **Edit ▸ Settings…** → the Encrypt at rest row → **Configure…**.
+      Expect: the encryption dialog opens. Change the policy, come back.
+      Expect: the row now reports the new state.
+
+- [ ] **TURN server** *(#209)*
+      Recipe: **Edit ▸ Settings…** → TURN server → **Configure…**. Try, in order:
+      a `stun:` URL; a username with no credential; then a full `turn:` URL with both.
+      Expect: `stun:` is refused with a reason; a half credential pair is refused; the
+      full one saves. Reopen the editor.
+      Expect: **the fields are not pre-filled with the stored credential**, and the
+      Settings row says only *Configured* / *Not configured* — the credential itself
+      appears nowhere on screen.
+
+- [ ] **Rendezvous relays**
+      Recipe: **Edit ▸ Settings…** → the relays box → enter two URLs on separate lines
+      with a blank line between them → close → reopen.
+      Expect: two entries, not three — a blank line is not an entry.
+
+- [ ] **Debug logging**
+      Recipe: **Edit ▸ Settings…** → tick Debug logging → close → open the **Edit** menu.
+      Expect: **☑ Debug logging** is ticked. Then **Edit ▸ Save debug log…**
+      Expect: a log file is produced.
+
+- [ ] **A lifecycle flag stays hidden**
+      Recipe: read every row on the Settings screen.
+      Expect: nothing resembling `screen.autoNoteSeen` is listed. A setting with no
+      label is a lifecycle flag, not a preference, and must not be offered.
+
+- [ ] **Clearing restores the default, not a copy of it**
+      Recipe: set Screen layout to Small screen mode, then clear it back to the default.
+      Narrow and widen the window.
+      Expect: the **viewport decides again**. A stored "full" would outrank the viewport
+      and look identical until you resized — which is the bug this checks for.
 
 ## 4. Data import and export (codecs)
 
-All through the single searchable picker — **File ▸ Import data…** and
+Everything goes through one searchable picker: **File ▸ Import data…** and
 **File ▸ Export data…**. There are deliberately no per-format menu items. *(#113)*
 
-- [ ] **The picker itself.** Open Import data…
-      Expect: one grouped, searchable list; typing "stata" finds the right entry;
-      formats whose plugin is not activated are offered and activate on use.
-- [ ] **CSV** `.csv/.tsv/.txt` — import and export.
-      Expect: delimiter and header detection; types inferred; round-trips.
-- [ ] **Excel** `.xlsx/.xls/.xlsm/.xlsb` — import and export.
-      Expect: sheet choice; round-trips.
-- [ ] **SPSS/Stata/SAS (read)** `.sav/.zsav/.dta/.por/.xpt/.sas7bdat`.
-      Expect: **variable labels, value labels and missing codes all arrive.** This is
-      the one to test hardest — import the `.sav` you exported in §0 and confirm
-      `income`'s −99/−98 are still designated missing.
-- [ ] **SPSS/Stata/SAS — choose variables.** The `readstat-pick` entry.
-      Expect: pick a subset of a wide file; only those columns import.
-- [ ] **SPSS (.sav) export** and **Stata (.dta) export**.
-      Expect: written files open in SPSS/Stata with labels intact. (Read support covers
-      more formats than write — `.por/.xpt/.sas7bdat` are read-only. Expected.)
-- [ ] **Parquet** `.parquet` — import and export.
-- [ ] **JSON Lines** `.ndjson/.jsonl` — import and export.
-- [ ] **Wikipedia table import.** File ▸ Import data… ▸ Wikipedia table…
-      Expect: paste an article URL, pick a table, it arrives as a dataset.
-- [ ] **A large file.** Import something in the hundreds of MB.
-      Expect: streams with progress; does not freeze the tab; memory does not explode.
-      *(Known open follow-ups: an ultra-wide file path, and a multi-GB write test.)*
-- [ ] **Swap, not replace.** Import over an existing dataset. *(#no-inplace-replace)*
-      Expect: it offers **Swap** — a new dataset, old one binned — and never silently
-      clears the live one.
+- [ ] **The picker itself**
+      Recipe: **File ▸ Import data…** and type "stata" in the search box.
+      Expect: one grouped, searchable list; "stata" finds the SPSS/Stata/SAS entry.
+      Then pick a format whose plugin you deliberately left deactivated.
+      Expect: it is still offered and **activates on use** rather than being hidden.
+
+- [ ] **CSV** — `.csv` / `.tsv` / `.txt`
+      Recipe: **File ▸ Export data…** → CSV → save. Then **File ▸ Import data…** → CSV →
+      re-import that file.
+      Expect: delimiter and header detected; types inferred; the values round-trip.
+      Reference: SPSS `GET DATA /TYPE=TXT`, or File ▸ Import Data ▸ CSV Data.
+
+- [ ] **Excel** — `.xlsx` / `.xls` / `.xlsm` / `.xlsb`
+      Recipe: export to `.xlsx`, open it in Excel, then re-import. Try a workbook with
+      several sheets.
+      Expect: you are asked which sheet; values round-trip.
+      Reference: SPSS `GET DATA /TYPE=XLSX /SHEET=NAME 'Sheet1'`.
+
+- [ ] **SPSS / Stata / SAS, reading** — `.sav` `.zsav` `.dta` `.por` `.xpt` `.sas7bdat`
+      Recipe: import the `.sav` you exported in §0.
+      Expect: **variable labels, value labels and missing codes all arrive** — check
+      `income`'s −99/−98 specifically in the Variables tab. This is the one to test
+      hardest; numbers-only import is the failure to look for.
+
+- [ ] **SPSS / Stata / SAS, choosing variables**
+      Recipe: **File ▸ Import data…** → "SPSS / Stata / SAS — choose variables…" → pick
+      a `.sav` → select two of its variables.
+      Expect: only those two columns import.
+
+- [ ] **SPSS (.sav) and Stata (.dta) export**
+      Recipe: **File ▸ Export data…** → SPSS (.sav); again for Stata (.dta). Open each in
+      its own application.
+      Expect: both open with labels intact.
+      Expect too: `.por`, `.xpt` and `.sas7bdat` are offered for **reading only** — write
+      support is deliberately narrower. Not a gap to file.
+
+- [ ] **Parquet** — `.parquet`
+      Recipe: export, re-import.
+      Expect: round-trips; types preserved.
+      Reference: R `arrow::read_parquet`, or Python `pandas.read_parquet`.
+
+- [ ] **JSON Lines** — `.ndjson` / `.jsonl`
+      Recipe: export, re-import, and open the file in a text editor.
+      Expect: one JSON object per line; round-trips.
+
+- [ ] **Wikipedia table import**
+      Recipe: **File ▸ Import data…** → **Wikipedia table…** → paste an article URL with
+      a table in it → pick the table.
+      Expect: it arrives as a dataset with usable column names.
+
+- [ ] **A large file**
+      Recipe: import something in the hundreds of megabytes and watch the tab.
+      Expect: it streams with progress; the tab stays responsive; memory does not
+      explode. *(Two known follow-ups remain open here: an ultra-wide file path, and a
+      multi-GB write test.)*
+
+- [ ] **Swap, not replace**
+      Recipe: with a dataset already loaded, import another file over it.
+      Expect: it offers **Swap** — the new data becomes a **new dataset** and the old one
+      goes to the bin. It must never silently clear the live dataset.
 
 ## 5. Transform
 
-- [ ] **Compute variable…** — e.g. `income_k = income / 1000`.
-      Expect: new variable; History step; undoable.
-- [ ] **Recode into new variable…** — `age` into bands.
-      Expect: new variable, original untouched, value labels settable.
+- [ ] **Compute variable…**
+      Recipe: **Transform ▸ Compute variable…** → target name `income_k` → expression
+      `income / 1000` → OK. Look at the Data tab, then **Edit ▸ History…**.
+      Expect: a new `income_k` column whose first value is **52** (income 52000); the two
+      −99 cases come through as **missing, not −0.099**; a history step appears and
+      **Edit ▸ Undo** removes the variable.
+      Reference: SPSS `COMPUTE income_k = income / 1000.` then `EXECUTE.`
+
+- [ ] **Recode into new variable…**
+      Recipe: **Transform ▸ Recode into new variable…** → source `age`, target
+      `age_band` → ranges: lowest–34 → 1, 35–49 → 2, 50–highest → 3 → OK.
+      Expect: a new variable; **`age` is untouched**; value labels can be set on the
+      result; counts are **10 / 12 / 8** (check with Frequencies).
+      Reference: SPSS `RECODE age (LO THRU 34=1)(35 THRU 49=2)(50 THRU HI=3)
+      INTO age_band.`
+
 - [ ] **Count values within cases…**
-      Expect: a count variable across the chosen columns.
-- [ ] 🔢 **Aggregate / collapse…** — `groupby = education`, `measures = income`,
-      `func = mean`.
-      Expect: 3 rows; **30350.00 / 43836.36 / 60355.56** (this is hand-rolled JS
-      arithmetic — check it against the ANOVA group means in §8).
-      Reference: SPSS `AGGREGATE /BREAK=education /income_mean=MEAN(income).`
-- [ ] **Select cases…** — e.g. `age > 40`.
-      Expect: filtered analyses honour it; the filter is visible and reversible.
+      Recipe: **Transform ▸ Count values within cases…** → target `n_high` → count the
+      value 3 across `education` and `region`.
+      Expect: a count per row, 0–2, with no missing.
+      Reference: SPSS `COUNT n_high = education region (3).`
+
+- [ ] 🔢 **Aggregate / collapse…**
+      Recipe: **Transform ▸ Aggregate / collapse…** → `groupby = education`,
+      `measures = income`, `func = mean` → OK.
+      Expect, exactly: 3 rows — **30350.00 / 43836.36 / 60355.56**. Hand-rolled
+      JavaScript arithmetic, so check it: those are the same group means the one-way
+      ANOVA reports in §15. They must agree with each other.
+      Reference: SPSS `AGGREGATE OUTFILE=* /BREAK=education
+      /income_mean=MEAN(income).`
+
+- [ ] **Select cases…**
+      Recipe: **Transform ▸ Select cases…** → condition `age > 40` → OK. Then run
+      **Descriptive Statistics ▸ Frequencies…** on `gender`.
+      Expect: the filter is visible in the UI and analyses honour it — gender comes back
+      **2 / 12**, N = 14, not 15 / 15, N = 30. Switch it off again and all 30 return.
+      Reference: SPSS `SELECT IF (age > 40).` — but note SPSS *deletes* unselected cases
+      unless you use `FILTER`; CrossTab's is reversible, which is the better behaviour.
+
 - [ ] **Extract columns to a new dataset…**
+      Recipe: **Transform ▸ Extract columns to a new dataset…** → pick `gender` and
+      `income` → OK.
+      Expect: a second dataset with just those two columns and their metadata; the
+      original is unchanged.
+
 - [ ] **Join with another dataset…**
-      Expect: key choice, join type, captured in History as one undoable step.
-- [ ] **Weight cases…** — set `income`… then a proper weight.
-      Expect: weighted counts in Frequencies/Crosstabs; the Settings screen's
-      Frequency weight row agrees; History records it.
-- [ ] **Run R script…** — `summary(data)` then something returning a data frame.
-      Expect: output and plots shown; a returned frame can be imported as a **new**
-      dataset (the reverse bridge). `data` is the active dataset.
+      Recipe: make a small second dataset keyed on `education` (3 rows, a label column),
+      then **Transform ▸ Join with another dataset…** → choose the key and the join type.
+      Expect: the new column lands on all 30 rows; it appears in **Edit ▸ History…** as
+      **one undoable step**; a non-matching key produces missing rather than a silent
+      drop.
+      Reference: SPSS `MATCH FILES /FILE=* /TABLE='other.sav' /BY education.`
+
+- [ ] **Weight cases…**
+      Recipe: **Transform ▸ Compute variable…** to make `w = 2`, then
+      **Transform ▸ Weight cases…** → `w`. Run **Frequencies** on `gender`.
+      Expect: counts are **30 / 30** (each case counted twice) and N = 60; the caption
+      names the weight; **Edit ▸ Settings…**'s Frequency weight row shows `w`; History
+      records it.
+      Then: make a weight with a zero and a negative value in it.
+      Expect: those cases are **dropped outright**, not counted as fractions.
+      Reference: SPSS `WEIGHT BY w.`
+
+- [ ] **Run R script…**
+      Recipe: **Transform ▸ Run R script…** → type `summary(data)` → Run. Then run
+      `data.frame(x = 1:5, y = (1:5)^2)`.
+      Expect: the summary prints (the active dataset is bound as `data`); a plot-producing
+      script shows its plot; the returned data frame can be **imported as a new dataset**
+      — the reverse bridge. Check the new dataset has 5 rows.
+
+---
 
 ## 6. History, timeline, and the do-file editor
 
-- [ ] **History panel.** Edit ▸ History…
-      Expect: numbered rows; data steps and analyses interleaved by anchor; a cursor
-      that moves across both tiers.
-- [ ] **Undo / Redo** across a mixed sequence (recode, analysis, recode).
-      Expect: order respected; analyses re-run or mark stale rather than silently
-      showing old numbers.
-- [ ] **Reorder an analysis row** (the ▲▼ arrows) and watch the busy state. *(#190 —
-      still unverified by me, blocked earlier by a window-occlusion freeze.)*
-      Expect: the row moves, dependent rows re-run, and the busy indicator appears and
-      clears. Nothing is left stale-but-looking-fresh.
-- [ ] **Branch discard.** Move the cursor back, do something new.
-      Expect: the abandoned branch is discarded explicitly, with a warning — not
-      silently rewritten.
-- [ ] **Syntax mode (✎).** History ▸ Syntax.
-      Expect: the whole timeline as editable CrossTab syntax, **losslessly** — switch
-      to text and back without drift. **Run** rebuilds the data and replays the
-      analyses.
-- [ ] **`.ctscript` export / import.** Round-trip a project's script.
-- [ ] **Stata `.do` export and import.** File ▸ Export analysis script… ▸ Stata.
-      Expect: best-effort but runnable; analyses included; re-importing reproduces the
-      steps. (Best-effort is the contract — it is a translation, not a guarantee.)
-- [ ] **SPSS `.sps` export and import.** Same.
-- [ ] **R syntax export.** Same, via the R Syntax Export plugin.
-- [ ] **A stale analysis.** Change a variable an analysis used.
-      Expect: the analysis is marked stale; its old output is still auditable; re-run
-      updates it.
+- [ ] **The History panel**
+      Recipe: load the demo, run **Frequencies** on `gender`, do a
+      **Transform ▸ Compute variable…**, run **Crosstabs**. Then **Edit ▸ History…**
+      Expect: numbered rows; data steps and analyses interleaved **by anchor** (the
+      Crosstabs sits after the compute, because that is when it ran); a cursor you can
+      move, which moves across both data steps and analyses.
+
+- [ ] **Undo and Redo across a mixed sequence**
+      Recipe: with the above history, **Edit ▸ Undo** three times, then **Redo** three
+      times, watching the Data tab and the Output pane.
+      Expect: steps reverse in order; analyses either **re-run or are marked stale** —
+      what must not happen is an analysis quietly showing numbers from data that no
+      longer exists.
+
+- [ ] **Reorder an analysis row** *(#190 — unverified by me; a Steam window was
+      occluding Chrome, which freezes the renderer and makes timed checks unreliable)*
+      Recipe: **Edit ▸ History…** → find an analysis row → click its **▲ / ▼** arrows to
+      move it above or below a data step it depends on.
+      Expect: the row moves; dependent rows re-run; a **busy indicator appears and then
+      clears**. Nothing is left stale-but-looking-fresh.
+
+- [ ] **Branch discard**
+      Recipe: **Edit ▸ History…** → move the cursor back three steps → now do something
+      new (compute a variable).
+      Expect: an explicit **warning that the later branch will be discarded**, and then
+      it is discarded. It must not silently rewrite history behind you.
+
+- [ ] **Syntax mode round-trip (lossless)**
+      Recipe: **Edit ▸ History…** → the **✎ Syntax** toggle. Read the text, switch back
+      to the row view, switch to Syntax again and compare.
+      Expect: the whole timeline as editable CrossTab syntax, and **no drift** between
+      the two passes — the round-trip is lossless by design.
+
+- [ ] **Edit the syntax and Run**
+      Recipe: in Syntax mode, change a value in one of the data steps → **Run**.
+      Expect: the data is rebuilt from the edited script and **the analyses are replayed**
+      on the new data. This is the do-file promise; a partial replay is the thing to look
+      for.
+
+- [ ] **`.ctscript` export and import**
+      Recipe: **File ▸ Export analysis script…** → `.ctscript`. Start a new project, load
+      the demo, then import that script.
+      Expect: the same steps and the same output.
+
+- [ ] **Stata `.do` export and import**
+      Recipe: **File ▸ Export analysis script…** → **Stata (.do)**. Open the file in a
+      text editor, then (optionally) run it in Stata against the exported data.
+      Expect: readable, runnable Stata with the **analyses included**, not just the data
+      steps. Re-importing it reproduces the steps.
+      Expect too: this is explicitly **best-effort** — it is a translation between two
+      languages, not a guarantee. Note what did not survive rather than filing it as a
+      defect.
+
+- [ ] **SPSS `.sps` export and import**
+      Recipe: same, choosing **SPSS (.sps)**. Paste it into an SPSS syntax window and
+      run it against the `.sav` from §0.
+      Expect: it runs and produces comparable output. Same best-effort contract.
+      Reference: this is also a convenient way to generate the SPSS commands for the
+      arithmetic checks further down — export the script and read it.
+
+- [ ] **R syntax export**
+      Recipe: **File ▸ Export analysis script…** → **R**. Run the resulting `.R` in
+      desktop R against the CSV export of the same data.
+      Expect: runnable R that reproduces the analyses. This is the most faithful of the
+      three script exports, since the analyses were computed in R to begin with — which
+      also makes it the best way to get the exact code for an arithmetic check.
+      Reference: compare its output to the app's own output, line for line.
+
+- [ ] **A stale analysis**
+      Recipe: run **Descriptive Statistics ▸ Descriptives…** on `income`. Then
+      **Transform ▸ Recode** `income` (or edit a value it used).
+      Expect: the analysis is **marked stale**; its old output is still there and still
+      auditable; re-running updates it. The failure to look for is output that silently
+      keeps the old numbers with no indication.
 
 ## 7. Plugins — lifecycle and the manager
 
-Vocabulary matters here: *catalogued / registered / enabled / activated / failed /
+The vocabulary matters: *catalogued / registered / enabled / activated / failed /
 referenced*. "Loaded" and "active" are not states.
 
-- [ ] **Manager.** Edit ▸ Plugins…
-      Expect: every plugin with its state; enable ≠ activate; a failed plugin says why.
-- [ ] **Activate / deactivate** one.
-      Expect: its menu items appear and disappear accordingly.
-- [ ] **The 🔍 how-to.** Click it on any plugin.
-      Expect: the one-line `howto` for that plugin. All 60-odd builtins have one.
-- [ ] **Add from file** and **Add from URL**.
-      Expect: URL plugins are namespaced by host; file/authored ones get
-      `plugin:<id>` isolation. A name collision does not let one plugin read another's
-      data.
-- [ ] **Create plugin…** Edit ▸ Create plugin…
-      Expect: a working scaffold you can run immediately; then **Export plugin** →
-      re-import it.
-- [ ] **Presets.** On any analysis dialog: the preset dropdown plus Save / Rename /
-      Delete. *(#162 — still unverified by me, same occlusion block.)*
-      Expect: saving a preset round-trips the inputs; renaming and deleting behave;
-      **a preset naming a plugin that is no longer present shows a clear note**, not an
-      error.
-- [ ] **Cross-plugin reads.** *(#196)*
-      Expect: a collection declared `read: 'owner'` is invisible to other plugins; one
-      declared `read: 'public'` is listed by `items.publicCollections()`. CAQDAS
-      codings are public (they are analysis substrate) — Inter-coder agreement from
-      codings… proves it.
-- [ ] **Site plugins.** With a `deploy.json` declaring a site plugin directory.
-      Expect: host-namespaced, provided-not-privileged — a site plugin gets no more
-      authority than any other.
-- [ ] **R package resolution.** Activate a plugin needing several R packages, run it.
-      Expect: packages download once with progress; a package that cannot load in WebR
-      fails with a readable message, not a hang. (There is a hard ceiling around ~20
-      concurrently-loaded shared objects — a failure naming an innocent package is a
-      known symptom of hitting it.)
+- [ ] **The manager**
+      Recipe: **Edit ▸ Plugins…** and read the list.
+      Expect: every plugin with its state; **enabled and activated are distinct**; a
+      failed plugin says *why* it failed.
+
+- [ ] **Activate and deactivate one**
+      Recipe: untick **Frequencies** → close → open the **Descriptive Statistics** menu.
+      Then re-tick it and look again.
+      Expect: `Frequencies…` disappears from the menu and comes back. Menu presence
+      follows activation exactly.
+
+- [ ] **The 🔍 how-to**
+      Recipe: **Edit ▸ Plugins…** → click the **🔍** beside any plugin.
+      Expect: that plugin's one-line how-to. All 60-odd builtins have one.
+
+- [ ] **Add from file, and add from URL**
+      Recipe: **Edit ▸ Plugins… ▸ Add from file…** with a small authored plugin; then
+      **Add from URL…** with a plugin served from some host.
+      Expect: the URL one is namespaced by **host**; the file/authored one gets
+      `plugin:<id>` isolation. Two plugins with the same declared id from different
+      sources must not be able to read each other's stored data.
+
+- [ ] **Create a plugin**
+      Recipe: **Edit ▸ Create plugin…** → accept the scaffold → run the analysis it
+      registers. Then **Edit ▸ Plugins…** → **Export plugin** → re-import the exported
+      file.
+      Expect: the scaffold runs immediately and the export/import round-trips.
+
+- [ ] **Presets** *(#162 — unverified by me, same occlusion block)*
+      Recipe: open any analysis dialog (**Descriptive Statistics ▸ Frequencies…**), fill
+      in `vars = gender, education` and some Statistics ticks, then use the **preset
+      dropdown ▸ Save** and name it. Cancel, reopen the dialog, pick the preset.
+      Expect: the inputs come back exactly. Then **Rename** it, then **Delete** it.
+      Then: deactivate the plugin that preset belongs to and open the preset list again.
+      Expect: **a clear note that the plugin is missing** — not an error, not a silently
+      broken entry.
+
+- [ ] **Cross-plugin reads** *(#196)*
+      Recipe: in the **Coding** workspace create a codebook and code a passage. Then run
+      **Scale ▸ Inter-coder agreement from codings…**
+      Expect: it reads the CAQDAS codings across the plugin boundary, because they are
+      declared a **public** collection. A collection declared `read: 'owner'` is invisible
+      to other plugins — the default — and codings are deliberately public because they
+      are analysis substrate.
+
+- [ ] **Site plugins**
+      Recipe: add a site plugin directory to `deploy.json`, drop a plugin in it, reload.
+      Expect: it is **host-namespaced** and **provided, not privileged** — it gets exactly
+      the authority any other plugin gets, no more.
+
+- [ ] **R package resolution**
+      Recipe: activate **Multivariate ▸ CFA & SEM** (needs `lavaan`) and run it. Watch
+      the progress. Then activate several heavy plugins at once and run one.
+      Expect: packages download once, with progress, then are cached. A package that
+      cannot load in WebR fails with a **readable message**, not a hang. There is a hard
+      ceiling of roughly 20 concurrently-loaded shared objects — a failure naming an
+      apparently innocent package is the known symptom of hitting it, not a bug in that
+      package.
 
 ## 8. Output and export
 
-- [ ] **Output pane.** Run anything.
-      Expect: tables, text and charts in order; a caption naming the dataset and any
-      weight.
-- [ ] **Clear output.**
-- [ ] **Output outlives its maker.** Run an analysis, then **deactivate that plugin**,
-      then reload.
-      Expect: the saved output still renders and is still auditable — the artefact and
-      the R that computed it were persisted, with provenance captured at write time.
+- [ ] **The Output pane**
+      Recipe: run **Frequencies** on `gender` with a weight set, then click **Output**.
+      Expect: tables, text and charts in the order they were run; a caption naming the
+      **dataset** and the **weight**.
+
+- [ ] **Clear output**
+      Recipe: the **Clear output** action beside the tabs.
+      Expect: output empties; the data and History are untouched.
+
+- [ ] **Output outlives its maker**
+      Recipe: run **Descriptive Statistics ▸ Crosstabs…**. Then **Edit ▸ Plugins…** and
+      **deactivate Crosstabs**. Then reload the page and look at Output.
+      Expect: the saved output **still renders and is still auditable** — the artefact
+      and the R that computed it were persisted, with provenance captured at write time.
       Worst case it degrades to static plus a plain note. It must never vanish or throw.
-- [ ] **Export output… ▸ HTML.** Expect: self-contained file; charts included.
-- [ ] **Export output… ▸ Word (.docx).** Expect: opens in Word; tables are real tables.
-- [ ] **Export output… ▸ R Data.** Expect: loads in R.
-- [ ] **Print / Save PDF.** Expect: sane page breaks. *(Do this by hand — never under
-      automation.)*
-- [ ] **Chart editing.** On any chart: the control panel.
-      Expect: titles, axis titles, legend, palette, size all editable **after** the fact,
-      and the edits survive save/reload. Charts are models the host renders, not baked
-      images — except the R-baked ones below.
-- [ ] **R-baked figures.** A plugin that returns an SVG from R (Ecology, Ordination,
-      SNA, Spatial, Time Series, VAR).
-      Expect: the R SVG sits as a graphic layer *under* host-drawn title and legend,
-      which stay editable; and the **"Recompute the figure"** controls re-run R with new
+
+- [ ] **Export output ▸ HTML**
+      Recipe: **File ▸ Export output…** → HTML → save → open in a browser with no network.
+      Expect: self-contained; charts included; no broken images.
+
+- [ ] **Export output ▸ Word (.docx)**
+      Recipe: same, choosing Word. Open in Word.
+      Expect: it opens; **tables are real Word tables** you can click into, not images.
+
+- [ ] **Export output ▸ R Data**
+      Recipe: same, choosing R Data. Then `load("file.RData")` in desktop R.
+      Expect: the objects load and are inspectable.
+
+- [ ] **Print / Save PDF**
+      Recipe: the print action, by hand.
+      Expect: sane page breaks; tables not cut mid-row. *(Do this manually — never under
+      automation; a print preview blocks the tab's JS thread.)*
+
+- [ ] **Chart editing after the fact**
+      Recipe: run **Graphs ▸ Bar chart…** on `education`. In the Output pane open the
+      chart's control panel and change the title, the axis titles, the legend, the
+      palette and the size. Then **reload the page**.
+      Expect: every edit survives. Charts are **models the host renders**, not baked
+      images, so they stay editable — including after save and reload.
+
+- [ ] **R-baked figures**
+      Recipe: run something that returns an SVG from R — **Multivariate ▸ Diversity &
+      ordination…**, **Multivariate ▸ Network analysis…**, **Spatial ▸ …**,
+      **Time Series ▸ Decomposition…** or **Vector autoregression…**. Then open its
+      controls.
+      Expect: the R SVG sits as a graphic layer **under** host-drawn title and legend,
+      which stay editable; and a **"Recompute the figure"** group re-runs R with new
       parameters. *(#131/#201)*
-- [ ] **Colour scale.** On a chart with a continuous scale.
-      Expect: a classed colour bar in the legend layer.
-- [ ] **Chart export size.** Export a chart at a chosen size.
-      Expect: the SVG/PNG honours it.
+
+- [ ] **Colour scale**
+      Recipe: produce a chart with a continuous scale (e.g. **Spatial ▸ Choropleth map…**
+      on the spatial demo).
+      Expect: a **classed colour bar** in the legend layer, with readable breaks.
+
+- [ ] **Chart export size**
+      Recipe: export a chart, choosing a specific width/height.
+      Expect: the written SVG/PNG honours the size you asked for.
 
 ## 9. Collaboration
 
-- [ ] **Invite.** File ▸ Copy invite link… on machine A; open it on machine B.
-      Expect: both see the project; presence shows both.
-- [ ] **Concurrent edits, three tiers.** Edit data on A, codebook on B, a spatial
-      layer on both.
-      Expect: the op log merges three-way; the codebook is **add-wins**; spatial state
-      is last-writer-wins. Each tier's rule is the owner's, declared per tier.
-- [ ] **Conflict UI.** Force a genuine conflict.
-      Expect: a readable conflict presentation, not a silent clobber.
-- [ ] **Per-user state** keys by author, so two people's cursors/selections do not
-      fight.
-- [ ] **TURN relay.** With a TURN server configured, connect two peers that cannot see
-      each other directly.
-- [ ] **Sharing settings.** File ▸ Sharing…
+- [ ] **Invite a second machine**
+      Recipe: on machine A, **File ▸ Copy invite link…**. Open that link on machine B.
+      Expect: both see the same project; presence shows two people.
+
+- [ ] **Concurrent edits across the three tiers**
+      Recipe: simultaneously — edit a **data** value on A; add a **code to the codebook**
+      on B; move a **spatial layer** on both.
+      Expect: data merges three-way through the op log; the codebook is **add-wins** (both
+      codes survive); spatial state is **last-writer-wins**. Each tier's rule is declared
+      by its owner and they are deliberately different.
+
+- [ ] **Conflict UI**
+      Recipe: go offline on B, change the same cell on both, bring B back online.
+      Expect: a readable conflict presentation. A silent clobber is the failure.
+
+- [ ] **Per-user state**
+      Recipe: on both machines, select different variables and put the cursor in
+      different cells.
+      Expect: selections and cursors do **not** fight — that state is keyed by author.
+
+- [ ] **TURN relay**
+      Recipe: configure a TURN server (§3), then connect two peers that cannot reach each
+      other directly (e.g. different networks).
+      Expect: they still connect, via the relay.
+
+- [ ] **Sharing settings**
+      Recipe: **File ▸ Sharing…** and change what is shared.
+      Expect: the change takes effect and is legible — you can tell what the other side
+      can see.
 
 ## 10. Encryption at rest
 
-- [ ] **Export protection.** File ▸ Encryption settings… ▸ protect exports; export a
-      project.
-      Expect: the file needs the passphrase to open.
-- [ ] **Local/OPFS protection** (opt-in) — a per-project passphrase.
-      Expect: the catalog stays readable (so you can see your project list) while the
-      project content does not; the key is held only for the active project; a save
-      guard prevents writing plaintext over a protected project.
-- [ ] **Protect / unprotect / change passphrase.**
-      Expect: all three work; changing re-wraps rather than re-encrypting from scratch.
-- [ ] **Closed ≠ live.** Expect: this protects *closed* projects. A live session in an
-      open tab is not protected, by design — confirm the UI says so and does not
-      overclaim.
-- [ ] **Wrong passphrase.** Expect: a clear refusal, no data loss.
+- [ ] **Protect exports**
+      Recipe: **File ▸ Encryption settings…** → turn on protection for exports → set a
+      passphrase → **File ▸ Export data…** (or export the project). Try to open the file.
+      Expect: it needs the passphrase.
+
+- [ ] **Protect a locally stored project (OPFS)**
+      Recipe: **File ▸ Encryption settings…** → opt in for local storage → set a
+      per-project passphrase → close the project → reload.
+      Expect: the project **catalog is still readable** (you can see your project list)
+      while the project *content* is not until you unlock it.
+
+- [ ] **Protect, unprotect, change the passphrase**
+      Recipe: do all three from **File ▸ Encryption settings…**, reloading between.
+      Expect: all three work; changing the passphrase **re-wraps the key** rather than
+      re-encrypting everything (so it is fast even on a large project).
+
+- [ ] **Closed is protected; live is not**
+      Recipe: unlock a protected project, leave the tab open, and read what the UI says
+      about what is protected.
+      Expect: it says plainly that this protects **closed** projects — an open session in
+      an open tab is not protected. The thing to check is that it does not **overclaim**.
+
+- [ ] **A wrong passphrase**
+      Recipe: try to open a protected project with the wrong passphrase, three times.
+      Expect: a clear refusal each time, and **no data loss** — the project still opens
+      with the right one afterwards.
 
 ## 11. Offline and air-gap
 
-- [ ] **"Make available offline".** Toggle it on; let it finish.
-      Expect: progress through the asset groups, including the **R package closure**
-      prefetch for the plugins you selected.
-- [ ] **Airplane mode.** Reload, run a cached analysis.
-      Expect: it runs. WebR, the packages and the app shell all come from cache.
-- [ ] **Transcription offline.** With offline caching on, run a transcription in
-      airplane mode.
-      Expect: works — the transformers.js library, the onnxruntime WASM **and the
-      model weights** are all cached. (Clear the `transformers-cache` before testing a
-      negative control; it will happily serve a model you thought you deleted.)
-- [ ] **Air-gapped deployment.** `node scripts/vendor-assets.mjs`, serve with
-      `assets: local`.
-      Expect: no network requests at all — check DevTools ▸ Network with a filter for
-      anything off-origin. See `docs/OFFLINE.md`.
-- [ ] **PWA install.** Install to desktop/home screen; launch from the icon.
+- [ ] **"Make available offline"**
+      Recipe: find the offline toggle, select some plugins, turn it on, and let it finish.
+      Expect: progress through the asset groups, **including an R package closure
+      prefetch** for the plugins you selected.
+
+- [ ] **Airplane mode**
+      Recipe: with the above complete, turn off networking, reload the page, run an
+      analysis you ran before.
+      Expect: it runs. The app shell, WebR and the R packages all come from cache.
+
+- [ ] **Transcription offline**
+      Recipe: **first clear the `transformers-cache`** in DevTools ▸ Application ▸ Cache
+      Storage. Then with offline caching on, go into airplane mode, import an audio file
+      and transcribe it.
+      Expect: it works — the transformers.js library, the onnxruntime WASM **and the model
+      weights** are all cached.
+      ⚠️ Clearing that cache first is not optional: it will happily serve a model you
+      thought you had deleted, which makes a negative control read as a pass.
+
+- [ ] **An air-gapped deployment**
+      Recipe: `node scripts/vendor-assets.mjs`, then serve with `assets: local` in
+      `deploy.json`. Open DevTools ▸ Network, filter to anything not on your origin, and
+      use the app properly — import, analyse, chart.
+      Expect: **zero off-origin requests**. See `docs/OFFLINE.md`.
+
+- [ ] **PWA install**
+      Recipe: install the app to the desktop or home screen from the browser's install
+      prompt, then launch from the icon.
+      Expect: it opens full-screen with no browser chrome, and works.
 
 ## 12. Help and how-to
 
-- [ ] **How to…** Help ▸ How to…
-      Expect: a searchable index; 92 topics; opening one renders its prose.
-- [ ] **A dialog's ⓘ.** Open any analysis dialog and click ⓘ.
-      Expect: the topic for *that* item, falling back to the plugin's entry page.
-- [ ] **Syntax guide…** Help ▸ Syntax guide…
-      Expect: the grammar plus a **live** list of `run id.fn` calls for the plugins you
-      actually have activated.
-- [ ] **Getting around…**, **Caveats & limits…**, **Report a bug…**,
-      **Ask a question…**, **Source code…** all open correctly.
-- [ ] **A third-party plugin's how-to.** Expect: a plugin shipping `howtoFile` +
-      `howtoIndex` gets exactly the same placement, search and rendering as a builtin.
-      Nothing privileged about core.
+- [ ] **How to…**
+      Recipe: **Help ▸ How to…**, search for "frequency", open a topic.
+      Expect: a searchable index (92 topics) and the topic's prose renders.
+
+- [ ] **A dialog's ⓘ**
+      Recipe: open **Descriptive Statistics ▸ Frequencies…** and click the **ⓘ**.
+      Expect: the topic for *that menu item* ("Make a frequency table"), not a generic
+      page. An item with no topic of its own falls back to the plugin's entry page.
+
+- [ ] **Syntax guide…**
+      Recipe: **Help ▸ Syntax guide…** Note the list of `run id.fn` calls. Deactivate a
+      plugin, reopen the guide.
+      Expect: the grammar, plus a **live** call list that reflects the plugins you
+      actually have activated — the deactivated one is gone.
+
+- [ ] **The remaining Help items**
+      Recipe: open **Getting around…**, **Caveats & limits…**, **Report a bug…**,
+      **Ask a question (Discussions)…** and **Source code…** in turn.
+      Expect: each opens correctly; the last three reach the right GitHub destinations.
+
+- [ ] **A third-party plugin's how-to**
+      Recipe: add a plugin from file that ships `howtoFile` + `howtoIndex`, then
+      **Help ▸ How to…** and search for its topic.
+      Expect: it appears with **exactly the same placement, search and rendering** as a
+      builtin's. There is deliberately nothing privileged about core here.
 
 ## 13. Accessibility and small screens
 
-- [ ] **Keyboard only.** Tab through menus, dialogs, the grid.
-      Expect: everything reachable; focus always visible; Escape closes dialogs.
-- [ ] **Contrast.** Expect: 0 failures (this passed a measured sweep — treat a new
-      failure as a regression).
-- [ ] **Reflow at 320px** (WCAG 1.4.10). Narrow the window right down.
-      Expect: no horizontal scrolling of the page; small-screen mode gives command
-      parity (53/53).
-      ⚠️ **One known leak:** `.ct-edit` has a `min-width: 380px` that breaks dialog
-      layout below about 404px. Expected until fixed — don't re-file it.
-- [ ] **Screen reader** on a results table and a dialog.
-- [ ] **Small screen mode by hand** (Edit ▸ Small screen mode) on a large window.
-      Expect: every command still reachable.
+- [ ] **Keyboard only**
+      Recipe: put the mouse down. Tab through the menu bar, open a menu with Enter and
+      arrow through it, open an analysis dialog, move between its inputs, run it, and
+      close the dialog with Escape. Then Tab into the Data grid and move around.
+      Expect: everything reachable; **focus always visible**; Escape closes dialogs; no
+      keyboard trap.
+
+- [ ] **Contrast**
+      Recipe: run an automated contrast check (DevTools ▸ Lighthouse, or axe).
+      Expect: **0 failures.** This passed a measured sweep, so treat any new failure as a
+      regression rather than a known issue.
+
+- [ ] **Reflow at 320px (WCAG 1.4.10)**
+      Recipe: DevTools ▸ device toolbar → set the width to **320px** → use the app.
+      Expect: **no horizontal page scrolling**; small-screen mode gives full command
+      parity (53 of 53).
+      ⚠️ **One known leak:** `.ct-edit` carries a `min-width: 380px` that breaks dialog
+      layout below about **404px**. Expected until fixed — do not re-file it.
+
+- [ ] **Screen reader**
+      Recipe: turn on NVDA or Narrator. Read a results table, then open an analysis
+      dialog and move through its inputs.
+      Expect: the table's structure is announced (headers with cells, not a flat run of
+      numbers); every input has a name and its state.
+
+- [ ] **Small screen mode on a large window**
+      Recipe: **Edit ▸ ☐ Small screen mode** on a maximised window. Then try to reach
+      every command you would normally use.
+      Expect: all of them are reachable — the mode is user-owned, so it must not be a
+      degraded experience you cannot work in.
 
 ---
+
 ## 14. Descriptive Statistics *(6 items)*
 
 - [ ] **Frequencies…** — `Descriptive Statistics ▸ Frequencies…`
@@ -895,67 +1272,96 @@ referenced*. "Loaded" and "active" are not states.
 
 ## 23. Graphs *(11 items)* 🔢
 
-All chart arithmetic is hand-rolled JavaScript (no R), and all of these emit a **chart
-model** the host renders — so for each one also confirm the host controls work: title,
-axis titles, legend, palette, size, and that edits survive save/reload.
+All chart arithmetic here is hand-rolled JavaScript — no R — and every one emits a
+**chart model** the host renders. So for each, also confirm the host controls work:
+title, axis titles, legend, palette, size, and that the edits survive save and reload
+(§8 covers that once; you do not need to repeat it eleven times).
 
-- [ ] **Histogram…** — `Graphs ▸ Histogram…`
-      Recipe: `v = age`.
-      Expect: bars covering 25–61; a sensible bin count (check the rule — Sturges on
-      n = 30 gives ~6 bins); counts summing to **30**. Then `v = income` and expect
-      counts summing to **28**.
-      Reference: SPSS `GRAPH /HISTOGRAM=age.` Bin boundaries legitimately differ
+- [ ] **Histogram…**
+      Recipe: **Graphs ▸ Histogram…** → `v = age` → OK. Then run it again with
+      `v = income`.
+      Expect: bars spanning 25–61 for `age`, with the bar counts summing to **30**; for
+      `income` they must sum to **28** (the two −99s are missing, not zero). A sensible
+      bin count — Sturges on n = 30 gives **6** bins.
+      Reference: SPSS `GRAPH /HISTOGRAM=age.` Bin *boundaries* legitimately differ
       between packages; the **total** must not.
 
-- [ ] **Bar chart…** — same menu.
-      Recipe: `v = education`.
-      Expect: three bars **8 / 12 / 10** with value labels on the axis.
+- [ ] **Bar chart…**
+      Recipe: **Graphs ▸ Bar chart…** → `v = education` → OK.
+      Expect, exactly: three bars of **8 / 12 / 10**, labelled High school / Bachelor /
+      Postgraduate on the axis (value labels, not the codes 1/2/3).
       Reference: SPSS `GRAPH /BAR(SIMPLE)=COUNT BY education.`
 
-- [ ] **Line chart…** — `v = age`. Expect: one point per case in file order.
+- [ ] **Line chart…**
+      Recipe: **Graphs ▸ Line chart…** → `v = age` → OK.
+      Expect: one point per case in **file order** (45, 33, 28, 52 …), 30 points, joined.
+      Reference: SPSS `GRAPH /LINE(SIMPLE)=VALUE(age).`
 
-- [ ] **Scatter…** — `x = age`, `y = income`.
-      Expect: 28 points (two dropped for missing income); a visibly strong positive
-      relationship (r = .95). If a fit line is offered it should match the OLS slope
-      from a simple regression of income on age.
+- [ ] **Scatter…**
+      Recipe: **Graphs ▸ Scatter…** → `x = age`, `y = income` → OK.
+      Expect: **28 points** (two dropped for missing income) and a visibly strong
+      positive relationship — r = .9515. If a fit line is offered, its slope should match
+      a simple regression of income on age.
       Reference: SPSS `GRAPH /SCATTERPLOT(BIVAR)=age WITH income.`
 
-- [ ] **Trends over time…** — `x = age`, `g = gender`, `summary = mean`.
-      Expect: one line per group; switching `summary` between mean/sum/count/percent
-      changes the values; a percent mode should sum to 100 within each x.
+- [ ] **Trends over time…**
+      Recipe: **Graphs ▸ Trends over time…** → `x = age`, `g = gender`,
+      `summary = mean`, `y = income` → OK. Then switch `summary` to count, then to
+      percent.
+      Expect: one line per group; the values change with each summary; in **percent**
+      mode the lines sum to 100 within each x.
+      Reference: SPSS `GRAPH /LINE(MULTIPLE)=MEAN(income) BY age BY gender.`
 
-- [ ] **Boxplot…** — `y = age`.
-      Expect: median **39.5**, and quartiles at **31.75 / 50.5** (SPSS's hinge
-      definition) or **32.25 / 49.75** (R's default). Note which — this is the same
-      quartile-definition question as §14, and the two must at least be *consistent*
-      with each other inside the app.
-      Then `g = gender` for side-by-side boxes.
-      Reference: SPSS `EXAMINE VARIABLES=age /PLOT BOXPLOT.`
+- [ ] **Boxplot…**
+      Recipe: **Graphs ▸ Boxplot…** → `y = age` → OK. Then again with `g = gender`.
+      Expect: median **39.5**; quartiles at **31.75 / 50.5** (SPSS's hinge definition) or
+      **32.25 / 49.75** (R's default) — note which you get. With `g` set, two boxes side
+      by side.
+      ⚠️ Whichever quartile definition it uses, it must be **the same one** the
+      Frequencies Statistics panel uses (§14). Two different definitions inside one app
+      is the real bug to look for here.
+      Reference: SPSS `EXAMINE VARIABLES=age /PLOT BOXPLOT /STATISTICS NONE.`
 
-- [ ] **Pie chart…** — `v = region`.
-      Expect: three slices 36.7 / 33.3 / 30.0 %, summing to 100.
+- [ ] **Pie chart…**
+      Recipe: **Graphs ▸ Pie chart…** → `v = region` → OK.
+      Expect, exactly: three slices of **36.7 / 33.3 / 30.0 %** (11 / 10 / 9 cases),
+      summing to 100.
+      Reference: SPSS `GRAPH /PIE=COUNT BY region.`
 
-- [ ] **Bar chart with error bars…** — `y = income`, `g = gender`.
-      Expect: bar heights = group means **39085.71** and **51500.00**; then switch the
-      error type between **SEM / SD / 95% CI** and confirm all three differ. SEM for
-      Male = 10427.0991/√14 = **2786.2**; the 95% CI should be roughly ±2.16 SEM
-      (t₍₁₃₎). Turning error bars off should leave the bars unchanged.
+- [ ] **Bar chart with error bars…**
+      Recipe: **Graphs ▸ Bar chart with error bars…** → `y = income`, `g = gender` → OK.
+      Then cycle the error type through **SEM**, **SD** and **95% CI**, and switch it off.
+      Expect, exactly: bar heights are the group means **39085.71** (Male) and
+      **51500.00** (Female). Male's SEM = 10427.0991/√14 = **2786.2**; its SD bar is
+      **10427.10**; its 95% CI is roughly ±2.16 × SEM (t₍₁₃₎ = 2.160). All three must
+      differ from each other, and turning the bars off must leave the bar **heights**
+      unchanged.
       Reference: SPSS `GRAPH /BAR(SIMPLE)=MEAN(income) BY gender /INTERVAL CI(95.0).`
 
-- [ ] **Violin plot…** — `y = income`, `g = gender`.
-      Expect: a density silhouette per group, **open axes** (the Prism convention), and
-      the option to overlay the data points.
-      Reference: GraphPad Prism is the convention being matched. R
-      `ggplot2::geom_violin` for shape comparison.
+- [ ] **Violin plot…**
+      Recipe: **Graphs ▸ Violin plot…** → `y = income`, `g = gender` → OK. Then turn on
+      the data-point overlay.
+      Expect: a density silhouette per group, **open axes** (the Prism convention — no
+      box frame), and the individual points overlaid when asked. 14 points per group.
+      Reference: GraphPad **Prism** is the convention being matched; R
+      `ggplot2::geom_violin` for the shape.
 
-- [ ] **Dot plot (column scatter)…** — `y = income`, `g = gender`.
-      Expect: every case as a point, jittered or offset so none hide; 14 per group.
+- [ ] **Dot plot (column scatter)…**
+      Recipe: **Graphs ▸ Dot plot (column scatter)…** → `y = income`, `g = gender` → OK.
+      Expect: every case as its own point, jittered or offset so none are hidden —
+      **14 visible points per group**. Count them; overplotting that hides cases is the
+      failure.
+      Reference: Prism's column scatter.
 
-- [ ] **Before-after plot…** — `vars = t1, t2` (computed), `idVar` optional.
-      Expect: one line per case joining its two values; with `idVar` the lines are
-      identifiable. A case missing either value should be dropped visibly, not drawn to
-      zero.
+- [ ] **Before-after plot…**
+      Recipe: first **Transform ▸ Compute variable…** twice to make `t1 = age` and
+      `t2 = age + 5`. Then **Graphs ▸ Before-after plot…** → `vars = t1, t2` → OK. Then
+      run it again having set one case's `t2` to missing.
+      Expect: one line per case joining its two values, all sloping up by 5; with
+      `idVar` set the lines are identifiable. The case with a missing value is **dropped
+      visibly**, not drawn down to zero — that is the thing to check.
       Reference: Prism's before-after plot.
+
 ## 24. Multivariate *(10 items)*
 
 - [ ] **k-means cluster analysis…** — `Multivariate ▸ …`
@@ -1198,13 +1604,9 @@ axis titles, legend, palette, size, and that edits survive save/reload.
       report of **how many regions failed to join** the boundary file. A silent
       drop is the bug to look for here: deliberately misspell `keyprop` and confirm it
       tells you nothing matched rather than drawing an empty map.
+      Reference: **GeoDa** or **QGIS** for the same shading from the same boundary file;
+      R `sf::plot` / `tmap`. No SPSS equivalent.
 
-- [ ] **Map workspace** (the `Map` tab) — its verbs: load boundaries, shade by
-      variable, geocode points, filter to selection, clear boundaries, export map,
-      import boundaries.
-      Expect: each verb is recorded in the timeline (spatial state is
-      last-writer-wins under collaboration); **filter to selection** drives the
-      analyses; export produces a usable image.
 
 ## 30. Ecology *(2 items)*
 
@@ -1274,11 +1676,16 @@ axis titles, legend, palette, size, and that edits survive save/reload.
       Recipe: `x = income`, `stat = median`, `reps = 2000`; then try each other `stat`.
       Expect: each statistic's bootstrap distribution; the median's CI will be wider
       and chunkier than the mean's — correct, not a defect.
+      Reference: Stata `bootstrap r(p50), reps(2000): summarize income, detail`;
+      R `boot(income, function(x, i) median(x[i]), R = 2000)`.
 
 - [ ] **Bootstrap a correlation…** — same menu.
       Recipe: `x = age`, `y = income`, `reps = 2000`.
       Expect: centred near **r = .9515**, with an asymmetric CI (correlations near 1
       are skewed) whose upper bound stays **≤ 1**. A CI exceeding 1 is a real bug.
+      Reference: Stata `bootstrap r(rho), reps(2000): correlate age income`;
+      R `boot` with `cor(x[i], y[i])`. SPSS: the Bootstrapping module on
+      `CORRELATIONS`.
 
 - [ ] **Permutation test (2 groups)…** — same menu.
       Recipe: `y = income`, `group = gender`, `g1 = Male`, `g2 = Female`,
@@ -1325,10 +1732,13 @@ the job here is to confirm the *shipped UI* produces those numbers.
       across a phase change** (the two SCED drawing conventions, applied by default).
       Panel height, condition labels, points/lines and palette are editable, and edits
       survive save/reload.
+      Reference: R `scan::plot.scdf` draws the same conventions — compare the shape, not
+      pixels. The What Works Clearinghouse SCED standards are the written authority.
 
 - [ ] **Multiple-baseline graph, several measures…** — same menu.
       Recipe: add a `measure` variable with 2+ levels.
       Expect: panels grouped by case *and* measure, conventions preserved.
+      Reference: as above — `scan::plot.scdf` with several dependent variables.
 
 ## 34. Text *(7 items)*
 
@@ -1345,6 +1755,8 @@ Load the **demo (qual)** dataset — it has `response` (open-ended) and `site`.
       Recipe: `text = response`, `topn = 50`, try each `layout` and `themes`.
       Expect: size proportional to frequency; no overlapping text; the most frequent
       word from the table above is the largest here (cross-check the two).
+      Reference: R `wordcloud::wordcloud` for the same input; the frequencies themselves
+      come from the check above, which is the part worth validating.
 
 - [ ] **Sentiment analysis…** — same menu.
       Recipe: `text = response`, `doc = site`.
@@ -1358,12 +1770,18 @@ Load the **demo (qual)** dataset — it has `response` (open-ended) and `site`.
       Recipe: `text = response`, `doc = site`, `topn = 15`.
       Expect: terms distinctive to each site. A word appearing in **every** document
       has IDF = 0 and must therefore score 0 — a free check.
+      Reference: R `tidytext::bind_tf_idf` (what this wraps), or Python
+      `sklearn.feature_extraction.text.TfidfVectorizer`. ⚠️ those two use **different IDF
+      smoothing** by default, so expect the ranking to agree and the absolute values not
+      to.
 
 - [ ] **Keyword in context (KWIC)…** — same menu.
       Recipe: `text = response`, `term =` a word you know occurs, `window = 5`.
       Expect: each occurrence with 5 words either side; the count matches the word
       frequency table. A term that does not occur gives an empty result with a clear
       message.
+      Reference: R `quanteda::kwic(txt, "term", window = 5)`. NVivo's text-search query
+      and AntConc's concordance view are the GUI comparators.
 
 - [ ] **Topic modeling (LDA)…** — same menu.
       Recipe: `text = response`, `k = 3`, `topn = 10`.
@@ -1405,113 +1823,211 @@ Load the **demo (qual)** dataset — it has `response` (open-ended) and `site`.
 ## 36. Qualitative coding (CAQDAS)
 
 Qualitative work is first-class here, not a side feature — test it at the same depth as
-the statistics. Load **demo (qual)** to start, then bring in your own material.
+the statistics. Load **demo (qual)** to start (`response`, an open-ended text column,
+and `site`), then bring in your own material.
 
 ### 36.1 Getting material in *(5 importers)*
 
-All under **File ▸ Import data…**, each producing **one row per file**:
+All under **File ▸ Import data…**, each producing **one row per file**.
 
-- [ ] **Text files** (`.txt`, `.md`, …) → one row per file.
-      Expect: a folder or multi-select import; one case per document; the filename kept
-      as a label.
-- [ ] **Transcripts** (VTT, SRT, timestamped text) → one row per file.
-      Expect: timestamps parsed into a usable structure rather than left as raw text.
-- [ ] **Image files** (PNG, JPEG, …) → one row per file.
-- [ ] **Audio files** (MP3, WAV, M4A, …) → one row per file.
-- [ ] **Video files** (MP4, WebM, MOV, …) → one row per file.
-      Expect for the three media kinds: the file is stored as a project asset, the row
-      references it, and the media plays in the coding view.
-- [ ] **A folder import on iPadOS.** Expect: may not be offered — that is an OS
-      limitation, worth noting rather than filing.
+- [ ] **Text files** (`.txt`, `.md`, …)
+      Recipe: **File ▸ Import data…** → "Text files → one row per file…" → select three
+      `.txt` files (or a folder).
+      Expect: three cases, one per document, each with the **filename kept as a label**
+      and the full text in a column.
+
+- [ ] **Transcripts** (VTT, SRT, timestamped text)
+      Recipe: same picker → "Transcripts (VTT, SRT, timestamped text)…" → pick a `.vtt`
+      or `.srt`.
+      Expect: one row per file, with the **timestamps parsed into a usable structure** —
+      not left as raw text with `00:01:23.456 -->` lines in the middle of sentences.
+
+- [ ] **Image files** (PNG, JPEG, …)
+      Recipe: same picker → "Image files…" → pick two images.
+      Expect: two rows; each image stored as a **project asset** the row references; the
+      image displays in the coding view.
+
+- [ ] **Audio files** (MP3, WAV, M4A, …)
+      Recipe: same picker → "Audio files…" → pick an audio file.
+      Expect: one row; the audio **plays** in the coding view with a working scrub bar.
+
+- [ ] **Video files** (MP4, WebM, MOV, …)
+      Recipe: same picker → "Video files…" → pick a video.
+      Expect: one row; the video plays with a working scrub bar.
+
+- [ ] **A folder import on iPadOS**
+      Recipe: try the text-files importer on iPadOS Safari.
+      Expect: it may not be offered — that is an OS limitation, worth noting rather than
+      filing.
 
 ### 36.2 Transcription (on-device)
 
-- [ ] **Transcribe an interview.** Import an audio file, run the transcription.
-      Expect: progress; a transcript with timestamps; the audio stays linked so you can
-      click a line and hear it.
-- [ ] **A whole interview, not a clip.** Run a full-length recording end to end.
-      *(This one is listed deliberately: every shortcut taken in this area has produced
-      a confidently wrong answer. A 20-second clip proves nothing.)*
-- [ ] **Language handling.** Transcribe something **not** in English.
-      Expect: either correct detection, or an explicit language choice — the one thing
-      that must not happen is silently transcribing it as English.
-- [ ] **Offline.** See §11.
+- [ ] **Transcribe an interview**
+      Recipe: import an audio file (§36.1), then run the transcription from the
+      **Transcripts** tab.
+      Expect: progress; a transcript with timestamps; the audio stays linked, so clicking
+      a line plays that moment.
+
+- [ ] **A whole interview, not a clip**
+      Recipe: run a **full-length** recording, end to end.
+      Expect: it completes. *(This item is here deliberately: every shortcut taken in this
+      area has produced a confidently wrong answer. A 20-second clip proves nothing about
+      a 50-minute file.)*
+
+- [ ] **Language handling**
+      Recipe: transcribe something **not in English**.
+      Expect: either correct detection or an explicit language choice. The one thing that
+      must not happen is silently transcribing it as English — which is exactly what a
+      hardcoded default once did here, so test it rather than assuming.
+
+- [ ] **Offline transcription**
+      Recipe: see §11 — and clear the `transformers-cache` first.
+      Expect: transcription completes with no network at all. Covered in full there; it
+      is listed here so the qualitative pass is self-contained.
 
 ### 36.3 The Coding workspace *(the `Coding` tab)*
 
-- [ ] **Codebook.** Create codes, nest them under themes, rename, delete, reorder.
-      Expect: the codebook lives in the project and survives reload (it is stored in
-      the workspace store, written on edit — **never on mount**).
-- [ ] **Multiple codebooks.** Create a second; switch between them.
-      Expect: codes stay with their codebook; analyses can target the open codebook or
-      every codebook in the project.
-- [ ] **Code a passage.** Select text, apply a code.
-      Expect: the highlight persists; overlapping codings are allowed and both show.
-- [ ] **Anchoring survives edits.** Code a passage, then **edit the document text
-      before it**.
-      Expect: the coding stays on its passage rather than sliding. This is the anchor
-      resolution path (`docs/ARCHITECTURE-coding-anchors.md`) — the thing most likely to
-      break silently.
-- [ ] **Code media.** Apply a code to an audio/video time range and to an image region.
-- [ ] **Memos.** Attach a memo to a code, a passage and a document.
-- [ ] **Codebook import/export (CSV).** Export, edit in a spreadsheet, re-import.
-      Expect: round-trips; merging is **add-wins** (an imported code that already exists
-      does not duplicate).
-- [ ] **QDPX import.** Import a `.qdpx` from NVivo / MAXQDA / ATLAS.ti.
-      Expect: documents, codebook and codings all arrive.
-- [ ] **QDPX export.** Export, then open it in NVivo.
-      Expect: it loads. *(This is the comparison still outstanding on your side.)*
-      Reference: the **REFI-QDA** standard — NVivo, MAXQDA, ATLAS.ti and Dedoose all
-      read/write it, so any of them is a valid check.
+- [ ] **Build a codebook**
+      Recipe: **Coding** tab → create three codes → nest two of them under a theme →
+      rename one → reorder them → delete one. Reload the page.
+      Expect: all of it survives. The codebook lives in the project.
+
+- [ ] **Multiple codebooks**
+      Recipe: create a second codebook and switch between them.
+      Expect: codes stay with their own codebook; analyses can target **the open
+      codebook** or **every codebook in the project** (the quantitise dialogs offer that
+      choice).
+
+- [ ] **Code a passage**
+      Recipe: select some text in a document → apply a code. Then select an **overlapping**
+      span and apply a different code.
+      Expect: both highlights persist and both are visible; overlapping codings are
+      allowed.
+
+- [ ] **Anchoring survives an edit**
+      Recipe: code a passage in the middle of a document. Then **edit the document text
+      *before* that passage** — add a sentence at the top. Reload.
+      Expect: the coding is **still on its original passage**, not shifted by the number
+      of characters you inserted. This is the anchor-resolution path
+      (`docs/ARCHITECTURE-coding-anchors.md`) and the thing here most likely to break
+      silently.
+
+- [ ] **Code media**
+      Recipe: apply a code to a **time range** in an audio or video file, and to a
+      **region** of an image.
+      Expect: both are recorded and both are shown when you come back to them.
+
+- [ ] **Memos**
+      Recipe: attach a memo to a code, to a coded passage, and to a whole document.
+      Expect: all three stick and are findable.
+
+- [ ] **Codebook export and import (CSV)**
+      Recipe: export the codebook to CSV, add a row in a spreadsheet, change an existing
+      code's description, re-import.
+      Expect: the new code arrives; the changed description updates; **the existing code
+      is not duplicated** — merging is add-wins.
+
+- [ ] **QDPX import**
+      Recipe: export a small project from NVivo / MAXQDA / ATLAS.ti as `.qdpx`, then
+      import it here.
+      Expect: documents, codebook **and codings** all arrive — not just the documents.
+
+- [ ] **QDPX export**
+      Recipe: export your coded project to `.qdpx`, then open that file in NVivo.
+      Expect: it loads with documents, codes and codings intact. *(This is the comparison
+      still outstanding on your side.)*
+      Reference: **REFI-QDA** is the standard — NVivo, MAXQDA, ATLAS.ti and Dedoose all
+      read and write it, so any of them is a valid check.
 
 ### 36.4 Quantitising — the qual→quant bridge *(5 shapes)*
 
-From the Coding workspace. Each produces a **new dataset** you can then run statistics
-on, which is the whole point.
+Each produces a **new dataset** you can then run statistics on, which is the whole
+point of it.
 
-- [ ] **A column per code.** Expect: one indicator column per code, one row per
-      document; counts or 0/1 as chosen.
-- [ ] **A row per passage.** Expect: one row per coding, with the code, the document and
-      the passage text; "carry across" brings the source's other columns or just the
-      document label.
-- [ ] **A series across occasions.** Recipe: set `Case is`, `Occasion is`,
-      `Measures are`.
-      Expect: a long/wide series suitable for the repeated-measures and SCED analyses.
-- [ ] **Which codes occur together** (co-occurrence). Recipe: choose whether
-      co-occurrence means *same document* or *overlapping passages* — and check the two
-      give **different** answers; nodes as codes or as themes.
-      Expect: a co-occurrence matrix; the diagonal is each code's own frequency.
-- [ ] **Themed word cloud.** Expect: a cloud per theme.
-- [ ] **Then run statistics on the result.** Quantitise to a column per code, then run
-      Crosstabs or Inter-coder agreement on it.
+- [ ] **A column per code**
+      Recipe: in the Coding workspace, run the quantitise action and choose **a column
+      per code**; pick counts or 0/1.
+      Expect: one indicator column per code, one row per document. Totals should match
+      what you coded — count one code by hand and check.
+
+- [ ] **A row per passage**
+      Recipe: quantitise → **a row per passage**; set "Carry across" to **every other
+      column of the source**, then run it again with **nothing**.
+      Expect: one row per coding, with the code, the document and the passage text; the
+      carry-across choice visibly changes how many columns you get.
+
+- [ ] **A series across occasions**
+      Recipe: quantitise → **a series across occasions** → set `Case is`, `Occasion is`
+      and `Measures are`.
+      Expect: a series shaped for the repeated-measures (§16) and SCED (§33) analyses —
+      try feeding it straight into one of those.
+
+- [ ] **Which codes occur together**
+      Recipe: quantitise → **which codes occur together** → set "Two codes occur together
+      when" to **they appear in the same document**, run it, then run it again with
+      **their passages overlap**.
+      Expect: a co-occurrence matrix whose **diagonal is each code's own frequency**, and
+      **two different answers** from the two definitions. Identical answers mean the
+      option is not wired.
+
+- [ ] **Themed word cloud**
+      Recipe: quantitise → **themed word cloud**.
+      Expect: one cloud per theme, with the theme's codes driving it.
+
+- [ ] **Then run statistics on the result**
+      Recipe: quantitise to a column per code, then run **Descriptive Statistics ▸
+      Crosstabs…** on two of the resulting columns, and **Scale ▸ Reliability analysis…**
+      across all of them.
       Expect: it behaves like any other dataset — because it is one.
-      ⚠️ Note: a *bin/convention* question for quantitising is deliberately **not
-      built** and is parked until a real user needs it. Do not file its absence.
+      ⚠️ A **bin/convention** question for quantitising is deliberately **not built**, and
+      is parked until a real user needs it. Do not file its absence.
 
 ### 36.5 Collaboration on codings
 
-- [ ] **Two coders, same project.** Both code the same documents.
-      Expect: codings merge (add-wins codebook, op-log for the rest); no lost work;
-      each coding attributed to its coder.
-- [ ] **Then Inter-coder agreement from codings…** (§22) reads across both.
+- [ ] **Two coders, same project**
+      Recipe: invite a second machine (§9), then have both code the same documents —
+      some of the same passages, some different.
+      Expect: codings merge with no lost work, and **each coding is attributed to its
+      coder**.
+
+- [ ] **Then compare them**
+      Recipe: **Scale ▸ Inter-coder agreement from codings…** → metric = Cohen's kappa.
+      Expect: agreement per code, plus the **specific disagreements listed** so you can go
+      look at them (#202). With only one coder present it should say so rather than
+      report a spurious perfect agreement.
 
 ## 37. Other workspaces
 
-- [ ] **Map** (`Map` tab) — verbs confirmed present: **Load boundaries, Shade by
-      variable, Assign regions, Analyse selection, Clear, Export map, Restart**.
-      Expect: each works; **Analyse selection** narrows what the statistics see;
-      Restart clears cleanly.
-- [ ] **Decisions** (`Decisions` tab) 🔢 — Decision Support.
-      Expect: options × weighted criteria; a ranked result. **Hand-rolled arithmetic:**
-      check one score by hand (Σ weight × rating), confirm weights normalise, and that
-      changing one weight re-ranks sensibly.
-- [ ] **Hello WS** (`Hello WS` tab) — the reference workspace for plugin authors.
-      Expect: it loads, saves state, and survives reload. Its job is to prove the
-      workspace API, so a failure here implicates every workspace.
-- [ ] **Workspace state persistence.** In each workspace: make a change, reload.
-      Expect: state restored. Specifically: **nothing is written on mount** — a
-      mount-before-hydrate clobber was a real bug here, so check that opening a
-      workspace and immediately reloading does not wipe what was in it.
+- [ ] **Map workspace**
+      Recipe: load the **spatial** demo, click the **Map** tab, then work through its
+      verbs in order: **Load boundaries** (the demo ships Sacramento ZIP boundaries) →
+      **Shade by variable** (`income_k`) → **Assign regions** → **Analyse selection** →
+      **Export map** → **Clear** → **Restart**.
+      Expect: each verb does what it says; **Analyse selection** narrows what the
+      statistics see (run Descriptives before and after and compare N); Export produces a
+      usable image; Clear and Restart leave a clean state rather than a half-torn-down
+      one.
+      Reference: **GeoDa** for the analytical side (§29).
+
+- [ ] **Decisions workspace** 🔢
+      Recipe: click the **Decisions** tab → add three options and three weighted criteria
+      → score them → read the ranking. Then change one weight.
+      Expect: a ranked result that re-ranks sensibly. **Hand-rolled arithmetic:** compute
+      one option's score by hand as Σ (weight × rating) and check it; confirm the weights
+      normalise (that scores do not silently depend on whether the weights sum to 1).
+
+- [ ] **Hello Workspace**
+      Recipe: click the **Hello WS** tab, change whatever state it offers, reload.
+      Expect: it loads, saves its state and restores it. Its whole job is to demonstrate
+      the workspace API, so a failure here implicates **every** workspace — check this
+      one first if another workspace misbehaves.
+
+- [ ] **Nothing is written on mount**
+      Recipe: in each workspace in turn — put some state in it, leave, come back, and then
+      **reload immediately without touching anything**.
+      Expect: the state is still there. A mount-before-hydrate clobber (writing empty
+      state on open, wiping what was stored) was a real bug here, and it only shows if you
+      reload right after opening rather than after editing.
 
 ---
 
@@ -1546,13 +2062,17 @@ And three things that are **expected gaps**, not bugs:
 
 ## 39. Still outstanding from my side
 
-Two items I built but could not verify in the browser — a Steam window was occluding
-Chrome, which freezes the renderer and makes every timed check unreliable. They are
-listed in §6 and §7 and are the two places to look first if something feels off:
+Two things I built but could not verify in the browser — a Steam window was
+occluding Chrome, which freezes the renderer and makes every timed check
+unreliable. Both now have full recipes where they belong rather than as separate
+entries here, so there is nothing extra to tick:
 
-- [ ] **#162** — the preset dropdown plus Save / Rename / Delete, and the
-      missing-plugin note.
-- [ ] **#190** — the analysis-row ▲▼ arrows and the busy state.
+- **#162** — the preset dropdown, Save / Rename / Delete, and the missing-plugin
+  note. See the **Presets** check in [§7](#7-plugins--lifecycle-and-the-manager).
+- **#190** — the analysis-row ▲ / ▼ arrows and the busy state. See the **Reorder an
+  analysis row** check in [§6](#6-history-timeline-and-the-do-file-editor).
+
+They are the two places to look first if something feels off.
 
 ---
 
