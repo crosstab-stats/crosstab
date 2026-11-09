@@ -860,6 +860,10 @@ export class ProjectSync {
       this.#binding = { id: savedId, name };
       this.#sourcesDirty.clear();
       this.#dirty = false;
+      // There is a project directory now, so any bytes the asset store was holding for
+      // want of one (a demo seed) can land. Their `addAsset` ops were already in the
+      // snapshot above — the log is the index — so this writes payload only.
+      await this.#assetBytes?.flush?.();
       this.#setStatus('saved');
       this.#emitProject();
     } catch (err) {
@@ -955,10 +959,19 @@ export class ProjectSync {
    * isn't one. Media needs this: an asset's bytes live in the project directory, so a
    * file dropped into a never-saved project has to bring the project into existence
    * before it has anywhere to go (#149 A5). Concurrent callers share one creation.
+   *
+   * Returns null while auto-create is disarmed — inside {@link ProjectSync#loadingSeed},
+   * and before {@link ProjectSync#arm} at boot. A seed load is not work, so it must not
+   * birth a project even by way of an asset: the spatial demo seeds its boundary GeoJSON
+   * through the asset store, and this method quietly undid `loadingSeed` for it, leaving
+   * an "Untitled project" behind after nothing but picking the demo. A null caller is
+   * expected to hold its bytes until a project exists (AssetStore stages them).
+   *
    * @returns {Promise<string|null>}
    */
   async ensureProject() {
     if (this.#binding) return this.#binding.id;
+    if (!this.#armed) return null;
     if (!this.#creating) {
       this.#creating = true;
       this.#creation = this.#autoCreate();

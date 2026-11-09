@@ -154,10 +154,13 @@ export class Launcher {
     // "Map layers" one, which is precisely the old-beside-new state this migration is
     // meant to eliminate.
     //
-    // NOTE this brings a project into being (assets need somewhere to live), where the
-    // blob write did not. Deliberate: the map layers ARE content the project holds, and
-    // the sidebar now presents them as such. `loadingSeed` still disarms autosave, so
-    // loading a demo does not churn saves.
+    // This used to bring a project into being — assets need somewhere to live, so the
+    // `put` below reached for `ensureProject()`, which walked straight past the fact that
+    // `loadingSeed` had disarmed auto-create. Picking the spatial demo and reloading left
+    // an "Untitled project" behind, where quant and qual (no assets) correctly left you
+    // at the launcher. It does not any more: with no project, `ensureProject` returns
+    // null and the asset store HOLDS the bytes until your first real edit creates one
+    // (AssetStore#flushStaged). The demo still travels the same path a loaded file takes.
     if (dataset.boundaries?.length && this.#itemStore && this.#assetStore) {
       const dsId = this.#datasets.activeId;
       for (const b of dataset.boundaries) {

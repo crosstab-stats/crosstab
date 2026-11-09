@@ -1549,6 +1549,9 @@ export async function boot(mounts) {
       read: async (id) => (await assetStore.get(id))?.bytes ?? null,
       // put() re-hashes, and an asset id IS its sha256, so storing verifies identity.
       store: async (id, bytes, meta) => { await assetStore.put(bytes, meta || {}); },
+      // Land bytes that were put before a project existed (a launcher demo seed), now
+      // that a save has created one. Called from the save path, not the gap-fill one.
+      flush: () => assetStore.flushStaged(),
     },
     getItemOps: () => itemStore.ops(),
     applyItemOps: (ops) => itemStore.restoreOps(ops),

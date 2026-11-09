@@ -65,10 +65,29 @@ export class AssetStore {
   /** () => current project id, or null when the project has never been saved. */
   #projectId = () => null;
   /** async () => project id, creating the "Untitled project" if there isn't one yet, so
-   * an asset always has a project to live in. */
+   * an asset always has a project to live in — EXCEPT while a launcher seed is loading,
+   * when it returns null because loading regenerable demo data is not work (see
+   * {@link #staged}). */
   #ensureProject = async () => null;
   /** @type {import('./event-bus.js').EventBus|null} */
   #bus = null;
+  /**
+   * Bytes put while there was no project to put them in, id → Blob. Held in memory and
+   * written into the project directory by {@link AssetStore#flushStaged} the instant a
+   * project comes into being; dropped by {@link AssetStore#restoreOps} if a different
+   * project is opened instead (the staged bytes belonged to the abandoned session).
+   *
+   * This exists for ONE case: the launcher's spatial demo seeds its boundary GeoJSON
+   * through the asset store (#152 Layer 5 — exactly the path a loaded file takes). An
+   * asset needs a project directory, so `put` called `ensureProject`, which created an
+   * autosaving "Untitled project" from nothing but a demo load — the quant and qual
+   * demos, which seed no assets, correctly left you back at the launcher on reload.
+   * Staging keeps the demo on the real code path *and* keeps the promise that only your
+   * work creates a project. Only ever a few KB of fabricated geometry: a real file drop
+   * is work, so it still brings the project into being and goes straight to disk.
+   * @type {Map<string, Blob>}
+   */
+  #staged = new Map();
 
   constructor(deps) {
     if (deps) this.attach(deps);
@@ -110,8 +129,35 @@ export class AssetStore {
    * they already sit in the project directory this is loading from. */
   restoreOps(ops) {
     if (!this.#log) return;
+    // Opening a project replaces the asset tier, so anything still staged (a demo seed
+    // the user never worked on) is now unreferenced — it must not follow them into the
+    // project they just opened.
+    this.#staged.clear();
     this.#log.clearWhere(ASSETS.match);
     this.#log.receiveOps(Array.isArray(ops) ? ops : []);
+  }
+
+  /**
+   * Write any staged bytes into the project directory, now that there is one. Called by
+   * {@link ProjectSync} the moment a save binds a project — the staged ops were already
+   * in that save's snapshot (the log is the index), so this only lands the payload.
+   * @returns {Promise<number>} how many assets were written
+   */
+  async flushStaged() {
+    if (!this.#staged.size) return 0;
+    const pid = this.#projectId();
+    if (!this.#store || pid == null) return 0;
+    let written = 0;
+    for (const [id, blob] of [...this.#staged]) {
+      try {
+        await this.#store.writeAsset(pid, id, blob);
+        this.#staged.delete(id); // only on success, so a failure retries on the next save
+        written++;
+      } catch (e) {
+        console.warn('[assets] could not flush staged asset', id, e);
+      }
+    }
+    return written;
   }
 
   /** Metadata for one asset, from the log. Null if the project doesn't reference it. */
@@ -146,9 +192,13 @@ export class AssetStore {
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     const id = await sha256hex(data);
     const info = { id, type: 'application/octet-stream', name: '', ...meta, size: data.byteLength };
+    if (!this.#store) throw new Error('assets.put: no project store attached');
+    const blob = new Blob([data], { type: info.type });
     const pid = await this.#ensureProject();
-    if (pid == null) throw new Error('assets.put: no project to store the asset in');
-    await this.#store.writeAsset(pid, id, new Blob([data], { type: info.type }));
+    // No project — a launcher seed load. Hold the bytes rather than birthing a project
+    // for data the user hasn't touched yet; flushStaged lands them on the first real save.
+    if (pid == null) this.#staged.set(id, blob);
+    else await this.#store.writeAsset(pid, id, blob);
     this.#record(info);
     return info;
   }
@@ -172,9 +222,12 @@ export class AssetStore {
    */
   async putFile(file, meta = {}) {
     const id = await this.#idForFile(file);
+    if (!this.#store) throw new Error('assets.put: no project store attached');
     const pid = await this.#ensureProject();
-    if (pid == null) throw new Error('assets.put: no project to store the asset in');
-    await this.#store.writeAsset(pid, id, file); // streamed by the driver, never buffered
+    // Staging a File costs no memory — it stays a disk-backed handle (see #staged). In
+    // practice this never fires: dropping a file IS work, so a project gets created.
+    if (pid == null) this.#staged.set(id, file);
+    else await this.#store.writeAsset(pid, id, file); // streamed by the driver, never buffered
     const info = {
       id,
       type: file.type || 'application/octet-stream',
@@ -223,6 +276,8 @@ export class AssetStore {
    * handle IS the Blob), so a `<video>` streams straight off disk. Null if the bytes
    * aren't here. */
   async getBlob(id) {
+    const staged = this.#staged.get(id); // seeded before there was a project to read from
+    if (staged) return staged;
     const pid = this.#projectId();
     if (!this.#store || pid == null) return null;
     return this.#store.readAsset(pid, id, this.meta(id)?.type);
@@ -230,6 +285,7 @@ export class AssetStore {
 
   /** @returns {Promise<boolean>} Whether the asset's bytes are present in this project. */
   async has(id) {
+    if (this.#staged.has(id)) return true;
     const pid = this.#projectId();
     if (!this.#store || pid == null) return false;
     return this.#store.hasAsset(pid, id);
@@ -240,6 +296,7 @@ export class AssetStore {
     const pid = this.#projectId();
     this.#log?.append({ target: `asset:${id}`, owner: 'core', type: 'removeAsset', payload: { id } });
     this.#changed();
+    this.#staged.delete(id);
     if (this.#store && pid != null) await this.#store.removeAsset(pid, id);
   }
 
@@ -249,8 +306,8 @@ export class AssetStore {
     const all = this.#log?.state('assets') ?? [];
     if (!present) return all;
     const pid = this.#projectId();
-    if (!this.#store || pid == null) return [];
-    const held = new Set(await this.#store.listAssets(pid));
+    const held = new Set(this.#staged.keys()); // staged bytes are present, just not on disk yet
+    if (this.#store && pid != null) for (const id of await this.#store.listAssets(pid)) held.add(id);
     return all.filter((a) => held.has(a.id));
   }
 
@@ -259,8 +316,8 @@ export class AssetStore {
   async missing() {
     const refs = (this.#log?.state('assets') ?? []).map((a) => a.id);
     const pid = this.#projectId();
-    if (!this.#store || pid == null) return refs;
-    const held = new Set(await this.#store.listAssets(pid));
+    const held = new Set(this.#staged.keys()); // we hold these, so they are not a gap to fill
+    if (this.#store && pid != null) for (const id of await this.#store.listAssets(pid)) held.add(id);
     return refs.filter((id) => !held.has(id));
   }
 }
