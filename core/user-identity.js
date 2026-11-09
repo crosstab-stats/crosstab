@@ -14,28 +14,63 @@
  * other editors' chips will sit next to yours once live P2P is up.
  */
 
+import { defineSetting } from './settings.js';
+
 const LS_KEY = 'crosstab.identity';
 const EVENT = 'crosstab:identitychanged';
 
 /** Colour-blind-safe avatar palette (Okabe–Ito). */
 export const AVATAR_COLORS = ['#0072b2', '#d55e00', '#009e73', '#cc79a7', '#e69f00', '#56b4e9', '#666666'];
 
-function load() {
-  try {
-    const raw = globalThis.localStorage?.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
+/**
+ * Declared so the Settings screen can SEE it (#198).
+ *
+ * The registry's boundary note used to put `crosstab.identity` on the "not a preference"
+ * side, as data and lifecycle. That is half right and it is the half that hid the other:
+ * `authorId` is an identifier the user never chooses, but the name, initials, avatar
+ * colour and "automatically check for live collaborators" in the same blob are exactly
+ * preferences — one of them a behaviour toggle that decides whether opening a project
+ * reaches the network. Found by the owner working the manual pass: "username and
+ * initials, colour, and 'auto check for live collab' … all seem absent from the unified
+ * settings screen." They were, and the screen exists to make that impossible.
+ *
+ * Routed (`editedAt`), not edited inline: {@link showIdentityDialog} already is the right
+ * editor — initials tracking the name, the palette, one atomic write — and a second set
+ * of controls over one key is how the two drift. Routed also means the screen offers no
+ * Clear, which matters here more than anywhere: clearing this key would re-mint
+ * `authorId` and orphan every attribution the user has ever made.
+ *
+ * The accessors replace a hand-rolled load/persist pair that did the same JSON-plus-
+ * try/catch the registry does for every other setting — which is the duplication the
+ * registry was built to end.
+ */
+const identitySetting = defineSetting({
+  id: 'collab.identity',
+  key: LS_KEY,
+  json: true,
+  // Permissive on purpose: this is the only place a user's stable authorId lives, so a
+  // field this module does not recognise is kept rather than dropped. Only a value with
+  // no usable authorId is rejected — and `getIdentity` then mints a fresh one, which is
+  // what the old `load()` did by returning null.
+  coerce: (v) => (v && typeof v === 'object' && !Array.isArray(v)
+    && typeof v.authorId === 'string' && v.authorId ? v : undefined),
+  fallback: null,
+  label: 'Your name, initials and colour',
+  group: 'Collaboration',
+  hint: 'Tags your edits and codes so a team can see who did what — and whether opening '
+    + 'a project quietly looks for live collaborators.',
+  editedAt: 'the avatar button in the top bar',
+  // Never the authorId: a screen that enumerates settings should print what the user
+  // chose, not the identifier the app minted for them.
+  summary: (v) => {
+    if (!v) return 'Not set';
+    const who = v.name ? (v.initials ? `${v.name} (${v.initials})` : v.name) : 'No name set';
+    return `${who} · auto-join live rooms ${v.autoLive ? 'on' : 'off'}`;
+  },
+});
 
-function persist(obj) {
-  try {
-    globalThis.localStorage?.setItem(LS_KEY, JSON.stringify(obj));
-  } catch {
-    /* storage unavailable — identity is best-effort */
-  }
-}
+const load = () => identitySetting.get();
+const persist = (obj) => identitySetting.set(obj);
 
 /** Stable colour pick from the authorId, so an un-customised avatar is still distinct. */
 function colorFor(authorId) {

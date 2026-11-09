@@ -136,6 +136,18 @@ export function describeValue(spec) {
     const hit = spec.options.find(([val]) => val === v);
     if (hit) return hit[1];
   }
+  // A shaped value the declaring module knows how to say in one line. Ahead of both the
+  // array and the object cases so a module can describe either, and never derived here:
+  // which fields of a blob are the PREFERENCE is the owner's knowledge (the identity
+  // blob's summary deliberately omits the minted authorId).
+  if (spec.summary) {
+    try {
+      const s = spec.summary(v);
+      if (s) return String(s);
+    } catch {
+      /* a summary that throws must not take the screen down with it */
+    }
+  }
   if (Array.isArray(v)) return v.length === 1 ? '1 entry' : `${v.length} entries`;
   if (typeof v === 'object') {
     // The encryption policy. Its own dialog explains it; a one-line summary here would be

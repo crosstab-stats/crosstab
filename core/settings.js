@@ -38,8 +38,16 @@
  *    `sessionStorage`) — alive for one round trip.
  *  - **Credentials** (`crosstab.dropbox.config`) — a screen that enumerates settings must
  *    never be the thing that prints a token.
- *  - **Identity and first-run flags** (`crosstab.identity`, `crosstab.launcher.seen`) —
- *    data and lifecycle, not preference.
+ *  - **First-run flags** (`crosstab.launcher.seen`) — lifecycle, not preference.
+ *
+ * `crosstab.identity` was on that last line too, as "data, not preference". That was half
+ * right, and it is the half that hid the other: `authorId` is an identifier the user
+ * never chooses, but the display name, initials, avatar colour and "automatically check
+ * for live collaborators" stored beside it are preferences — the last of them a toggle
+ * that decides whether opening a project reaches the network. The owner found all four
+ * missing from the Settings screen while working the manual pass. It is declared now, in
+ * `user-identity.js`, and **routed**: the screen shows a summary that never includes the
+ * authorId and sends you to the editor that already exists.
  *
  * The encryption policy and the collab relay/TURN config ARE settings and are declared
  * here. They are shaped — an object and an array — rather than scalar, which is the only
@@ -83,6 +91,11 @@
  *   `fallback`.
  * @property {boolean} [secret] - The value may contain a credential, so {@link
  *   listSettings} reports only whether it is set. See the TURN config.
+ * @property {(value: any) => string} [summary] - One line describing a SHAPED value, for
+ *   a screen that would otherwise have to print an object. Declared by the owning module
+ *   for the same reason `apply` is: only it knows which fields are the preference and
+ *   which are plumbing. The identity blob uses it to show the name, initials and
+ *   auto-join state while never printing the minted `authorId`.
  * @property {string} [label] - Shown by a Settings screen.
  * @property {string} [group] - How a Settings screen would section it.
  * @property {string} [hint] - One line on what the choice does.

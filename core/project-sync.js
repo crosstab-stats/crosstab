@@ -38,6 +38,7 @@ import { showEncryptionSettings } from './encryption-settings.js';
 import { showSettings } from './settings-screen.js';
 import { projectSettings } from './project-settings.js';
 import { showTurnSettings } from './turn-settings.js';
+import { showIdentityDialog } from './user-identity.js';
 import {
   assetIdsOf, copyBundle, copyName, copyTargets, datasetIdTaken, datasetSlice, describeSlice,
   ownerPluginOp, recordSlice, travellingChildren, unionById, reidentifyLog } from './copy-to-project.js';
@@ -622,6 +623,11 @@ export class ProjectSync {
           // The TURN relay (#209) — a secret setting, so its editor writes without ever
           // reading the stored credential back.
           'collab.turn': () => showTurnSettings(),
+          // Your name, initials, colour and the auto-join toggle. Routed to the editor
+          // that already exists behind the avatar button: without this the Settings
+          // screen could only name where it lives, and the whole complaint was that
+          // nobody finds it there.
+          'collab.identity': () => showIdentityDialog(),
         },
         // The project's own settings (#207). A provider, read each time the screen
         // renders, so the rows describe what is open NOW rather than what was open when

@@ -25,6 +25,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { defineSetting, listSettings, settingIds } from '../core/settings.js';
+import { controlFor } from '../core/settings-screen.js';
 import { loadVarOrder, saveVarOrder, loadVarDisplay, saveVarDisplay } from '../core/var-order.js';
 import { storedScreenMode, saveScreenMode, autoNoteSeen, dismissAutoNote } from '../core/screen-mode.js';
 import { isDebug, setDebug } from '../core/debug.js';
@@ -32,6 +33,10 @@ import { getEncryptionPolicy, setEncryptionPolicy, defaultEncrypt } from '../cor
 import {
   getRelayUrls, setRelayUrls, getTurnConfig, setTurnConfig, DEFAULT_RELAYS,
 } from '../core/live-sync.js';
+// Imported for its DECLARATION as much as its functions: the registry is populated by
+// the modules this file imports, so a "X is not a setting" assertion about a module
+// nobody imported here would have proved nothing at all.
+import { getIdentity, setIdentity } from '../core/user-identity.js';
 
 /** A `localStorage` stand-in; `explode` makes every call throw, as private mode does. */
 function fakeStorage(seed = {}, { explode = false } = {}) {
@@ -74,6 +79,7 @@ test('every setting still uses the key its module shipped with', () => {
   assert.equal(byId['privacy.encryption'].key, 'crosstab.encryption-policy');
   assert.equal(byId['collab.relays'].key, 'crosstab.relays');
   assert.equal(byId['collab.turn'].key, 'crosstab.turn');
+  assert.equal(byId['collab.identity'].key, 'crosstab.identity');
 });
 
 test('a setting cannot collide with another by id or by key', () => {
@@ -221,12 +227,18 @@ test('state, caches and credentials are NOT settings', () => {
   const keys = listSettings().map((s) => s.key);
   for (const notASetting of [
     'crosstab.plugins.catalog', 'crosstab.plugins.disabled', 'crosstab.plugins.user',
-    'crosstab.dropbox.config', 'crosstab.identity', 'crosstab.launcher.seen',
+    'crosstab.dropbox.config', 'crosstab.launcher.seen',
     'crosstab.oauth.result', 'crosstab.offline.resume',
   ]) {
     // The encryption policy and the collab config are NOT in this list: they are
     // settings, and they are declared (owner, 2026-10-15). Dropbox stays out because it
     // is a credential store rather than a preference.
+    //
+    // `crosstab.identity` left this list on the owner's report that their name,
+    // initials, colour and auto-join toggle were missing from the Settings screen. The
+    // blob holds a minted `authorId` as well, which is still data — so it is declared
+    // ROUTED and summarised, never printed raw and never clearable from the screen.
+    // See the identity tests below.
     assert.ok(!keys.includes(notASetting), `${notASetting} must not be a declared setting`);
   }
 });
@@ -434,5 +446,91 @@ test('validation happens on READ, so a value stored by an older build is checked
   });
   withStorage(fakeStorage({ 'crosstab.screen-mode': 'medium' }), () => {
     assert.equal(storedScreenMode(), null);
+  });
+});
+
+// =============================================================================
+// The identity profile — a blob that is part data and part preference
+// =============================================================================
+
+test('your name, initials, colour and auto-join are things the Settings screen can see', () => {
+  // The owner's report: all four were editable only from the avatar button in the top
+  // bar, and a screen whose whole purpose is to enumerate what is settable listed none
+  // of them.
+  const row = listSettings().find((s) => s.id === 'collab.identity');
+  assert.ok(row, 'the identity profile has to be declared to be listed');
+  assert.ok(row.label && row.hint, 'a screen needs something to print');
+  assert.equal(row.group, 'Collaboration');
+  assert.ok(row.editedAt, 'routed: the real editor already exists');
+});
+
+test('the summary says who you are without printing the minted authorId', () => {
+  // `authorId` is the one field in this blob the user never chose, and it is what every
+  // attribution they have ever made points at. A screen listing settings prints what was
+  // chosen, not the identifier underneath it.
+  const spec = listSettings().find((s) => s.id === 'collab.identity');
+  const line = spec.summary({
+    authorId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+    name: 'Jane Public', initials: 'JP', color: '#0072b2', autoLive: true,
+  });
+  assert.match(line, /Jane Public \(JP\)/);
+  assert.match(line, /auto-join live rooms on/);
+  assert.ok(!line.includes('f47ac10b'), 'the authorId must never reach the screen');
+
+  assert.match(spec.summary({ authorId: 'x', name: '', initials: '', autoLive: false }),
+    /No name set · auto-join live rooms off/);
+  assert.equal(spec.summary(null), 'Not set');
+});
+
+test('the identity row can be opened but never cleared', () => {
+  // Clearing this key re-mints `authorId`, which orphans every attribution the user has
+  // made. `controlFor` returning 'route' is what keeps the Clear/Default buttons off the
+  // row — see the screen, which offers them for every kind except route and secret.
+  const spec = listSettings().find((s) => s.id === 'collab.identity');
+  assert.equal(controlFor(spec), 'route');
+});
+
+test('identity still round-trips through the registry accessors', () => {
+  // It used to hand-roll the same JSON-plus-try/catch the registry does. Behaviour has
+  // to be identical: mint on first read, persist on write, and read back what was set.
+  withStorage(fakeStorage(), (store) => {
+    const first = getIdentity();
+    assert.ok(first.authorId, 'an authorId is minted on first use');
+    assert.equal(first.set, false);
+    assert.ok(store.map.has('crosstab.identity'), 'and persisted immediately');
+
+    setIdentity({ name: 'Jane Public', autoLive: true });
+    const back = getIdentity();
+    assert.equal(back.authorId, first.authorId, 'the authorId survives a rename');
+    assert.equal(back.name, 'Jane Public');
+    assert.equal(back.initials, 'JP', 'initials still derive from the name');
+    assert.equal(back.autoLive, true);
+    assert.equal(back.set, true);
+
+    const row = listSettings().find((s) => s.id === 'collab.identity');
+    assert.match(row.summary(row.value), /Jane Public \(JP\) · auto-join live rooms on/);
+  });
+});
+
+test('a corrupt identity is re-minted rather than crashing the app', () => {
+  // The coerce is deliberately permissive — it is the only home of the authorId — so it
+  // rejects only what has no usable one.
+  for (const junk of ['not json at all', '[]', '{}', 'null', JSON.stringify({ name: 'no id' })]) {
+    withStorage(fakeStorage({ 'crosstab.identity': junk }), () => {
+      const id = getIdentity();
+      assert.ok(id.authorId, `re-minted from ${junk}`);
+      assert.ok(id.color, 'and given a stable colour');
+    });
+  }
+});
+
+test('an identity field this build does not know about is kept, not dropped', () => {
+  // It is one blob and this module is its only writer, so a value written by a newer
+  // build (or by a feature added later) must survive a round trip through the registry.
+  withStorage(fakeStorage({
+    'crosstab.identity': JSON.stringify({ authorId: 'a1', name: 'Jo', somethingNew: 42 }),
+  }), () => {
+    const row = listSettings().find((s) => s.id === 'collab.identity');
+    assert.equal(row.value.somethingNew, 42);
   });
 });
