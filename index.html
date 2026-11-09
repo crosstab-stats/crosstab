@@ -531,6 +531,19 @@
         font: 11px/1.5 inherit; letter-spacing: .01em;
         background: var(--ct-warn-line); color: var(--ct-warn); white-space: nowrap;
       }
+      /* The selection column: the working set, tickable from the variable list and not
+         only from the Data grid's column headers. Narrow and centred so it reads as a
+         gutter rather than a column of data, and `vertical-align: middle` because the
+         other cells are top-aligned for their wrapping text — a checkbox has none. */
+      .vargrid__selhead, .vargrid__selcell {
+        width: 1%; white-space: nowrap; text-align: center; vertical-align: middle;
+        padding-left: 10px; padding-right: 6px;
+      }
+      .vargrid__selhead { font-size: 13px; letter-spacing: 0; }
+      /* Default cursor over the checkbox's cell: the row is click-to-edit, and this one
+         cell is not — saying so with the pointer is cheaper than finding out. */
+      .vargrid__selcell { cursor: default; }
+      .vargrid__check { margin: 0; cursor: pointer; }
       .vargrid__row { cursor: pointer; }
       /* The variable name is a button (keyboard route to the row's editor) but should
          look exactly like the code text it replaced. */

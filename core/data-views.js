@@ -817,6 +817,16 @@ export class VariableView {
     const table = document.createElement('table');
     table.className = 'vargrid';
     const head = document.createElement('tr');
+    // The selection column, first — the same working set the Data grid's column headers
+    // tick, from the list that is actually about the variables. Both surfaces already
+    // FLOAT the selection to the top (#180); only the grid could set it, so a user
+    // scanning 3,986 variables here had to go back to the grid to tick the seven they
+    // had just found. The glyph is the whole header: a word would be wider than the
+    // column, and `aria-label` is what a screen reader announces anyway.
+    const selHead = el('th', { text: '✓', class: 'vargrid__selhead' });
+    selHead.setAttribute('aria-label', 'Selected');
+    selHead.title = 'Your working set — ticked variables float to the top here, in the Data grid, and in every picker';
+    head.append(selHead);
     for (const h of ['Name', 'Label', 'Type', 'Measure', 'Value labels', 'Missing']) {
       head.append(el('th', { text: h }));
     }
@@ -853,14 +863,16 @@ export class VariableView {
     // taken when the view is (re)built, so a row cannot jump while the list is being read.
     const ordered = sortVars(filterVars(this.metas, this.filter), this.order);
     const { list: shown, floated } = floatSelected(ordered, this.floatSnapshot);
-    this.count.textContent = q
-      ? `${shown.length.toLocaleString()} of ${this.metas.length.toLocaleString()}`
-      : `${this.metas.length.toLocaleString()} variable${this.metas.length === 1 ? '' : 's'}`;
+    this.shownCount = shown.length;
+    this.#updateCount();
 
     // Which column is the frequency weight. The status bar says a weight is ON; this
     // says WHICH, in the one list that is about the variables themselves — so finding it
     // does not mean opening Transform ▸ Weight cases… to be told.
     const weight = this.store.weightVar;
+    // Read the live selection ONCE: with thousands of variables a per-row lookup is the
+    // difference between a set membership test and a scan of the whole selection per row.
+    const selected = new Set(this.store.getSelectedVariables());
 
     const frag = document.createDocumentFragment();
     shown.forEach((m, i) => {
@@ -871,6 +883,7 @@ export class VariableView {
       // heading. Only drawn when there IS a boundary (see floatSelected).
       if (floated && i === floated) tr.classList.add('is-floatedge');
       tr.title = m.name === weight ? 'The frequency weight. Click to edit.' : 'Click to edit';
+      tr.append(this.#selectCell(m, selected));
       tr.append(openerCellFor(m, () => this.#openEditor(m), m.name === weight));
       tr.append(el('td', { text: m.label || '' }));
       tr.append(el('td', { text: m.type }));
@@ -882,11 +895,79 @@ export class VariableView {
     });
     if (shown.length === 0) {
       const td = el('td', { text: `No variables match “${this.filter.trim()}”.` });
-      td.colSpan = 6;
+      td.colSpan = 7;
       td.style.cssText = 'color:#646e77;';
       frag.append(elWrap('tr', td));
     }
     this.tbody.replaceChildren(frag);
+  }
+
+  /**
+   * The row's selection checkbox — the same shared working set the Data grid's column
+   * headers tick (`DataStore#setSelectedVariables`), so the two surfaces are two views of
+   * one list rather than two lists.
+   *
+   * Two things have to be stopped from happening on a click here. The row opens the
+   * variable editor, so the click must not reach it — ticking seven variables would
+   * otherwise mean dismissing seven modals. And the float is a SNAPSHOT (see `render`),
+   * so ticking does not re-sort: the row you just ticked stays under the cursor and the
+   * list re-floats next time you come back to the tab, exactly as the grid behaves.
+   */
+  #selectCell(m, selected) {
+    const td = el('td', { class: 'vargrid__selcell' });
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'vargrid__check';
+    cb.checked = selected.has(m.name);
+    cb.dataset.var = m.name;
+    cb.title = 'Add to your working set';
+    cb.setAttribute('aria-label', `Select ${m.label ? `${m.label} (${m.name})` : m.name}`);
+    cb.addEventListener('click', (e) => e.stopPropagation()); // not "open the editor"
+    cb.addEventListener('change', () => this.#toggle(m.name, cb.checked));
+    td.addEventListener('click', (e) => e.stopPropagation()); // the padding around it, too
+    td.append(cb);
+    return td;
+  }
+
+  /** Add/remove a variable from the shared selection. Mirrors DataGridView#toggle. */
+  #toggle(name, on) {
+    const sel = new Set(this.store.getSelectedVariables());
+    if (on) sel.add(name);
+    else sel.delete(name);
+    this.store.setSelectedVariables([...sel]);
+    this.#updateCount();
+  }
+
+  /**
+   * Re-sync the rendered checkboxes + the count to the store's selection, for when the
+   * selection changed somewhere else (the Data grid, a picker, the sidebar). Cheap:
+   * it touches the rendered rows only and never refetches or re-sorts.
+   */
+  syncSelection() {
+    if (!this.tbody) return;
+    const sel = new Set(this.store.getSelectedVariables());
+    for (const cb of this.tbody.querySelectorAll('.vargrid__check')) {
+      cb.checked = sel.has(cb.dataset.var);
+    }
+    this.#updateCount();
+  }
+
+  /**
+   * The count after the toolbar controls. Two facts in one slot, same as the grid's:
+   * how much of the list the filter left, and how big the working set is. Before the
+   * checkboxes existed this view had nothing to say about the selection, so it reported
+   * the filter result alone.
+   */
+  #updateCount() {
+    if (!this.count) return;
+    const total = this.metas?.length ?? 0;
+    const shown = this.shownCount ?? total;
+    const n = this.store.getSelectedVariables().length;
+    const parts = [];
+    if (this.filter.trim()) parts.push(`${shown.toLocaleString()} of ${total.toLocaleString()}`);
+    else parts.push(`${total.toLocaleString()} variable${total === 1 ? '' : 's'}`);
+    if (n) parts.push(`${n} selected`);
+    this.count.textContent = parts.join(' · ');
   }
 
   /**

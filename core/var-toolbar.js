@@ -52,11 +52,12 @@
  * the hazard without the benefit.
  *
  * What is deliberately NOT shared is the count that follows the controls. Each
- * caller appends its own, because they report different facts: the grid's is the
- * variable SELECTION ("3 selected"), Variable View's is the filter result
- * ("971 variables"), the picker's is how much of the list survived the search
- * ("12 of 971 variables"). Same slot, different meanings; sharing it would be a
- * lie rather than a saving.
+ * caller appends its own, because they report different facts: the grid's is how
+ * much of the list it is showing plus the variable SELECTION ("3 selected"),
+ * Variable View's is the same pair now that it can tick the selection too, and the
+ * picker's is how much of the list survived the search ("12 of 971 variables").
+ * Same slot, overlapping but not identical meanings; sharing it would be a lie
+ * rather than a saving — the picker's list is a transient question, not this one.
  *
  * Ordering itself lives in {@link module:core/var-order} — kept separate and
  * DOM-free so the sort and the preference stay headlessly testable.

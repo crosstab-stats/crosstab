@@ -1159,9 +1159,13 @@ export async function boot(mounts) {
     // R Console tab: a live REPL on the persistent WebR session (host feature).
     const rConsole = mounts.viewConsole ? new RConsole(mounts.viewConsole, { webr, store: datasets }) : null;
     workspaceTabs = wireWorkspaceTabs(bus, mounts, { dataView, variableView, results: mounts.results, rConsole, resultsPane: results });
-    // Keep the grid's header checkboxes in step when selection changes elsewhere
-    // (e.g. the sidebar) — both surfaces drive the one shared selection.
-    bus.on(CoreEvents.SELECTION_CHANGED, () => dataView.syncSelection());
+    // Keep the grid's header checkboxes AND Variable View's row checkboxes in step when
+    // the selection changes elsewhere (the other tab, a picker, the sidebar) — every
+    // surface drives the one shared selection, so none of them may drift from it.
+    bus.on(CoreEvents.SELECTION_CHANGED, () => {
+      dataView.syncSelection();
+      variableView.syncSelection();
+    });
     // Where the sidebar lives depends on the layout, and it moves on every toggle.
     const shellDeps = { sidebar: mounts.sidebar, main: mounts.sidebar?.parentElement, tabs: workspaceTabs };
     arrangeShell(screen.mode, shellDeps);
