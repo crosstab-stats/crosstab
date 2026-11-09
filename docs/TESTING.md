@@ -175,10 +175,30 @@ marked 🔢 and deserve the closest look: **SCED**, **Plots**, **Aggregate**,
       Enter. Reload.
       Expect: the new name stuck.
 
-- [ ] **Delete, then restore from the recycle bin**
-      Recipe: **File ▸ Manage projects…** → delete a project → find it in the recycle
-      bin → restore.
-      Expect: it comes back with its data *and* its output intact.
+- [ ] **Delete a dataset, then restore it from the recycle bin**
+      Recipe: in the **sidebar**, add a second dataset so there are two, do something to
+      one of them (a recode, some coding), then click its **✕**. A **Recently deleted**
+      zone appears under the dataset list — it is only there when something is in it.
+      Click the **↩** beside the deleted dataset.
+      Expect: it comes back with its data, its transform history, and anything attached
+      to it (CAQDAS coding, map layers, memos) still attached — it returns under its
+      *original* id, which is what re-attaches them. Deleting is a status change, not a
+      copy, so this costs nothing and survives a reload. The **✕** in that zone is the
+      permanent one and says so; the bin keeps the 20 most recent and purges beyond that.
+      Note this bin is **per project and for things inside it** — datasets and item
+      records. There is no bin for whole projects; see the next check.
+
+- [ ] **Delete a project — and there is no undo**
+      Recipe: **File ▸ Manage projects…** → **✕** on a project stored in this browser.
+      Read the confirmation, confirm, then reload.
+      Expect: the dialog says plainly that the project and its data go and that it
+      **cannot be undone** — there is deliberately no project-level recycle bin, so a
+      safety net means **File ▸ Export project bundle** (`.crosstab`) *before* deleting.
+      It is gone from the list and still gone after the reload. Delete the project you
+      currently have open and you land in a fresh Untitled project rather than nowhere.
+      A project stored in a **folder or remote** is a different offer, and worth checking
+      separately: the wording becomes "remove from the list", the files stay put, and
+      deleting them too is an unticked checkbox you have to tick yourself.
 
 - [ ] **Change where a project is stored**
       Recipe: **File ▸ Store in…** → pick a local folder (File System Access), then try

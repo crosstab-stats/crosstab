@@ -42,3 +42,8 @@ dist/
 # Real-world sample data for local import testing (drop GSS .sav/.dta/.sas here).
 # Served at /sample-data/ so tests can fetch it; never committed.
 sample-data/
+
+# The rendered checklist page — `node scripts/build-test-page.mjs` output. The markdown
+# in docs/TESTING.md is the source of truth; this is a local working copy whose progress
+# lives in your own localStorage.
+testing.html
