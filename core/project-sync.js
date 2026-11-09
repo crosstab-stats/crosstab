@@ -933,6 +933,28 @@ export class ProjectSync {
   }
 
   /**
+   * Is there anything in this project worth storing?
+   *
+   * The question the STORAGE verbs — move to a folder, protect at rest — actually need
+   * to ask. They used to ask `!this.#binding`, which answers a different one: "has this
+   * project been written to disk yet". The two coincide for a blank project and come
+   * apart for a loaded demo: 30 rows on screen, no edit yet, so no autosave has fired
+   * and there is no binding. That is how "Move to a folder" came to answer "Add some
+   * data first" to a project that plainly had data, and why the encryption dialog called
+   * the same project "Nothing saved yet".
+   *
+   * Rows OR variables: an import that produced a schema and no rows is still something,
+   * where the blank project the launcher makes is one dataset with neither.
+   */
+  hasContent() {
+    for (const ds of this.#datasets?.all?.() ?? []) {
+      if ((ds.rowCount ?? 0) > 0) return true;
+      if ((ds.getVariableMeta?.() ?? []).length > 0) return true;
+    }
+    return false;
+  }
+
+  /**
    * Run a launcher data-seed load (Demo / Blank) without it counting as a user
    * change that auto-creates a project — the same exemption the boot seed gets by
    * load order. Without this, *re-opening* the launcher and picking a demo (which
@@ -2120,7 +2142,12 @@ export class ProjectSync {
     // else is a copy — which has to be SAID, because it is not what "move" implies.
     const previous = this.#backend?.describe?.() ?? null;
     const wasLocal = !this.#store.capabilities?.flat;
-    if (wasLocal && !this.#binding) {
+    // Refuse only what is actually empty. A project that HAS data but has never been
+    // written is not a reason to refuse — choosing where it lives is itself the first
+    // deliberate act about this project's storage, so the move brings it into being at
+    // the destination (the commit line below saves it there, and there is no local copy
+    // to clean up because there was never one). See hasContent().
+    if (wasLocal && !this.hasContent()) {
       this.#results.appendError('Add some data first — an empty project has nothing to move.');
       return false;
     }
@@ -2158,7 +2185,12 @@ export class ProjectSync {
 
     // --- committed ------------------------------------------------------------
     const orphanLocalId = wasLocal ? this.#binding?.id : null;
-    const projectName = this.activeName || 'My project'; // read BEFORE unbinding
+    // Read BEFORE unbinding. A project that was never written has no name of its own, so
+    // this invents one — "Untitled project", the SAME name autosave would have given it,
+    // rather than a second invented default that only this path produces.
+    const projectName = this.activeName
+      || this.#log?.state('projectMeta')?.name
+      || 'Untitled project';
     try {
       await this.#settle();
       this.#adopt(backend);
@@ -2437,7 +2469,17 @@ export class ProjectSync {
   async protectionState() {
     if (!this.#open && !this.#store.flat) return { scope: 'none' };
     const folder = this.#store.flat;
-    if (!folder && !this.#binding) return { scope: 'unsaved' };
+    if (!folder && !this.#binding) {
+      // Never written — but that is not the same as empty, and only the empty one has
+      // nothing to protect. A loaded demo reported "Nothing saved yet" at 30 rows,
+      // because this asked about the binding instead of the contents (see hasContent()).
+      // With data, protecting is offered: it writes the project and encrypts it, the way
+      // protecting an already-saved one re-keys it.
+      if (!this.hasContent()) return { scope: 'unsaved' };
+      // The name it is ABOUT to get, not a placeholder: the dialog quotes this, and
+      // writing the project is the first thing protecting it does.
+      return { scope: 'local', name: this.activeName ?? 'Untitled project', protected: false };
+    }
     const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
     return {
       scope: folder ? 'folder' : 'local',
@@ -2460,8 +2502,18 @@ export class ProjectSync {
     const folder = this.#store.flat; // one project per location — folder or remote alike
     await this.#settle(); // make sure it's saved (and, for OPFS, has a binding) before we re-key it
     if (!folder && !this.#binding) {
-      this.#results.appendError('Add some data first — an empty project has nothing to protect yet.');
-      return;
+      // Settle cannot bind an unwritten project (it only saves where a binding exists),
+      // so with data on board we write it here and then protect what we wrote. Asking to
+      // protect a project IS a decision about it, which is exactly the kind of act that
+      // brings one into being — same reasoning as the move.
+      if (!this.hasContent()) {
+        this.#results.appendError('Add some data first — an empty project has nothing to protect yet.');
+        return;
+      }
+      if (!(await this.ensureProject())) {
+        this.#results.appendError('Could not save this project, so there is nothing to protect yet.');
+        return;
+      }
     }
     const id = folder ? FOLDER_PROJECT_ID : this.#binding.id;
     const name = this.#binding?.name ?? 'this project';
