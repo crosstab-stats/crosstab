@@ -128,8 +128,23 @@
       header :focus-visible, .ctl__bar :focus-visible { outline-color: var(--ct-bar-link); }
       /* Wrap to additional rows when there are many menus, rather than overflowing
          the header (which used to scroll the whole window sideways). min-width:0
-         lets it shrink within the header flex row. */
-      nav.menubar { display: flex; flex-wrap: wrap; gap: 2px; position: relative; flex: 1 1 auto; min-width: 0; }
+         lets it shrink within the header flex row.
+
+         `flex-basis: 0`, not `auto`, is what keeps the bar ONE bar. The header is
+         itself a wrapping flex row (brand · menubar · identity/live controls), and a
+         flex line is broken up using each item's *hypothetical* size — which for
+         `basis:auto` is the menubar's max-content width, i.e. all 26 menus laid out
+         on a single line. That always overflowed, so the menubar was pushed onto a
+         line of its own and the controls onto a third: brand alone on top, two rows
+         of menus, then an orphaned identity chip at the BOTTOM LEFT. With a basis of
+         0 the menubar's hypothetical size is 0, it never forces a break, and it grows
+         into whatever is left between brand and controls, wrapping *inside* itself.
+         Brand stays pinned to the start and the controls to the end no matter how
+         many rows of menus there are, and the wrapped rows line up in a block under
+         each other instead of being indented past the brand on the first row only.
+         (min-width:0 still matters: it lets that growth go below the widest button
+         rather than overflowing at very narrow widths.) */
+      nav.menubar { display: flex; flex-wrap: wrap; gap: 2px; position: relative; flex: 1 1 0; min-width: 0; }
       .menu { position: relative; }
       .menu__button {
         background: transparent; color: var(--bar-fg); border: 0;
