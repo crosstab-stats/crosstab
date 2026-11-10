@@ -109,3 +109,21 @@ test('the first two things boot awaits are still the two bounded loaders', () =>
   assert.deepEqual(firstTwo, ['loadDeployConfig', 'loadSitePlugins'],
     'a new await landed on the critical path to the launcher — give it a deadline');
 });
+
+test('a boot failure can always report itself', () => {
+  // Added 2026-11-10. The `.catch` below was written as the backstop that turns a failed
+  // boot into "Failed to start: …" — but it hung off a STATIC import, and a static import
+  // that fails means the surrounding module never executes at all. So the one case most
+  // likely to break boot (the module graph not arriving, e.g. a cold launch with no usable
+  // connection) was precisely the case the error path could not reach, and the user got
+  // the footer's initial "Starting…" for ever, with nothing in the UI to go on.
+  //
+  // A dynamic import rejects catchably. That difference is the whole guard.
+  const html = readFileSync('index.html', 'utf8');
+  const script = html.slice(html.lastIndexOf('<script type="module">'));
+  assert.match(script, /import\(\s*['"]\.\/core\/app\.js['"]\s*\)/,
+    'core/app.js must be imported dynamically, or its failure is unreportable');
+  assert.doesNotMatch(script.replace(/\/\/.*$/gm, ''), /^\s*import\s+\{[^}]*\}\s+from/m,
+    'a static import of the app module puts the error path out of reach again');
+  assert.match(script, /Failed to start/, 'and the failure still reaches the status line');
+});

@@ -4946,6 +4946,96 @@ The record of what shipped and why. Kept in full, in the original sections.
       mis-click loads a demo, `loadingSeed` keeps it out of autosave, and the brand
       click reopens the launcher.
 
+- [x] **FIXED (2026-11-10). The installed iOS app sometimes never got past "Starting…".**
+      Reported with a screenshot after several sightings: the Home Screen app opened to its
+      shell, the status line read "Starting…", and the launcher never came. Force-quitting
+      and reopening always worked, instantly. Likelier when several updates had accumulated
+      since the last launch — but, correctly, the reporter noted that was neither necessary
+      nor sufficient.
+
+      This is the October freeze (above) one layer down. That one bounded the two config
+      fetches `boot()` awaits. This one is about the module graph that must arrive before
+      `boot` is so much as *imported* — every byte of which the service worker serves.
+
+      **Four defects, compounding. All four are fixed.**
+
+      **1. The cache-first path could not engage on the launch it was written for.** `sw.js`
+      serves the same-origin shell cache-first when `standalone` is set — the whole point
+      being "a field iPad on a dead connection still launches instantly". But `standalone`
+      was an in-memory `let`, announced by the page over `set-standalone`, and the page
+      cannot make that announcement until `core/offline.js` has loaded — one of the very
+      module fetches the flag exists to serve from cache. **It is announced at the END of
+      `boot()`.** So on every cold launch of the installed app the flag was `false` for the
+      whole of boot, and the installed-app fast path was dead in exactly the situation it
+      existed for. A circular dependency, invisible because the degraded path (network-first)
+      normally works fine.
+
+      The file had already written the rule it was breaking, four lines above `MARKER_PREFIX`:
+      *"A service worker is killed and respawned freely, so anything that must survive that
+      lives in the cache, not in a variable."* `standalone` is now a marker like the other
+      two. And restoring is no longer done in `activate` alone — **`activate` does not re-run
+      when an idle worker is respawned**, which iOS does aggressively, so a respawned worker
+      answered fetches with the offline opt-in, the deployment's runtime hosts AND
+      `standalone` all back at their defaults. `restoreSettings()` is memoised and awaited at
+      the top of `handleFetch`, which is the only place guaranteed to run.
+
+      **2. The network path it fell through to had no deadline.** `respondWith()` on a promise
+      that never settles is a subresource that never arrives; a module that never arrives is a
+      boot that can neither start nor fail. Exactly the October shape: a `try/catch` covers a
+      fetch that REJECTS and does nothing for one that never SETTLES. Same-origin GETs now
+      race an 8s deadline and fall back to the cache.
+
+      Deliberately a `Promise.race`, **not** an `AbortSignal` — `fetch` resolves on the
+      response *head*, so racing it bounds connect-and-first-byte and cannot truncate a
+      download that is slow but progressing. An abort signal applies to the whole request,
+      which in a vendored air-gapped build (runtimes are same-origin `./vendor/` files of tens
+      of megabytes) would kill a healthy transfer on a slow LAN. Trading a rare hang for a
+      guaranteed one is not a fix. The cost, stated plainly: a wedged request is abandoned
+      rather than cancelled, and holds its connection until the platform gives up.
+
+      **3. An update reloaded the page mid-boot.** `updatefound` fires when a new worker
+      begins *installing*; the handler reloaded immediately — discarding an in-flight boot
+      while that worker was precaching eight entries with `cache: 'reload'` (forced network)
+      over the same cold radio. **That is the "more likely after several updates" correlate.**
+      It now waits for the new worker to reach `activated` and for `document.readyState` to be
+      `complete`, so a deploy still lands on this launch (which is what the proactive update
+      check exists for) without pulling the rug out from under a boot.
+
+      **4. A boot failure could not report itself.** `index.html` ended with
+      `import { boot } from './core/app.js'` and a `.catch` on `boot()`. A STATIC import that
+      fails means the surrounding module never executes — so the one failure most likely to
+      break boot (the graph not arriving) was precisely the one the error path could not
+      reach, and the user got the footer's initial "Starting…" for ever. Now a dynamic
+      `import()`, whose rejection is catchable, with a connection hint in the message. This is
+      why this class of bug has twice been reported as "it just sits there".
+
+      **Verified by reproducing it, not by reasoning about it.** A stalling server (accepts
+      the connection, never answers — a cold radio, *not* a refusal, which fails fast and
+      falls back) plus a profile warmed by three real launches, then relaunched:
+
+      | | old worker | fixed worker |
+      |---|---|---|
+      | stalled cold launch | nothing at all after 45s | launcher in 0s, "R runtime: ready" |
+
+      Identical cache contents either way (208 vs 209 entries, the same 128 `core/` modules),
+      so the only variable was the code. Separately, evicting one boot-critical module and
+      stalling now yields "Failed to start: … could not load the app files. Check your
+      connection and reopen." where it used to yield "Starting…" for ever.
+
+      **Residual, worth knowing.** On a FIRST visit the modules `core/app.js` imports directly
+      are fetched before the worker claims the page, so they are the one part of the boot
+      graph that misses cache-on-use — measured: 36 of `core/` cached after one load, 128
+      after three. They do get cached on the second launch, so this only bites an
+      install-then-immediately-offline sequence. Fixing it means either hand-listing them in
+      `SHELL_PRECACHE` (a list that will rot) or having the page announce the same-origin
+      scripts it actually loaded, for the worker to precache — self-maintaining, and the
+      "page announces, worker persists" pattern this file already uses twice. Not done.
+
+      Also noted and not fixed: a `CACHE` version bump drops the markers along with the
+      payloads, so the offline opt-in silently switches off on a shell-cache bump. Harmless
+      for `standalone` (that launch has no cache to serve from anyway, and the bounded fetch
+      covers it), but the opt-in deserves a home that is not wiped with the payloads.
+
 - [x] **FIXED (2026-10-13). The PWA sometimes froze at "Starting…" and never reached the
       launcher.** Reported with a screenshot after several sightings on a phone, then once
       on the desktop PWA: the window opened, the shell painted, the status line read

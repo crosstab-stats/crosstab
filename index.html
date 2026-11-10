@@ -1534,9 +1534,15 @@
     <footer><span id="status" role="status" aria-live="polite">Starting…</span></footer>
 
     <script type="module">
-      import { boot } from './core/app.js';
-
-      boot({
+      // `import(...)` rather than a static `import` — because a static one cannot report
+      // its own failure. If any module in the graph fails to arrive, a static import means
+      // THIS script never executes, so the .catch below is unreachable and the user is left
+      // staring at the "Starting…" that is simply the footer's initial text. That is not a
+      // hypothetical: it is how the 2026-11-10 PWA hang presented, and it is why the same
+      // class of bug (see boot-never-hangs.test.mjs) has twice been reported as "it just
+      // sits there" with nothing in the UI to go on. A dynamic import rejects, catchably,
+      // and the status line says what happened.
+      const mounts = {
         menubar: document.getElementById('menubar'),
         sidebar: document.getElementById('sidebar'),
         results: document.getElementById('results'),
@@ -1546,10 +1552,20 @@
         viewData: document.getElementById('view-data'),
         viewVars: document.getElementById('view-vars'),
         viewConsole: document.getElementById('view-console'),
-      }).catch((err) => {
+      };
+
+      const fail = (err) => {
         console.error('CrossTab failed to start', err);
-        document.getElementById('status').textContent = 'Failed to start: ' + err.message;
-      });
+        const why = err?.message || String(err);
+        // Name the likeliest cause rather than only the symptom: by far the most common
+        // way the module graph fails to arrive is a launch with no usable connection.
+        const hint = /dynamically imported module|Failed to fetch|NetworkError/i.test(why)
+          ? ' — could not load the app files. Check your connection and reopen.'
+          : '';
+        document.getElementById('status').textContent = 'Failed to start: ' + why + hint;
+      };
+
+      import('./core/app.js').then((m) => m.boot(mounts)).catch(fail);
     </script>
   </body>
 </html>

@@ -44,6 +44,8 @@
 /* global self, caches */
 let coepCredentialless = false;
 
+// markers:start — a test seam, paired with `restore:start` below (see runtime-hosts.test.mjs
+// for why sw.js is read rather than imported).
 const CACHE = 'crosstab-offline-v4';
 // Synthetic keys (never real requests) the worker uses to remember a decision across
 // restarts. A service worker is killed and respawned freely, so anything that must survive
@@ -54,6 +56,9 @@ const MARKER_PREFIX = 'https://crosstab.local/__';
 const OFFLINE_MARKER = `${MARKER_PREFIX}offline_enabled__`;
 // The deployment's extra runtime hosts (#185 `runtimeHosts`), as announced by the page.
 const HOSTS_MARKER = `${MARKER_PREFIX}runtime_hosts__`;
+// "This origin has been launched as an installed app." See {@link standalone} for why a
+// variable was not enough, and what it cost.
+const STANDALONE_MARKER = `${MARKER_PREFIX}standalone__`;
 
 /** Is this one of the worker's own bookkeeping keys rather than a cached asset? */
 function isMarker(url) {
@@ -62,6 +67,7 @@ function isMarker(url) {
 // Tier-1 caching (the app shell) is automatic — the OPT-IN marker now only gates
 // tier-2 (the big cross-origin runtimes + R packages).
 let offlineEnabled = false;
+// markers:end
 // The minimal critical shell precached on install, so the app can boot offline even
 // from a cold install (the rest of the same-origin module graph fills cache-on-use
 // on first load). Resolved against the SW's scope. Kept short + resilient: a missing
@@ -200,11 +206,69 @@ function isRuntimeAsset(url) {
 }
 // hosts:end
 
-// Set by the page when running as a Home Screen (standalone) app — then the
-// same-origin shell is served cache-first/stale-while-revalidate so a flaky or
-// absent connection (a field iPad) never blocks launch. In-memory; the page
-// re-announces it each load.
+// restore:start — a test seam; needs `markers:start` and `hosts:start` in scope.
+/**
+ * Has this origin been launched as a Home Screen (standalone) app? Then the same-origin
+ * shell is served cache-first/stale-while-revalidate, so a flaky or absent connection (a
+ * field iPad) never blocks launch.
+ *
+ * **This was in-memory only, re-announced by the page each load, and that was the
+ * "PWA hangs at Starting…" bug (2026-11-10).** The announcement travels
+ * page → worker, and the page can only make it once `core/offline.js` has loaded — which
+ * is itself one of the module fetches the flag was supposed to serve from cache. So on
+ * every cold launch of the installed app the flag was `false` for the whole of boot, and
+ * the cache-first path written for exactly that moment could never engage. The shell went
+ * to the network instead, one unbounded request per module, on the cold radio of a phone
+ * that has just been woken — and a fetch that never settles is a module that never
+ * arrives, so `import { boot }` never resolved and the static shell sat at its initial
+ * "Starting…" with no launcher and no error. Force-quitting worked because the second
+ * launch had a warm radio.
+ *
+ * It is now persisted like every other decision the worker has to remember, per the rule
+ * stated at {@link MARKER_PREFIX}: a worker is killed and respawned freely — and replaced
+ * outright on every deploy — so this cannot live in a variable alone. Restored before the
+ * first fetch is answered ({@link restoreSettings}), which is the whole point.
+ */
 let standalone = false;
+
+/**
+ * Re-read the decisions that must outlive this worker instance.
+ *
+ * Three of them — the offline opt-in, the deployment's runtime hosts, and {@link
+ * standalone} — were being restored in `activate` alone. That covers a worker *version*
+ * change and nothing else: **`activate` does not re-run when an idle worker is respawned**,
+ * which iOS does aggressively, so a respawned worker answered fetches with all three back
+ * at their defaults. For the first two that only means "slower"; for `standalone` it meant
+ * the hang above.
+ *
+ * Memoised, so this costs one cache open per worker instance, and awaited at the top of
+ * {@link handleFetch} rather than hooked to a lifecycle event that may never fire again.
+ *
+ * It never *un-does* an announcement: a restore that loses a race with a `set-standalone`
+ * message must not reset the flag it just set, so each value can only be turned on here,
+ * never off. The one thing it cannot survive is a {@link CACHE} version bump, which drops
+ * the markers along with the payloads — but that also empties the shell cache, so there is
+ * nothing for `standalone` to serve from that launch anyway. The bounded fetch below is
+ * what covers that case.
+ */
+let restored = null;
+function restoreSettings() {
+  restored ??= (async () => {
+    try {
+      const c = await caches.open(CACHE);
+      offlineEnabled = offlineEnabled || !!(await c.match(OFFLINE_MARKER));
+      standalone = standalone || !!(await c.match(STANDALONE_MARKER));
+      if (!extraRuntimeHosts.length) {
+        const saved = await c.match(HOSTS_MARKER);
+        if (saved) extraRuntimeHosts = sanitizeHosts(await saved.json().catch(() => []));
+      }
+    } catch {
+      /* Cache API unavailable — the defaults stand */
+    }
+  })();
+  return restored;
+}
+// restore:end
 
 if (typeof window === 'undefined') {
   // ---- Running as the service worker ----------------------------------------
@@ -240,12 +304,12 @@ if (typeof window === 'undefined') {
           for (const k of await caches.keys()) {
             if (k !== CACHE && k.startsWith('crosstab-offline-')) await caches.delete(k);
           }
-          const c = await caches.open(CACHE);
-          offlineEnabled = !!(await c.match(OFFLINE_MARKER));
-          // The deployment's extra runtime hosts, from the last page that announced them.
-          // Restored BEFORE any fetch is handled, which is the point of persisting them.
-          const saved = await c.match(HOSTS_MARKER);
-          if (saved) extraRuntimeHosts = sanitizeHosts(await saved.json().catch(() => []));
+          // The offline opt-in, the deployment's extra runtime hosts and whether this is
+          // an installed app — all from the last page that announced them, and all
+          // restored BEFORE any fetch is handled, which is the point of persisting them.
+          // `handleFetch` awaits the same memoised read, so a respawned worker (where
+          // this listener never runs again) is covered too.
+          await restoreSettings();
         } catch {
           /* Cache API unavailable */
         }
@@ -267,6 +331,20 @@ if (typeof window === 'undefined') {
       coepCredentialless = d.value;
     } else if (d.type === 'set-standalone') {
       standalone = !!d.value;
+      // Persisted, not just held: the page cannot announce this until its module graph has
+      // loaded, so a flag that lived only in memory was always false for the launch it
+      // existed to serve. See {@link standalone}.
+      ev.waitUntil(
+        (async () => {
+          try {
+            const c = await caches.open(CACHE);
+            if (standalone) await c.put(STANDALONE_MARKER, new Response('1'));
+            else await c.delete(STANDALONE_MARKER);
+          } catch {
+            /* Cache API unavailable — this launch still works, the next is just slower */
+          }
+        })(),
+      );
     } else if (d.type === 'set-runtime-hosts') {
       // Additive and idempotent: every page load re-announces, and announcing nothing
       // leaves the built-in CDN hosts exactly as they are.
@@ -392,8 +470,36 @@ if (typeof window === 'undefined') {
         // A genuine UPDATE to an already-running app → reload to pick up fresh code.
         // Guard on an existing controller so this does NOT fire on the very first
         // install (that case is the isolate-reload below, not an app update).
+        //
+        // **When** this reloads was the third ingredient in the "PWA hangs at Starting…"
+        // bug (2026-11-10), and it is why the hang correlated with having missed several
+        // updates. `updatefound` fires the instant a new worker begins INSTALLING — so the
+        // old code reloaded the page while that worker was precaching eight entries with
+        // `cache: 'reload'` (forced network), on the cold radio of a just-woken phone,
+        // discarding a boot that was already in flight and starting a fresh one into the
+        // same contention. The more deploys had accumulated, the likelier a launch landed
+        // in that window.
+        //
+        // Now it waits for the new worker to be ACTIVATED — `skipWaiting()` means that
+        // follows install closely, so a deploy still lands on this launch rather than
+        // after a force-quit, which is the property the proactive check below exists for —
+        // and then waits for the document to finish loading before pulling it out from
+        // under itself. The session flag makes it at most one update-reload per load-cycle
+        // (it is read and cleared at the top of every load), so a worker that re-announces
+        // cannot start a reload loop.
         registration.addEventListener('updatefound', () => {
-          if (n.serviceWorker.controller) window.location.reload();
+          const fresh = registration.installing;
+          if (!fresh || !n.serviceWorker.controller) return; // first install → isolate path
+          fresh.addEventListener('statechange', () => {
+            if (fresh.state !== 'activated') return;
+            if (window.sessionStorage.getItem('coiReloadedBySelf')) return; // once per cycle
+            window.sessionStorage.setItem('coiReloadedBySelf', 'update');
+            // Never yank a boot that is still in progress. If it never completes we simply
+            // do not reload — the update waits for the next launch, which is strictly
+            // better than restarting a load that is already struggling.
+            if (document.readyState === 'complete') window.location.reload();
+            else window.addEventListener('load', () => window.location.reload(), { once: true });
+          });
         });
 
         // Proactively check for a new worker whenever the tab regains focus (and once
@@ -443,6 +549,10 @@ if (typeof window === 'undefined') {
  * network is gone. Successful GETs are cached while offline mode is on.
  */
 async function handleFetch(r) {
+  // Before anything is routed: a respawned worker has none of its remembered decisions,
+  // and the most important of them decides this very request's path. Memoised — one cache
+  // open per worker instance, not per request.
+  await restoreSettings();
   const isGet = r.method === 'GET';
   // Only a TOP-LEVEL document navigation should fall back to the index shell. A
   // nested navigation (a plugin sandbox <iframe> loading plugin-host.html) must
@@ -512,6 +622,51 @@ async function matchShell() {
   );
 }
 
+/**
+ * How long a same-origin shell request may take to produce RESPONSE HEADERS before the
+ * worker gives up on the network and falls back to the cache.
+ *
+ * This is the second half of the "PWA hangs at Starting…" fix, and the direct descendant
+ * of the 5s bound put on `deploy.json` in October (`core/deploy-config.js`): a `try/catch`
+ * covers a fetch that REJECTS and does nothing whatsoever for one that never SETTLES.
+ * `event.respondWith()` on a promise that never settles is a subresource that never
+ * arrives — and a module that never arrives is a boot that cannot start, fail, or report
+ * anything, because the shell the user is staring at is static HTML.
+ *
+ * 8s: longer than any healthy same-origin file takes even on a bad link, short enough that
+ * a wedged request becomes a cached boot (or at worst a visible "Failed to start: …")
+ * rather than an indefinite stare at the status line.
+ */
+// deadline:start — a test seam.
+const SHELL_HEADERS_TIMEOUT_MS = 8000;
+
+/**
+ * The deadline covers the HEADERS, not the body — and that distinction is the reason there
+ * is no `AbortSignal` here.
+ *
+ * `fetch()` resolves as soon as the response head arrives; the body streams afterwards. So
+ * racing the returned promise bounds exactly the phase that hangs (connect + first byte)
+ * and cannot truncate a download that is slow but progressing. An `AbortSignal.timeout`
+ * would apply to the whole request including the body, which in a vendored air-gapped
+ * build — where the WebR/DuckDB runtimes are same-origin `./vendor/` files of tens of
+ * megabytes — would abort a perfectly healthy transfer over a slow LAN and leave the user
+ * with a runtime that never finishes downloading. Trading a rare hang for a guaranteed one
+ * is not a fix.
+ *
+ * The cost of racing rather than aborting: a wedged request is abandoned, not cancelled. It
+ * holds its connection until the platform times it out on its own. That is a real cost on
+ * iOS's small per-host connection pool, and it is still much the better end of the trade —
+ * the alternative is the connection being held by a request nobody has given up on either.
+ */
+function withDeadline(promise, ms) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`network stalled after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+// deadline:end
+
 /** Fetch with the COEP header rewrite, caching the result. The same-origin app
  * shell is cached AUTOMATICALLY (tier 1, #92); cross-origin runtimes/packages cache
  * only when "Make available offline" is on (tier 2). Returns the rewritten response;
@@ -531,7 +686,14 @@ async function networkAndCache(r, isGet, sameOrigin) {
       /* some requests can't be reconstructed (rare) — use the original */
     }
   }
-  const response = await fetch(request);
+  // Same-origin GETs are the boot path (the module graph, the shell documents, the plugin
+  // sources) and they are the ones that must never hang — see SHELL_HEADERS_TIMEOUT_MS.
+  // Everything else (cross-origin runtimes, non-GET) keeps the plain unbounded fetch: it is
+  // not on the path to the launcher, and WebR's preload failure is already caught upstream.
+  const hit = sameOrigin && isGet
+    ? withDeadline(fetch(request), SHELL_HEADERS_TIMEOUT_MS)
+    : fetch(request);
+  const response = await hit;
   if (response.status === 0) return response; // opaque; leave as-is (can't rewrite)
 
   // Cache the *rewritten* response (with CORP), so a later offline serve still
