@@ -72,6 +72,9 @@ function loadRestore(caches) {
     'caches',
     `${seam('markers')}
 ${seam('hosts')}
+${seam('deadline')}
+function withIsolation(r) { return r; }
+${seam('shell')}
 ${seam('restore')}
 return {
   restoreSettings,

@@ -5022,14 +5022,48 @@ The record of what shipped and why. Kept in full, in the original sections.
       stalling now yields "Failed to start: … could not load the app files. Check your
       connection and reopen." where it used to yield "Starting…" for ever.
 
-      **Residual, worth knowing.** On a FIRST visit the modules `core/app.js` imports directly
-      are fetched before the worker claims the page, so they are the one part of the boot
-      graph that misses cache-on-use — measured: 36 of `core/` cached after one load, 128
-      after three. They do get cached on the second launch, so this only bites an
-      install-then-immediately-offline sequence. Fixing it means either hand-listing them in
-      `SHELL_PRECACHE` (a list that will rot) or having the page announce the same-origin
-      scripts it actually loaded, for the worker to precache — self-maintaining, and the
-      "page announces, worker persists" pattern this file already uses twice. Not done.
+      **The first-visit gap — now also closed (same day).** On a FIRST visit the modules
+      `core/app.js` imports directly are fetched before the worker claims the page, so they
+      were the one part of the boot graph that missed cache-on-use: 36 of `core/` cached
+      after one launch, 128 after three. They arrive on the second launch anyway, so this
+      only bit install-then-immediately-offline — which is the sequence an installed app
+      exists for.
+
+      Built the self-announcing path rather than hand-listing the graph in `SHELL_PRECACHE`:
+      a hand-written import graph rots silently on the next import change, and a shell list
+      that is quietly incomplete is worse than none because it looks finished. The page has
+      `performance`'s exact record of what loaded — *including the files fetched before the
+      worker existed*, which is the one thing a worker can never reconstruct. So
+      `OfflineManager.announceShell()` hands the list over and the worker sanitises,
+      persists ({@link SHELL_MARKER}) and tops up the gaps. Same division of labour as
+      `set-runtime-hosts`.
+
+      Measured, one launch, cold profile: **40 → 128 of `core/` cached, 119 → 209 entries,
+      a 133-URL manifest** — and a stalled relaunch after that single launch now reaches
+      the launcher in 0s, where it needed three launches before. A repeat announcement
+      reports `added: 0`, so it costs nothing per launch.
+
+      Three things that are load-bearing and would be easy to "simplify" away:
+      - **Scheduled BEFORE `await launcher.open()`.** That await is a human gate — it
+        resolves when the user clicks Start — so anything below it never runs for a launch
+        where someone opens the app, looks at it and closes it. Found by measuring: with it
+        below the gate, a one-launch profile still showed 40 of `core/` and no manifest.
+      - **Announced on `controllerchange` when uncontrolled.** A first visit registers the
+        worker during the load it cannot control, which is exactly the launch worth
+        announcing. Guarding on `controller` and giving up would have skipped it.
+      - **Never precached on `install`, and the top-up is serial.** Precaching 130 files on
+        install is the 2026-11-10 contention at thirteen times the size. The cost of that
+        choice: a `CACHE` version bump refills the shell a launch later rather than at once.
+
+      The worker re-derives the *structural* rules on what it is handed (absolute URL, same
+      origin, no query, bounded) because any script on the origin can post to it — note
+      `new URL(s, origin)` resolved junk like `"not a url"` into a plausible same-origin
+      path, costing a real request and a 404 every launch until the prune caught it; it is
+      absolute-only now. It deliberately does NOT re-derive *which file kinds* count as
+      shell: that list stays in `core/offline.js`, for the same reason the worker does not
+      parse `deploy.json`. The page-side allow-list is also what keeps a user's imported
+      `.csv` and a plugin's `app.web` fetches out of a durable cache, and the 2 MB ceiling
+      is what stops a vendored air-gapped build announcing tens of MB of runtime.
 
       Also noted and not fixed: a `CACHE` version bump drops the markers along with the
       payloads, so the offline opt-in silently switches off on a shell-cache bump. Harmless

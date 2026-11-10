@@ -59,6 +59,9 @@ const HOSTS_MARKER = `${MARKER_PREFIX}runtime_hosts__`;
 // "This origin has been launched as an installed app." See {@link standalone} for why a
 // variable was not enough, and what it cost.
 const STANDALONE_MARKER = `${MARKER_PREFIX}standalone__`;
+// The same-origin files a real launch actually needed, as announced by the page. See
+// {@link topUpShell}.
+const SHELL_MARKER = `${MARKER_PREFIX}shell_manifest__`;
 
 /** Is this one of the worker's own bookkeeping keys rather than a cached asset? */
 function isMarker(url) {
@@ -251,6 +254,13 @@ let standalone = false;
  * nothing for `standalone` to serve from that launch anyway. The bounded fetch below is
  * what covers that case.
  */
+/**
+ * The same-origin files a real launch needed, accumulated across launches. Persisted for
+ * the same reason as everything else here — a worker does not outlive its own decisions.
+ * See {@link topUpShell}.
+ */
+let shellManifest = [];
+
 let restored = null;
 function restoreSettings() {
   restored ??= (async () => {
@@ -262,6 +272,10 @@ function restoreSettings() {
         const saved = await c.match(HOSTS_MARKER);
         if (saved) extraRuntimeHosts = sanitizeHosts(await saved.json().catch(() => []));
       }
+      if (!shellManifest.length) {
+        const saved = await c.match(SHELL_MARKER);
+        if (saved) shellManifest = sanitizeShellUrls(await saved.json().catch(() => []));
+      }
     } catch {
       /* Cache API unavailable — the defaults stand */
     }
@@ -269,6 +283,123 @@ function restoreSettings() {
   return restored;
 }
 // restore:end
+
+// shell:start — a test seam; needs `markers:start` in scope.
+/** A boot graph is ~130 files. The cap is a backstop against a malformed announcement, not
+ *  a budget — a legitimate list never comes close. */
+const SHELL_MANIFEST_MAX = 600;
+/** Top-ups run one at a time: the point is to fill gaps quietly in the background, not to
+ *  open 130 connections on a phone that has just finished booting. */
+const TOP_UP_CONCURRENCY = 1;
+/** Give up after this many consecutive failures. A network that has started refusing will
+ *  not be talked round by request 97, and hammering it is how a background task becomes a
+ *  foreground problem. */
+const TOP_UP_GIVE_UP_AFTER = 3;
+
+/**
+ * Keep only what is genuinely ours to cache.
+ *
+ * The page is trusted (same origin, our own code) but the message channel is not a
+ * capability: any script on the origin can post to the worker. So this re-derives the
+ * STRUCTURAL rules rather than believing the sender — absolute URL, same origin as the
+ * worker, no query or hash (a key nothing will ask for again is pure waste), sane count.
+ *
+ * What it deliberately does NOT re-derive is *which file kinds* belong to the shell. That
+ * list lives in `core/offline.js` and stays there, for the reason set out above
+ * {@link extraRuntimeHosts}: a second copy of one rule is the exact shape that shipped
+ * three separate bugs in a week, and it would buy nothing here — the only sender that can
+ * reach this channel is already running on the origin, where it could read anything it
+ * wanted to cache. The structural rules are what keep a bad message from turning into a
+ * cross-origin download or an unbounded cache.
+ */
+function sanitizeShellUrls(list, origin = self.location.origin) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(list) ? list : []) {
+    const s = String(raw ?? '');
+    if (!s || s.length > 2048) continue;
+    let u;
+    try {
+      // Absolute only — deliberately NO base. Resolving against the origin would turn any
+      // junk in a malformed message ("not a url", a number) into a plausible same-origin
+      // path, which then costs a real request and a 404 on every launch until the prune
+      // catches it. The page always announces absolute URLs, so nothing legitimate is lost.
+      u = new URL(s);
+    } catch {
+      continue;
+    }
+    if (u.origin !== origin) continue; // never a cross-origin payload, whatever was asked
+    if (u.search || u.hash) continue;
+    const clean = u.origin + u.pathname;
+    if (seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+    if (out.length >= SHELL_MANIFEST_MAX) break;
+  }
+  return out;
+}
+
+/**
+ * Cache the shell files this origin needs but has never been asked for.
+ *
+ * **The gap.** The shell caches as it is served, which misses precisely the files fetched
+ * before a worker controlled the page — and on a first visit that is the document plus the
+ * modules `core/app.js` imports directly: the most boot-critical slice of the graph.
+ * Measured on a cold profile, one launch cached 36 of `core/` and three cached 128. They
+ * arrive on the second launch anyway, so this only ever bit install-then-go-offline — but
+ * that is the sequence an installed app exists for.
+ *
+ * **Why a list from the page rather than a list in this file.** `SHELL_PRECACHE` is
+ * hand-written, and a hand-written boot graph rots silently on the next import change —
+ * worse than no list, because it looks complete. The page has `performance`'s exact record
+ * of what it loaded, including everything fetched before this worker existed, which is the
+ * one thing a worker can never reconstruct. Same division of labour as the deployment's
+ * runtime hosts: the page knows, the worker persists and acts.
+ *
+ * **Never during install, never blocking a boot.** The page announces once it is idle with
+ * the launcher up, so a top-up only runs on a connection that has just demonstrably
+ * worked. Adding requests during boot is half of what made the 2026-11-10 hang a hang, and
+ * precaching this list on `install` would recreate that at thirteen times the size. The
+ * cost of that choice: a {@link CACHE} version bump empties the cache, and the shell is
+ * refilled by the launch after the next one rather than immediately.
+ *
+ * Entries that 404 are dropped from the manifest rather than retried every launch, so a
+ * module deleted in a refactor cleans itself out of the list.
+ */
+async function topUpShell(urls, { timeoutMs = SHELL_HEADERS_TIMEOUT_MS } = {}) {
+  let cache;
+  try {
+    cache = await caches.open(CACHE);
+  } catch {
+    return { added: 0, dropped: [] };
+  }
+  const dropped = [];
+  let added = 0;
+  let consecutiveFailures = 0;
+  for (const url of urls) {
+    if (consecutiveFailures >= TOP_UP_GIVE_UP_AFTER) break;
+    try {
+      if (await cache.match(url)) continue; // already held — the common case
+      const res = await withDeadline(fetch(new Request(url, { cache: 'no-cache' })), timeoutMs);
+      if (res.status === 404 || res.status === 410) {
+        dropped.push(url); // gone for good; stop carrying it
+        consecutiveFailures = 0;
+        continue;
+      }
+      if (!res.ok || res.type === 'opaque') {
+        consecutiveFailures++;
+        continue;
+      }
+      await cache.put(url, withIsolation(res));
+      added++;
+      consecutiveFailures = 0;
+    } catch {
+      consecutiveFailures++;
+    }
+  }
+  return { added, dropped };
+}
+// shell:end
 
 if (typeof window === 'undefined') {
   // ---- Running as the service worker ----------------------------------------
@@ -342,6 +473,31 @@ if (typeof window === 'undefined') {
             else await c.delete(STANDALONE_MARKER);
           } catch {
             /* Cache API unavailable — this launch still works, the next is just slower */
+          }
+        })(),
+      );
+    } else if (d.type === 'announce-shell') {
+      // Merge rather than replace: different launches load different parts of the app, and
+      // a launch that only reached the launcher must not shrink a manifest that a longer
+      // session had filled out. The merge is capped, and a 404 during top-up is what prunes
+      // it, so it converges rather than growing for ever.
+      ev.waitUntil(
+        (async () => {
+          try {
+            await restoreSettings();
+            const announced = sanitizeShellUrls(d.urls);
+            if (!announced.length) {
+              reply({ ok: true, added: 0, known: shellManifest.length });
+              return;
+            }
+            const merged = sanitizeShellUrls([...shellManifest, ...announced]);
+            const { added, dropped } = await topUpShell(merged);
+            shellManifest = dropped.length ? merged.filter((u) => !dropped.includes(u)) : merged;
+            const c = await caches.open(CACHE);
+            await c.put(SHELL_MARKER, new Response(JSON.stringify(shellManifest)));
+            reply({ ok: true, added, known: shellManifest.length, dropped: dropped.length });
+          } catch (e) {
+            reply({ ok: false, error: String(e) });
           }
         })(),
       );

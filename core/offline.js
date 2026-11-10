@@ -40,6 +40,74 @@ const CACHE_PREFIX = 'crosstab-offline-';
 const MARKER_PREFIX = 'https://crosstab.local/__';
 const MARKER = `${MARKER_PREFIX}offline_enabled__`;
 
+/**
+ * File kinds that belong to the app shell.
+ *
+ * An allow-list rather than "everything same-origin", because `performance` records every
+ * byte the page pulled — including a plugin's own `app.web` fetches and any data file a
+ * user imported over HTTP. Those are the user's *content*, not the app, and silently
+ * copying them into a durable cache is both a privacy surprise and a way to fill a disk.
+ */
+const SHELL_EXTENSIONS = ['.js', '.mjs', '.css', '.html', '.json', '.svg', '.png', '.ico', '.woff2'];
+
+/**
+ * Biggest single file worth topping up (2 MB).
+ *
+ * This is what keeps a **vendored air-gapped build** from announcing its runtimes: there
+ * `vendor/` holds tens of megabytes of WebR/DuckDB `.wasm` and `.data`, same-origin, which
+ * would make a background top-up re-download the entire runtime on what might be a metered
+ * connection. They are already cached as they are used, which is the right mechanism for
+ * payloads that big — this list is for the small files that make up the boot graph.
+ *
+ * The size comes from the resource timing entry, so it is what the browser actually
+ * measured rather than a guess from the extension.
+ */
+const SHELL_MAX_BYTES = 2 * 1024 * 1024;
+
+/** No message should ever be unbounded; a boot graph is ~130 files, not 2000. */
+const SHELL_MAX_URLS = 600;
+
+/**
+ * The same-origin shell files this page load actually used, as absolute URLs.
+ *
+ * Deliberately excludes anything with a query string: the cache keys on the full URL, so a
+ * cache-busted or parameterised URL would be stored under a key nothing ever asks for again
+ * — pure waste that still counts against the user's quota.
+ */
+export function collectShellUrls(perf = globalThis.performance, origin = globalThis.location?.origin) {
+  const out = [];
+  const seen = new Set();
+  let entries = [];
+  try {
+    entries = perf?.getEntriesByType?.('resource') ?? [];
+  } catch {
+    return [];
+  }
+  for (const e of entries) {
+    const name = String(e?.name || '');
+    if (!origin || !name.startsWith(`${origin}/`)) continue;
+    let url;
+    try {
+      url = new URL(name);
+    } catch {
+      continue;
+    }
+    if (url.search || url.hash) continue;
+    const path = url.pathname.toLowerCase();
+    if (!SHELL_EXTENSIONS.some((ext) => path.endsWith(ext))) continue;
+    // `transferSize` is 0 for anything already served from a cache, so prefer the
+    // decoded/encoded body size and only fall back to what crossed the wire.
+    const size = e.encodedBodySize || e.decodedBodySize || e.transferSize || 0;
+    if (size > SHELL_MAX_BYTES) continue;
+    const clean = url.origin + url.pathname;
+    if (seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+    if (out.length >= SHELL_MAX_URLS) break;
+  }
+  return out;
+}
+
 /** Live SW offline cache name(s), by prefix (normally exactly one). */
 async function offlineCacheNames() {
   try {
@@ -138,6 +206,55 @@ export class OfflineManager {
     this.#message('set-standalone', { value: !!value }).catch(() => {
       /* not critical */
     });
+  }
+
+  /**
+   * Tell the worker every same-origin file this launch actually needed, so it can cache
+   * the ones it never got to see.
+   *
+   * **The gap this closes.** The shell caches as it is served — but on a FIRST visit the
+   * document is fetched before any worker controls the page, and the modules
+   * `core/app.js` imports *directly* start loading in that same window. They go straight
+   * to the network, the worker never sees them, and so the most boot-critical slice of
+   * the graph is the one slice cache-on-use misses. Measured on a cold profile: 36 of
+   * `core/` cached after one launch, 128 after three. They do get picked up on the second
+   * launch, so this only ever bit an install-then-immediately-offline sequence — but
+   * "install it, then get on the plane" is exactly the sequence an installed app is for.
+   *
+   * **Why the page is the one that knows.** `performance.getEntriesByType('resource')` is
+   * a precise record of what this launch actually loaded, including the files fetched
+   * before the worker existed. The worker cannot reconstruct that: it only knows what
+   * passed through it. The alternative was hand-listing the boot graph in
+   * `SHELL_PRECACHE`, which is a list that rots silently every time an import changes —
+   * and a shell list that is quietly wrong is worse than none, because it looks complete.
+   *
+   * So this follows the same shape as {@link setRuntimeHosts}: the page, which has the
+   * answer, hands it over; the worker sanitises, persists and acts on it.
+   *
+   * **Announced after boot, never during it.** The worker tops up by fetching, and a
+   * launch is the worst possible moment to add requests — contention during boot is half
+   * of what made the 2026-11-10 hang a hang. Called once the launcher is up and the page
+   * is idle, so the top-up only ever runs on a connection that has just demonstrably
+   * worked.
+   */
+  announceShell() {
+    if (!navigator.serviceWorker) return;
+    const send = () => {
+      if (!navigator.serviceWorker.controller) return false;
+      const urls = collectShellUrls();
+      if (urls.length) {
+        this.#message('announce-shell', { urls }).catch(() => {
+          /* not critical: the shell still caches as it is served, just a launch later */
+        });
+      }
+      return true;
+    };
+    if (send()) return;
+    // No controller yet — and this is not an edge case to shrug at, it is THE case. A
+    // first visit registers the worker during the load it cannot control, which is
+    // exactly why the early modules went uncached and why this method exists. Guarding on
+    // `controller` and giving up would have skipped the one launch worth announcing.
+    navigator.serviceWorker.addEventListener('controllerchange', () => void send(), { once: true });
   }
 
   /**

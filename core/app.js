@@ -2391,6 +2391,28 @@ export async function boot(mounts) {
       console.warn('Launch preset failed', err);
     }
   }
+  // Hand the worker the list of same-origin files this launch actually needed, so it can
+  // cache the ones it never saw — on a first visit the document and app.js's own imports
+  // are fetched before any worker controls the page, which is exactly the slice a boot
+  // cannot do without. See OfflineManager.announceShell.
+  //
+  // Scheduled HERE, before the launcher gate, and not after it: `launcher.open()` resolves
+  // when the user picks a source and clicks Start, so anything below it waits on a human.
+  // The boot graph is fully loaded the moment the launcher paints, so this is the earliest
+  // point the list is complete — and it means a launch where someone opens the app, looks
+  // at it and closes it still teaches the worker what a boot needs.
+  //
+  // Deferred twice over all the same, because the top-up costs requests and a launch is the
+  // worst moment to spend them: once past `load`, then again to an idle callback. If the
+  // browser never goes idle, it simply does not run this time.
+  const scheduleShellAnnounce = () => {
+    const go = () => offline.announceShell();
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 10000 });
+    else setTimeout(go, 3000);
+  };
+  if (document.readyState === 'complete') scheduleShellAnnounce();
+  else window.addEventListener('load', scheduleShellAnnounce, { once: true });
+
   if (!bypassed) await launcher.open();
 
   // Click the "CrossTab" brand to reopen the launcher (also the plugin picker).
