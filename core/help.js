@@ -137,10 +137,13 @@ export async function collectDiagnostics({ datasets, loader, plugins } = {}) {
  * MEANS has domain knowledge leaking into it. The screen renders `{label, value, hint}`
  * and knows nothing about isolation or deployments.
  *
- * @param {object} deps same shape {@link collectDiagnostics} takes
- * @returns {Promise<Array<{label: string, value: string, hint?: string}>>}
+ * @param {object} deps same shape {@link collectDiagnostics} takes, plus `offline` (an
+ *   {@link module:core/offline~OfflineManager}, for the cache-state row) and
+ *   `onOpenLauncher` (what its button does — the control itself stays in the launcher).
+ * @returns {Promise<Array<{label: string, value: string, hint?: string,
+ *   action?: {label: string, onClick: () => void}|null}>>}
  */
-export async function environmentRows(deps = {}) {
+export async function environmentRows({ offline = null, onOpenLauncher = null, ...deps } = {}) {
   const diag = await collectDiagnostics(deps);
   const rows = [
     {
@@ -172,7 +175,61 @@ export async function environmentRows(deps = {}) {
       hint: 'Offline, CrossTab serves itself and any cached R packages from this device.',
     },
   ];
+
+  // Offline readiness: a STATUS here, and the control stays in the launcher.
+  //
+  // The owner's reasoning, which the code bears out: "Make available offline" is an action
+  // over *the plugins currently ticked* — `#renderOffline` resolves its package list from
+  // `#chosenKeys()`, the picker's live tick state. A screen that deliberately shows no
+  // plugin selection, and offers no way to change one, has nothing for that button to act
+  // on. Putting it here would not merely be confusing; it would have to invent a selection
+  // (everything? the enabled set?) and would therefore be a DIFFERENT operation wearing the
+  // same label. So the row reports where this device stands and hands you to the screen
+  // that has both the list and the button.
+  if (offline?.supported) {
+    let s = null;
+    try {
+      s = await offline.status();
+    } catch {
+      /* a status that cannot be read is not worth a broken row */
+    }
+    rows.push({
+      label: 'Offline use',
+      value: offlineSummary(s),
+      hint: 'CrossTab and every analysis you have run are cached as you use them, so what '
+        + 'you have used already works with no connection. To pre-cache analyses you have '
+        + 'not opened yet, open the launcher — you can tick the plugins you will need and '
+        + 'start the caching from there.',
+      action: onOpenLauncher ? { label: 'Open the launcher…', onClick: onOpenLauncher } : null,
+    });
+  } else if (offline) {
+    rows.push({
+      label: 'Offline use',
+      value: 'Not available in this browser',
+      hint: 'Needs a service worker and the Cache API.',
+    });
+  }
+
   return rows;
+}
+
+/**
+ * One line for the offline cache state.
+ *
+ * Deliberately never says "not available offline". Everything caches as it is used (#92),
+ * so an app that has been run at all already works without a connection — telling someone
+ * their offline support is off would be false, and would push them into a large download
+ * they may not need.
+ */
+function offlineSummary(s) {
+  if (!s) return 'Unknown';
+  if (s.enabled) {
+    const mb = s.bytes ? `, ~${(s.bytes / 1048576).toFixed(0)} MB` : '';
+    const files = s.count ? ` (${s.count} files${mb})` : '';
+    return `Full toolkit pre-cached${files}`;
+  }
+  if (s.runtimeCached) return 'Ready — the R engine and what you have used are cached';
+  return 'Cached as you use it; nothing pre-cached yet';
 }
 
 /** Open the bug-report review dialog — the full details, and the only thing that sends

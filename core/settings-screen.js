@@ -270,7 +270,7 @@ export function showSettings({ openers = {}, projectSettings = null, environment
         } else {
           for (const f of envRows) body.append(factRow(f));
           if (onDetails) {
-            const more = el('button', { type: 'button', class: 'ct-field', text: 'Full details…' });
+            const more = el('button', { class: 'ct-btn', text: 'Full details…' });
             more.addEventListener('click', () => onDetails());
             body.append(el('div', { class: 'ct-settings__control', children: [more] }));
           }
@@ -285,10 +285,21 @@ export function showSettings({ openers = {}, projectSettings = null, environment
       head.append(el('span', { text: f.label }));
       if (f.hint) head.append(el('span', { class: 'ct-settings__hint', text: f.hint }));
       wrap.append(head);
-      wrap.append(el('div', {
-        class: 'ct-settings__control',
-        children: [el('span', { class: 'ct-settings__value', text: f.value })],
-      }));
+      const control = el('div', { class: 'ct-settings__control' });
+      control.append(el('span', { class: 'ct-settings__value', text: f.value }));
+      // A fact may carry one ACTION — never an editor. The distinction is the point: there
+      // is nothing here to set, but "offline use" is a state whose control deliberately
+      // lives on another screen, because it acts on the plugin selection this screen does
+      // not show. A row action navigates, so it closes this dialog on the way.
+      if (f.action) {
+        const go = el('button', { class: 'ct-btn', text: f.action.label });
+        go.addEventListener('click', () => {
+          dialog.close();
+          f.action.onClick();
+        });
+        control.append(go);
+      }
+      wrap.append(control);
       return wrap;
     };
 

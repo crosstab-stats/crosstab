@@ -151,9 +151,10 @@ test('the screen never learns what any fact MEANS', () => {
   }
 });
 
-test('a read-only fact gets no control', () => {
-  // The whole point of the separate renderer: there is nothing here to set, so there must
-  // be no select, no Clear and no Default sitting beside a value nobody can change.
+test('a read-only fact gets no EDITOR, though it may carry an action', () => {
+  // The distinction, sharpened when the offline row arrived: there is nothing here to set,
+  // so no select, no Clear, no Default. But a fact may have a control that lives on
+  // another screen, and a button that takes you there is not an editor.
   const src = stripComments(SCREEN);
   const at = src.indexOf('const factRow =');
   assert.ok(at > 0, 'factRow is gone or renamed');
@@ -162,7 +163,9 @@ test('a read-only fact gets no control', () => {
   const body = src.slice(at, src.indexOf('const projectRow =', at));
   assert.ok(body.length > 100 && body.length < 1200, `factRow slice looks wrong (${body.length})`);
   assert.doesNotMatch(body, /select|clearSetting|setSetting|Default/i);
-  assert.match(body, /ct-settings__value/, 'just the value');
+  assert.match(body, /ct-settings__value/, 'the value is always shown');
+  assert.match(body, /f\.action/, 'and an optional action is allowed');
+  assert.match(body, /dialog\.close\(\)/, 'which navigates away, so it closes this screen');
 });
 
 test('the diagnostics are fetched once per opening, not once per render', () => {
@@ -196,6 +199,99 @@ test('the full details are reachable without filing a bug', () => {
   assert.match(help, /export function showBugReport/, 'and the dialog is exported for it');
   const app = stripComments(readFileSync('core/app.js', 'utf8'));
   assert.match(app, /onShowDetails = \(\) => void showBugReport/, 'wired with the real deps');
-  assert.match(app, /onEnvironment = \(\) => environmentRows\(\{ datasets, loader, plugins \}\)/,
+  assert.match(app, /onEnvironment = \(\) => environmentRows\(\{[\s\S]{0,600}?loader,/,
     'and the facts read the LOADER, the authority on what is actually wired');
+});
+
+// =============================================================================
+// Offline readiness: status here, control in the launcher (owner, 2026-11-12)
+// =============================================================================
+
+const fakeOffline = (status, { supported = true } = {}) => ({
+  supported,
+  status: async () => status,
+});
+
+test('offline readiness is reported, and the control is not moved here', async () => {
+  // The owner's argument, and the code bears it out: "Make available offline" resolves its
+  // package list from `#chosenKeys()` — the plugins TICKED in the launcher's picker right
+  // now. A screen that shows no plugin selection, and offers no way to change one, has
+  // nothing for that button to act on; it would have to invent a selection and would
+  // therefore be a different operation wearing the same label.
+  const rows = await withEnv({}, () => environmentRows({
+    offline: fakeOffline({ enabled: false, runtimeCached: true }),
+    onOpenLauncher: () => {},
+  }));
+  const row = byLabel(rows, 'Offline use');
+  assert.ok(row, 'the status belongs here');
+  assert.match(row.action.label, /launcher/i, 'and the button goes to where the list is');
+  assert.match(row.hint, /tick the plugins|plugins you will need/i,
+    'the hint must say WHY you are being sent there');
+});
+
+test('the launcher keeps the only trigger', () => {
+  // If this ever fails, the action has been duplicated — and the copy cannot see the
+  // selection, which is the whole point.
+  const launcher = readFileSync('core/launcher.js', 'utf8');
+  assert.match(launcher, /#chosenKeys\(\)/, 'the launcher resolves packages from the ticks');
+  assert.match(launcher, /offline\.enable\(/, 'and it is what calls enable');
+  const screen = stripComments(SCREEN);
+  assert.doesNotMatch(screen, /\.enable\(|Make available offline/i,
+    'the Settings screen must never call it');
+  const help = stripComments(readFileSync('core/help.js', 'utf8'));
+  assert.doesNotMatch(help, /offline\.enable\(/, 'nor the row builder');
+});
+
+test('the status never claims the app will not work offline', async () => {
+  // Everything caches as it is used (#92), so an app that has been run at all already
+  // works with no connection. "Not available offline" would be false, and would push
+  // someone into a large download they may not need.
+  for (const status of [
+    { enabled: false, runtimeCached: false },
+    { enabled: false, runtimeCached: true },
+    { enabled: true, count: 210, bytes: 120 * 1048576 },
+  ]) {
+    const rows = await withEnv({}, () => environmentRows({ offline: fakeOffline(status) }));
+    const v = byLabel(rows, 'Offline use').value;
+    assert.doesNotMatch(v, /\bnot available\b|\bwill not work\b|\bunavailable\b/i, JSON.stringify(status));
+    assert.ok(v && v.trim(), 'and it always says something');
+  }
+});
+
+test('a pre-cached toolkit reports its size', async () => {
+  const rows = await withEnv({}, () => environmentRows({
+    offline: fakeOffline({ enabled: true, count: 210, bytes: 120 * 1048576 }),
+  }));
+  const v = byLabel(rows, 'Offline use').value;
+  assert.match(v, /pre-cached/i);
+  assert.match(v, /210 files/);
+  assert.match(v, /120 MB/);
+});
+
+test('a browser that cannot cache says so, and gets no button', async () => {
+  const rows = await withEnv({}, () => environmentRows({
+    offline: fakeOffline(null, { supported: false }),
+    onOpenLauncher: () => {},
+  }));
+  const row = byLabel(rows, 'Offline use');
+  assert.match(row.value, /not available in this browser/i);
+  assert.ok(!row.action, 'a button that cannot help is worse than none');
+});
+
+test('an unreadable status degrades to a row, not to an exception', async () => {
+  const broken = { supported: true, status: async () => { throw new Error('cache gone'); } };
+  const rows = await withEnv({}, () => environmentRows({ offline: broken }));
+  assert.equal(byLabel(rows, 'Offline use').value, 'Unknown');
+});
+
+test('no offline manager, no offline row', async () => {
+  // The section must not grow a row describing a subsystem this host does not wire.
+  const rows = await withEnv({}, () => environmentRows());
+  assert.ok(!byLabel(rows, 'Offline use'), 'absent rather than guessed at');
+});
+
+test('the button reopens the launcher the way the brand does', () => {
+  const app = stripComments(readFileSync('core/app.js', 'utf8'));
+  assert.match(app, /onOpenLauncher: \(\) => void launcher\.open\(\{ reopen: true \}\)/,
+    'the established reopen path, not a second one');
 });

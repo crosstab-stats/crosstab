@@ -332,6 +332,13 @@ real control, or reports a secret's state without printing it.
       single-threaded* without), **Connection**. **None of them has a control** — no
       select, no Clear, nothing to change. The isolation row must describe the consequence,
       never print `true`/`false`.
+      Also an **Offline use** row: it must never say the app will not work offline (it
+      always does, for whatever you have already used), and its only button is **Open the
+      launcher…**. Press it.
+      Expect: Settings closes and the launcher opens, showing the plugin picker *and* the
+      offline control together — because pre-caching acts on the plugins ticked there.
+      There is no "make available offline" button on the Settings screen, by design.
+
       Then: **Full details…**.
       Expect: the Report a bug review dialog, with browser, platform, dataset shape and
       loaded plugins — and nothing sent anywhere until you choose to send it.

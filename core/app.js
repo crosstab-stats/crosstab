@@ -2062,7 +2062,18 @@ export async function boot(mounts) {
   // The Settings screen's read-only "This install" section, and the full details behind
   // it. Wired here because the diagnostics read the LOADER (the authority on what is
   // actually wired) and the plugin manager, neither of which project-sync holds.
-  projects.onEnvironment = () => environmentRows({ datasets, loader, plugins });
+  projects.onEnvironment = () => environmentRows({
+    datasets,
+    loader,
+    plugins,
+    offline,
+    // The cache STATUS belongs on a screen that answers "what is this app doing here".
+    // The control does not: "Make available offline" pre-caches the packages for the
+    // plugins currently TICKED in the launcher's picker, so it is meaningless on a screen
+    // with no picker — it would have to invent a selection, which makes it a different
+    // operation with the same name. So the row hands you to the screen that has both.
+    onOpenLauncher: () => void launcher.open({ reopen: true }),
+  });
   projects.onShowDetails = () => void showBugReport({ datasets, loader, plugins });
 
   projects.onOpenDropbox = async () => {
