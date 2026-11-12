@@ -313,13 +313,22 @@ function promptWebDav(saved, { move = false } = {}) {
  *
  * @returns {Promise<{appKey: string, basePath: string}|null>}
  */
-function promptDropbox(saved, { move = false } = {}) {
+/**
+ * The Dropbox app key + folder dialog.
+ *
+ * `settings: true` is the same form with no sign-in attached: opened from the Settings
+ * screen's Dropbox row, it edits the remembered setup and offers to forget it. The two
+ * flow modes (`move`, and the default open) still end in a sign-in, which is why their
+ * primary buttons say so — a button labelled "Save" that signed you in would be the kind
+ * of surprise this dialog's own hint text exists to prevent.
+ */
+function promptDropbox(saved, { move = false, settings = false } = {}) {
   return new Promise((resolve) => {
     const d = document.createElement('dialog');
     d.className = 'ct-dialog ct-dialog--wide';
     d.innerHTML = `
       <form method="dialog" class="ct-dialog__form">
-        <h2 class="ct-dialog__title">${move ? 'Move project to Dropbox' : 'Open from Dropbox'}</h2>
+        <h2 class="ct-dialog__title">${settings ? 'Dropbox setup' : (move ? 'Move project to Dropbox' : 'Open from Dropbox')}</h2>
         <p class="ct-dialog__hint">CrossTab uses <strong>your own</strong> Dropbox app
           registration rather than one of ours, so the permission screen names your app and
           nothing is routed through a third party. Create one at
@@ -330,20 +339,29 @@ function promptDropbox(saved, { move = false } = {}) {
           value="${escapeHtml(saved.appKey ?? '')}" placeholder="abcdefghijklmno"></label></p>
         <p><label>Folder<br><input name="basePath" style="width:100%"
           value="${escapeHtml(saved.basePath ?? '')}" placeholder="/CrossTab/my-study"></label></p>
-        <p class="ct-dialog__hint">${move
-          ? 'The folder must be empty or not yet exist — CrossTab will not write over a project already there. It is created if missing.'
-          : 'The folder CrossTab should open the project from.'}</p>
-        <p class="ct-dialog__hint">You will be asked to sign in. The sign-in is kept for this
-          session only and never written to disk, so you will sign in again after a reload.</p>
+        <p class="ct-dialog__hint">${settings
+          ? 'The folder CrossTab uses for Dropbox projects, unless a flow asks for another.'
+          : (move
+            ? 'The folder must be empty or not yet exist — CrossTab will not write over a project already there. It is created if missing.'
+            : 'The folder CrossTab should open the project from.')}</p>
+        <p class="ct-dialog__hint">${settings
+          ? 'Nothing here signs you in. The sign-in happens when you open or move a project, is kept for that session only, and is never written to disk.'
+          : 'You will be asked to sign in. The sign-in is kept for this session only and never written to disk, so you will sign in again after a reload.'}</p>
         <menu class="ct-dialog__buttons">
           <button value="cancel" type="submit">Cancel</button>
-          <button value="ok" type="submit" class="ct-dialog__primary">${move ? 'Sign in and move' : 'Sign in and open'}</button>
+          ${settings ? '<button value="forget" type="submit" formnovalidate>Forget</button>' : ''}
+          <button value="ok" type="submit" class="ct-dialog__primary">${settings ? 'Save' : (move ? 'Sign in and move' : 'Sign in and open')}</button>
         </menu>
       </form>`;
     const f = d.querySelector('form');
     d.addEventListener('close', () => {
+      // `formnovalidate` on Forget is what lets it through with the required app key
+      // emptied or untouched — it is the one action that does not need a valid form.
+      const forget = d.returnValue === 'forget';
       const ok = d.returnValue === 'ok' && f.appKey.value.trim();
-      const out = ok ? { appKey: f.appKey.value.trim(), basePath: f.basePath.value.trim() } : null;
+      const out = forget
+        ? { forget: true }
+        : (ok ? { appKey: f.appKey.value.trim(), basePath: f.basePath.value.trim() } : null);
       d.remove();
       resolve(out);
     });
@@ -2037,6 +2055,15 @@ export async function boot(mounts) {
   // `plugins` is assigned further down in boot, and the arrow is only ever called from an
   // open dialog, long after.
   projects.onOpenPlugins = () => plugins?.openDialog();
+
+  // The Settings screen's Dropbox row. Saving writes through the module's own writer, so
+  // the declaration stays a describer; Forget stores an empty config rather than removing
+  // the key, which is the same end state by the same path everything else uses.
+  projects.onOpenDropbox = async () => {
+    const res = await promptDropbox(loadDbxConfig(), { settings: true });
+    if (!res) return;
+    saveDbxConfig(res.forget ? {} : res);
+  };
 
   // The sidebar project manager: the open project and its datasets, plus the other
   // projects. Created here, after the services it drives exist.

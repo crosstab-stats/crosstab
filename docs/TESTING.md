@@ -303,6 +303,26 @@ real control, or reports a secret's state without printing it.
       action on the plugin's row), reopen Settings.
       Expect: the row follows, and the plugin is asked again next time it fetches.
 
+- [ ] **Dropbox setup (a routed row)**
+      Recipe: **Edit ▸ Settings…** → **Privacy** → the **Dropbox** row.
+      Expect: *Not set up*, or *App key saved · /your/folder*. The app key itself is never
+      printed. **Open…** gives a **Dropbox setup** dialog titled as such, with **Save**
+      (not "Sign in and…") and a **Forget** button, and it says plainly that nothing there
+      signs you in. Change the folder, save, reopen Settings.
+      Expect: the row follows. Press **Forget**, reopen.
+      Expect: *Not set up*. Nothing about this row should ever display a token — none is
+      stored on disk at all, by design.
+
+- [ ] **Plugin selection on next launch** *(the first-run flag)*
+      Recipe: use the app once so the launcher remembers your plugins. Turn a few plugins
+      off in **Edit ▸ Plugins…**. Then **Edit ▸ Settings… ▸ Advanced** → **Plugin
+      selection on next launch** → *Start from the curated set* → reload.
+      Expect: the launcher's picker comes up pre-ticked with the **curated** set a new
+      install gets, not your reduced one — the scenario being an IT technician who set the
+      device up and launched it once. Click Start, reload again.
+      Expect: it is back to remembering your selection; the choice applies to one launch.
+      Nothing you enabled was turned off by any of this.
+
 - [ ] **Encrypt at rest (a routed row)**
       Recipe: **Edit ▸ Settings…** → the Encrypt at rest row → **Configure…**.
       Expect: the encryption dialog opens. Change the policy, come back.

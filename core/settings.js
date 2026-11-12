@@ -37,9 +37,6 @@
  *    to "fix" it.
  *  - **Transient handoffs** (`crosstab.oauth.result`, the offline resume in
  *    `sessionStorage`) — alive for one round trip.
- *  - **Credentials** (`crosstab.dropbox.config`) — a screen that enumerates settings must
- *    never be the thing that prints a token.
- *  - **First-run flags** (`crosstab.launcher.seen`) — lifecycle, not preference.
  *
  * That exclusion used to read `crosstab.plugins.*`, and the wildcard was doing damage.
  * `crosstab.plugins.user` is not install state: it is the set of **sources this person
@@ -59,9 +56,32 @@
  * grants live in a `Map` for the life of the page, so deleting the key from here would
  * leave every one of them working until a reload — a revoke that does not revoke.
  *
+ * Two more bullets stood here and are gone, and they are the reason this list is now
+ * written about members rather than families:
+ *
+ *  - **"Credentials (`crosstab.dropbox.config`) — must never print a token."** The rule is
+ *    right and the premise was false: that key holds a PKCE **app key**, which the
+ *    sign-in dialog itself calls out as not a secret, plus a folder path. The real tokens
+ *    are memory-only by design and never reach disk. So the exclusion guarded against
+ *    something that cannot happen while hiding what a person would actually check — is
+ *    this device set up to reach my Dropbox, and which folder does it use. Declared in
+ *    `dropbox-session.js`, routed, and deliberately NOT marked `secret`: that would
+ *    restate the same wrong thing in a new place.
+ *  - **"First-run flags (`crosstab.launcher.seen`) — lifecycle, not preference."** Undone
+ *    by two things. First, the registry already holds a seen-flag: `screen.autoNoteSeen`
+ *    is exactly "have you been shown this once", declared, and simply given no `label`.
+ *    So the rule the code follows is not "lifecycle flags are not settings" — it is
+ *    *declare it, and show it only if a person could act on it*. Second, the owner's case:
+ *    an IT technician sets up a shortcut and launches it once to check it works, and the
+ *    flag is now set on a device whose real user has never seen it, with no way back.
+ *    Shown, in `launcher.js`, labelled for what it actually does (which set the plugin
+ *    picker starts pre-ticked from) rather than what "seen" sounds like it should do.
+ *
  * Found the same way as the identity gap: the owner working the manual test pass, then an
- * audit of every remaining key. All three were exclusions written as a *family* when only
- * one member of the family qualified.
+ * audit of every remaining key. Every one of them was an exclusion written as a *family*
+ * when only one member of the family qualified — four times, by the same mechanism. A
+ * category name in this list is a claim about each member, and is worth re-reading as one
+ * before it is trusted.
  *
  * `crosstab.identity` was on that last line too, as "data, not preference". That was half
  * right, and it is the half that hid the other: `authorId` is an identifier the user

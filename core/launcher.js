@@ -29,6 +29,7 @@ import { showCaveats, showGettingAround } from './help.js';
 import { PluginPicker } from './plugin-picker.js';
 import { deployConfig } from './deploy-config.js';
 import { el } from './plugin-stdlib.js';
+import { defineSetting } from './settings.js';
 
 /** Curated-core analysis plugins, pre-selected on a fresh "Start blank". */
 const CORE_IDS = new Set([
@@ -57,6 +58,51 @@ const PRESETS = {
 };
 
 const LS_SEEN = 'crosstab.launcher.seen';
+
+/**
+ * Has this device been through the launcher before — and so, what the plugin picker is
+ * pre-ticked from.
+ *
+ * `core/settings.js` excluded this as "first-run flags — lifecycle, not preference", which
+ * was the fourth exclusion in that list written as a *category* rather than about the
+ * member. Two things undo it:
+ *
+ *  - **The registry already contains a seen-flag.** `screen.autoNoteSeen` is exactly "have
+ *    you been shown this once", declared, and deliberately given no `label` so it stays
+ *    off the screen. So the rule the code actually follows is not "lifecycle flags are not
+ *    settings"; it is "declare it, and show it only if a person could act on it".
+ *  - **Someone other than the intended user can set it.** Raised by the owner: an IT
+ *    technician sets up the shortcut, launches it once to check it works, and the flag is
+ *    now set on a device whose real user has never seen it. There was no way back.
+ *
+ * So this one is shown, and the label says what it actually does today rather than what a
+ * flag called "seen" sounds like it should do. Its ONLY effect is which set the launcher's
+ * plugin picker starts pre-ticked from: the plugins you last had enabled, or the curated
+ * set a new install gets. There is no separate welcome screen to re-show — the launcher
+ * *is* the onboarding, and it opens on every launch. If that ever changes, this row widens
+ * honestly; promising "show the welcome again" today would be describing a feature that
+ * does not exist.
+ *
+ * The empty string is a real stored value meaning "treat the next launch as a first one",
+ * and it reads false through {@link markSeen}'s own gate — so the row's two options and
+ * the screen's Default button both land on the same behaviour by different routes.
+ */
+const seenSetting = defineSetting({
+  id: 'launcher.seen',
+  key: LS_SEEN,
+  values: ['1', ''],
+  fallback: '',
+  label: 'Plugin selection on next launch',
+  group: 'Advanced',
+  options: [
+    ['1', 'Start from the plugins I had enabled'],
+    ['', 'Start from the curated set, as on a new install'],
+  ],
+  hint: 'Once you have used the launcher it pre-ticks the plugins from your last session. '
+    + 'Choose the curated set if someone else set this device up for you. It applies to '
+    + 'your next launch only — after that the launcher remembers your selection again, and '
+    + 'nothing you have enabled is turned off either way.',
+});
 
 export class Launcher {
   /** @type {() => object} the ambient deps a plugin picker needs (#192). A thunk because
@@ -307,7 +353,10 @@ export class Launcher {
 
     const list = this.#plugins.list();
     // Seed the selection: remembered (enabled) once seen; curated core on first run.
-    const seed = localStorage.getItem(LS_SEEN)
+    // Through the accessor, so "seen" is decided in one place: the stored value may now
+    // be an explicit empty string (the Settings row's "start from the curated set"), and
+    // a bare `getItem` would read that as truthy and defeat the choice.
+    const seed = seenSetting.get() === '1'
       ? new Set(list.filter((p) => p.enabled).map((p) => p.key))
       : this.#defaultSelection(list);
 
@@ -763,7 +812,7 @@ export class Launcher {
 // --- helpers ----------------------------------------------------------------
 
 function markSeen() {
-  try { localStorage.setItem(LS_SEEN, '1'); } catch { /* storage off */ }
+  seenSetting.set('1'); // its own try/catch — storage off just means it is not remembered
 }
 
 /**

@@ -37,11 +37,62 @@
 
 import { makePkcePair, authorizeUrl, newState, exchangeToken, needsRefresh, runAuthPopup } from './oauth-pkce.js';
 import { DROPBOX_OAUTH } from './storage-dropbox.js';
+import { defineSetting } from './settings.js';
 
 const KEY = 'crosstab.dropbox.config';
 
 /** Fields worth remembering between sessions. Tokens are conspicuously not among them. */
 const PUBLIC_FIELDS = Object.freeze(['appKey', 'basePath']);
+
+/**
+ * The remembered Dropbox setup, as a declared setting.
+ *
+ * `core/settings.js` excluded this key under **Credentials**, reasoning that "a screen
+ * that enumerates settings must never be the thing that prints a token". The rule is
+ * right. The premise is not: **this key has never held a token.** The access and refresh
+ * tokens live in memory for the session only (see the file header above), and
+ * {@link PUBLIC_FIELDS} is the whole of what is written — an `appKey`, which the sign-in
+ * dialog itself calls out as *not* a secret ("the app *secret* is, and is not used
+ * here"), and a folder path.
+ *
+ * So the exclusion was protecting against something that cannot happen, while hiding the
+ * thing a person would actually want to check: whether this device is set up to reach
+ * their Dropbox at all, and which folder it uses. That made it the fourth entry in that
+ * list written as a *category* — Credentials — rather than about the member.
+ *
+ * It is declared as an ordinary routed row rather than a `secret` one, because calling it
+ * secret would state the same wrong thing in a new place: a reader would reasonably infer
+ * a credential is stored here, and the entire design is that none is.
+ */
+const dropboxSetting = defineSetting({
+  id: 'storage.dropbox',
+  key: KEY,
+  json: true,
+  // The same narrowing `loadConfig` does, so the screen cannot describe a field this
+  // module would refuse to load — including one a future build might add.
+  coerce: (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    const out = {};
+    for (const f of PUBLIC_FIELDS) if (typeof v[f] === 'string' && v[f]) out[f] = v[f];
+    return out;
+  },
+  fallback: {},
+  label: 'Dropbox',
+  group: 'Privacy',
+  editedAt: 'the Dropbox sign-in, or here',
+  hint: 'CrossTab uses your own Dropbox app registration, so the permission screen names '
+    + 'your app and nothing is routed through anyone else. Only the app key and folder are '
+    + 'kept here — the sign-in itself is never written to disk, which is why you sign in '
+    + 'again after a reload.',
+  summary: (v) => {
+    const cfg = v && typeof v === 'object' ? v : {};
+    if (!cfg.appKey && !cfg.basePath) return 'Not set up';
+    const where = cfg.basePath ? ` · ${cfg.basePath}` : '';
+    // Never the key itself. It is not a secret, but it is fifteen characters of noise
+    // that nobody reads, and printing identifiers by default is a habit worth not having.
+    return cfg.appKey ? `App key saved${where}` : `No app key yet${where}`;
+  },
+});
 
 /** Saved app key + folder, or empty. Never throws — a corrupt entry must not cost the UI. */
 export function loadConfig(storage = globalThis.localStorage) {

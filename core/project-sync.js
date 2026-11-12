@@ -413,6 +413,12 @@ export class ProjectSync {
    */
   onOpenPlugins = null;
 
+  /**
+   * Opens the Dropbox setup dialog, set by the app for the same reason as the two above.
+   * @type {(() => void)|null}
+   */
+  onOpenDropbox = null;
+
   constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, items, collections, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers, getSurfaces }) {
     this.#store = projectStore;
     this.#datasets = datasets;
@@ -647,6 +653,9 @@ export class ProjectSync {
           // And the standing "may this plugin fetch from …?" answers. Same destination:
           // the manager is where a grant is taken back, per plugin.
           'plugins.webAccess': () => this.onOpenPlugins?.(),
+          // The remembered Dropbox app key + folder. Not a credential despite the name of
+          // the exclusion it came out of — no token is ever written to disk.
+          'storage.dropbox': () => this.onOpenDropbox?.(),
         },
         // The project's own settings (#207). A provider, read each time the screen
         // renders, so the rows describe what is open NOW rather than what was open when

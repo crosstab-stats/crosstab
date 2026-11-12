@@ -41,6 +41,9 @@ import { getIdentity, setIdentity } from '../core/user-identity.js';
 // "not a setting" list below while this file never imported the module that could have
 // declared it, so the assertion could not have failed whatever the code did.
 import '../core/plugin-manager.js';
+// Same reason again, for the two exclusions revisited on 2026-11-12.
+import '../core/launcher.js';
+import '../core/dropbox-session.js';
 
 /** A `localStorage` stand-in; `explode` makes every call throw, as private mode does. */
 function fakeStorage(seed = {}, { explode = false } = {}) {
@@ -230,10 +233,25 @@ test('state, caches and credentials are NOT settings', () => {
   // config would print a token.
   const keys = listSettings().map((s) => s.key);
   for (const notASetting of [
-    'crosstab.plugins.catalog', 'crosstab.plugins.disabled',
-    'crosstab.dropbox.config', 'crosstab.launcher.seen',
+    'crosstab.plugins.catalog', 'crosstab.plugins.catalogVersion',
+    'crosstab.plugins.disabled',
     'crosstab.oauth.result', 'crosstab.offline.resume',
   ]) {
+    // What is left after four rounds of this, and why each one stays out:
+    //  - the catalogue + its version are a regenerable CACHE, and there is already a real
+    //    control for it (the launcher's "Get updates" clears it and re-probes). The
+    //    version is also not the number anyone would read it as: it is a cache epoch
+    //    bumped when the catalog SHAPE changes, so it sits still across most releases.
+    //  - `plugins.disabled` is install state over sixty-odd built-ins, which is the list
+    //    the original exclusion was right to fear on a preferences screen.
+    //  - the oauth result and the offline resume are alive for one round trip; a row would
+    //    show a value already gone by the time it was read.
+    //
+    // `crosstab.dropbox.config` and `crosstab.launcher.seen` LEFT this list on 2026-11-12.
+    // Both exclusions were written about a category rather than the member: "Credentials"
+    // for a key that provably holds no token (PKCE app key + folder; the session tokens
+    // are memory-only by design), and "first-run flags" for a flag someone other than the
+    // intended user routinely sets — the IT technician who tests the shortcut.
     // `crosstab.plugins.user` left this list on the owner's report (2026-11-12) that
     // plugins added from a file or a URL were missing from the Settings screen. The
     // exclusion had been written as the family `crosstab.plugins.*`, and the wildcard was
@@ -764,4 +782,126 @@ test('revoking in the manager is what the row sends you to', () => {
   assert.match(picker, /revokeWeb\(/, 'the manager can actually take a grant back');
   const sync = readFileSync('core/project-sync.js', 'utf8');
   assert.match(sync, /'plugins\.webAccess':\s*\(\)\s*=>\s*this\.onOpenPlugins/, 'and the row opens it');
+});
+
+// =============================================================================
+// Two exclusions revisited (owner, 2026-11-12)
+// =============================================================================
+
+const rowFor = (id, seed = {}) => {
+  let row = null;
+  withStorage(fakeStorage(seed), () => { row = listSettings().find((s) => s.id === id); });
+  return row;
+};
+
+test('the launcher first-run flag is something a person can put back', () => {
+  // The case that moved it: an IT technician sets up the shortcut and launches it once to
+  // check it works. The flag is now set on a device whose real user has never seen it, and
+  // there was no way back.
+  const row = rowFor('launcher.seen', { 'crosstab.launcher.seen': '1' });
+  assert.ok(row, 'it must be on the screen, not merely in the registry');
+  assert.equal(row.key, 'crosstab.launcher.seen');
+  assert.equal(row.group, 'Advanced');
+  assert.equal(controlFor(row), 'select', 'two real states, chosen directly');
+  assert.deepEqual(row.options.map(([v]) => v), ['1', '']);
+});
+
+test('choosing "curated set" actually defeats the seeding, not just the label', () => {
+  // The reader used to be a bare `getItem`, which is TRUTHY for an empty string — so a
+  // stored '' would have read as "seen" and the row would have done nothing at all. The
+  // accessor is what makes the two options mean what they say.
+  const src = readFileSync('core/launcher.js', 'utf8');
+  assert.match(src, /seenSetting\.get\(\) === '1'/, 'the seed reads through the accessor');
+  assert.doesNotMatch(src, /localStorage\.getItem\(LS_SEEN\)/, 'and not around it');
+  assert.match(src, /seenSetting\.set\('1'\)/, 'markSeen writes through it too');
+});
+
+test('both routes to a fresh start land on the same behaviour', () => {
+  // The row's second option stores ''; the screen's Default button clears the key. Both
+  // must read as "not seen", or one of the two controls is a lie.
+  for (const seed of [{}, { 'crosstab.launcher.seen': '' }]) {
+    const row = rowFor('launcher.seen', seed);
+    assert.notEqual(row.value, '1', JSON.stringify(seed));
+  }
+  assert.equal(rowFor('launcher.seen', { 'crosstab.launcher.seen': '1' }).value, '1');
+});
+
+test('the label describes what the flag does, not what its name suggests', () => {
+  // There is no welcome screen to re-show: the launcher IS the onboarding and opens every
+  // launch. A row promising to bring one back would describe a feature that does not
+  // exist. Its only effect is which set the plugin picker is pre-ticked from.
+  const row = rowFor('launcher.seen');
+  assert.doesNotMatch(row.label + row.hint, /welcome|getting started/i);
+  assert.match(row.label + row.hint, /plugin/i);
+});
+
+test('Dropbox is on the screen, and is not called a credential', () => {
+  // The exclusion read "Credentials — a screen that enumerates settings must never be the
+  // thing that prints a token". The rule is right; the premise was wrong. This key holds a
+  // PKCE app key (the sign-in dialog itself says it is not a secret) and a folder path.
+  // The tokens are memory-only by design, so there is no token here to print.
+  const row = rowFor('storage.dropbox', {
+    'crosstab.dropbox.config': JSON.stringify({ appKey: 'abcdefghijklmno', basePath: '/CrossTab/study' }),
+  });
+  assert.ok(row, 'it must appear at all');
+  assert.notEqual(controlFor(row), 'secret',
+    'calling it secret would restate the wrong premise in a new place');
+  assert.equal(row.group, 'Privacy');
+});
+
+test('the Dropbox summary says the folder, never the key', () => {
+  const v = { appKey: 'abcdefghijklmno', basePath: '/CrossTab/study' };
+  const row = rowFor('storage.dropbox', { 'crosstab.dropbox.config': JSON.stringify(v) });
+  const s = row.summary(row.value);
+  assert.match(s, /App key saved/);
+  assert.match(s, /\/CrossTab\/study/, 'the folder is the part worth reading');
+  assert.doesNotMatch(s, /abcdefghijklmno/, 'identifiers are not printed by default');
+});
+
+test('an unconfigured or half-configured Dropbox reads honestly', () => {
+  assert.equal(rowFor('storage.dropbox').summary({}), 'Not set up');
+  const half = rowFor('storage.dropbox', { 'crosstab.dropbox.config': JSON.stringify({ basePath: '/x' }) });
+  assert.match(half.summary(half.value), /No app key yet · \/x/);
+});
+
+test('the Dropbox row only ever describes fields the module would load', () => {
+  // A token written by a future build (or by hand) must not become something this screen
+  // displays. The coerce narrows to the same PUBLIC_FIELDS loadConfig does.
+  const row = rowFor('storage.dropbox', {
+    'crosstab.dropbox.config': JSON.stringify({ appKey: 'k', basePath: '/p', accessToken: 'SECRET-TOKEN' }),
+  });
+  assert.deepEqual(Object.keys(row.value).sort(), ['appKey', 'basePath']);
+  assert.doesNotMatch(JSON.stringify(row.value) + row.summary(row.value), /SECRET-TOKEN/);
+});
+
+test('a corrupt Dropbox entry degrades to "not set up"', () => {
+  for (const junk of ['not json', 'null', '[]', '42']) {
+    const row = rowFor('storage.dropbox', { 'crosstab.dropbox.config': junk });
+    assert.deepEqual(row.value, {}, junk);
+  }
+});
+
+test('the Dropbox row has somewhere to go, and a way to forget', () => {
+  // A routed row with no opener can only name a location — which was the whole original
+  // complaint. The dialog gained a settings mode so this row has a real destination, and
+  // Forget is the action a person actually wants from a connection they are reviewing.
+  const row = rowFor('storage.dropbox');
+  assert.equal(controlFor(row), 'route');
+  const sync = readFileSync('core/project-sync.js', 'utf8');
+  assert.match(sync, /'storage\.dropbox':\s*\(\)\s*=>\s*this\.onOpenDropbox/);
+  const app = readFileSync('core/app.js', 'utf8');
+  assert.match(app, /promptDropbox\(loadDbxConfig\(\),\s*\{\s*settings:\s*true\s*\}\)/);
+  assert.match(app, /res\.forget\s*\?\s*\{\}\s*:\s*res/, 'Forget clears through the module writer');
+});
+
+test('the settings mode does not sign you in', () => {
+  // The two flow modes end in a sign-in, which is why their buttons say so. A "Save"
+  // button that silently authenticated would be exactly the surprise this dialog's own
+  // hint text exists to prevent.
+  const app = readFileSync('core/app.js', 'utf8');
+  const dlg = app.slice(app.indexOf('function promptDropbox'), app.indexOf('function promptPassword'));
+  assert.ok(dlg.length > 200, 'the dialog must be findable, or this proves nothing');
+  assert.match(dlg, /settings \? 'Save'/, 'the primary button is Save, not Sign in');
+  assert.match(dlg, /Nothing here signs you in/, 'and it says so');
+  assert.match(dlg, /formnovalidate/, 'Forget works with the required app key left empty');
 });
