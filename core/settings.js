@@ -30,8 +30,9 @@
  * would be reasonable to show them a list of. That excludes most of what is in
  * `localStorage`, and the exclusions are the point rather than an oversight:
  *
- *  - **Install and enable state** (`crosstab.plugins.*`) — not a preference; it is what
- *    the plugin manager *is*, with its own UI and its own migration rules.
+ *  - **Enable state** (`crosstab.plugins.disabled`) — not a preference; it is what the
+ *    plugin manager *is*, with its own UI and its own migration rules, and sixty-odd
+ *    built-ins are not a list anyone wants enumerated on a preferences screen.
  *  - **Caches** (the plugin catalogue) — regenerable, and listing it would invite someone
  *    to "fix" it.
  *  - **Transient handoffs** (`crosstab.oauth.result`, the offline resume in
@@ -39,6 +40,19 @@
  *  - **Credentials** (`crosstab.dropbox.config`) — a screen that enumerates settings must
  *    never be the thing that prints a token.
  *  - **First-run flags** (`crosstab.launcher.seen`) — lifecycle, not preference.
+ *
+ * That exclusion used to read `crosstab.plugins.*`, and the wildcard was doing damage.
+ * `crosstab.plugins.user` is not install state: it is the set of **sources this person
+ * chose**, one kind of which is a URL — third-party code re-fetched from someone else's
+ * host and executed on every launch. A screen that answers "what have I configured in
+ * this app?" cannot leave that out; of everything in this registry it is the entry most
+ * worth seeing at a glance. It is declared now in `plugin-manager.js` and **routed**, and
+ * the manager stays the only writer — `set()` here reports that a value was accepted, not
+ * that it reached the disk, and that file's own write path reports a real quota failure
+ * after once losing an authored plugin to a swallowed one.
+ *
+ * Found the same way as the identity gap: the owner working the manual test pass. Both
+ * were exclusions written as a *family* when only one member of the family qualified.
  *
  * `crosstab.identity` was on that last line too, as "data, not preference". That was half
  * right, and it is the half that hid the other: `authorId` is an identifier the user

@@ -2033,6 +2033,11 @@ export async function boot(mounts) {
   // beside compaction rather than instead of it.
   projects.onNeedSpace = () => void openManager('manage');
 
+  // The Settings screen's routed "Plugins you added or created" row. Lazy on purpose:
+  // `plugins` is assigned further down in boot, and the arrow is only ever called from an
+  // open dialog, long after.
+  projects.onOpenPlugins = () => plugins?.openDialog();
+
   // The sidebar project manager: the open project and its datasets, plus the other
   // projects. Created here, after the services it drives exist.
   new ProjectSidebar(mounts.sidebar, {

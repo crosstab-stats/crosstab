@@ -37,6 +37,10 @@ import {
 // the modules this file imports, so a "X is not a setting" assertion about a module
 // nobody imported here would have proved nothing at all.
 import { getIdentity, setIdentity } from '../core/user-identity.js';
+// Likewise, and it caught the same trap twice: `crosstab.plugins.user` sat in the
+// "not a setting" list below while this file never imported the module that could have
+// declared it, so the assertion could not have failed whatever the code did.
+import '../core/plugin-manager.js';
 
 /** A `localStorage` stand-in; `explode` makes every call throw, as private mode does. */
 function fakeStorage(seed = {}, { explode = false } = {}) {
@@ -226,10 +230,16 @@ test('state, caches and credentials are NOT settings', () => {
   // config would print a token.
   const keys = listSettings().map((s) => s.key);
   for (const notASetting of [
-    'crosstab.plugins.catalog', 'crosstab.plugins.disabled', 'crosstab.plugins.user',
+    'crosstab.plugins.catalog', 'crosstab.plugins.disabled',
     'crosstab.dropbox.config', 'crosstab.launcher.seen',
     'crosstab.oauth.result', 'crosstab.offline.resume',
   ]) {
+    // `crosstab.plugins.user` left this list on the owner's report (2026-11-12) that
+    // plugins added from a file or a URL were missing from the Settings screen. The
+    // exclusion had been written as the family `crosstab.plugins.*`, and the wildcard was
+    // doing damage: the *disabled* set above really is install state, but this key is the
+    // set of sources the user chose — one kind of which is third-party code re-fetched
+    // and run on every launch. Declared ROUTED, and the manager stays its only writer.
     // The encryption policy and the collab config are NOT in this list: they are
     // settings, and they are declared (owner, 2026-10-15). Dropbox stays out because it
     // is a credential store rather than a preference.
@@ -533,4 +543,105 @@ test('an identity field this build does not know about is kept, not dropped', ()
     const row = listSettings().find((s) => s.id === 'collab.identity');
     assert.equal(row.value.somethingNew, 42);
   });
+});
+
+// =============================================================================
+// Plugins you added yourself (owner report, 2026-11-12)
+// =============================================================================
+
+/** The row as the Settings screen would see it, with this storage in place. */
+const addedRow = (userJson) => {
+  let row = null;
+  withStorage(fakeStorage(userJson === undefined ? {} : { 'crosstab.plugins.user': userJson }), () => {
+    row = listSettings().find((s) => s.id === 'plugins.added');
+  });
+  return row;
+};
+
+test('plugins added from a file or a URL appear on the Settings screen', () => {
+  const row = addedRow(JSON.stringify([
+    { key: 'https://plugins.example.org/thing.js', kind: 'url', url: 'https://plugins.example.org/thing.js' },
+    { key: 'local:1', kind: 'file', name: 'my-plugin.js' },
+  ]));
+  assert.ok(row, 'the whole report was that this row did not exist');
+  assert.equal(row.group, 'Plugins');
+  assert.ok(row.label && row.hint, 'a screen needs something to print');
+});
+
+test('the summary names the HOST a plugin is fetched from', () => {
+  // The point of showing this at all: a URL plugin is third-party code re-fetched and
+  // executed on every launch. The host is the trust decision; a count alone would say
+  // nothing about whose code this is.
+  const row = addedRow(JSON.stringify([
+    { key: 'u1', kind: 'url', url: 'https://plugins.example.org/a.js' },
+    { key: 'u2', kind: 'url', url: 'https://plugins.example.org/b.js' },
+    { key: 'local:1', kind: 'file', name: 'mine.js' },
+    { key: 'authored:1', kind: 'authored', name: 'scratch' },
+  ]));
+  const s = row.summary(row.value);
+  assert.match(s, /2 from the web \(plugins\.example\.org\)/, 'counted and named, once per host');
+  assert.match(s, /1 from a file/);
+  assert.match(s, /1 created here/);
+  assert.ok(s.indexOf('from the web') < s.indexOf('from a file'), 'the web ones read first');
+});
+
+test('a package counts as a file, because a copy lives here either way', () => {
+  const row = addedRow(JSON.stringify([
+    { key: 'p1', kind: 'package', name: 'bundle.ctplugin' },
+    { key: 'local:1', kind: 'file', name: 'single.js' },
+  ]));
+  assert.match(row.summary(row.value), /2 from a file/);
+});
+
+test('many hosts are summarised rather than listed to the horizon', () => {
+  const row = addedRow(JSON.stringify(
+    Array.from({ length: 6 }, (_, i) => ({ key: `u${i}`, kind: 'url', url: `https://h${i}.example/a.js` })),
+  ));
+  const s = row.summary(row.value);
+  assert.match(s, /6 from the web/);
+  assert.match(s, /\+3 more/, 'three named, the rest counted');
+});
+
+test('nothing added says so, rather than reading as broken', () => {
+  assert.equal(addedRow(undefined).summary([]), 'None — only the built-ins');
+});
+
+test('a URL that no longer parses still counts', () => {
+  // An entry is still loaded-and-run whether or not its URL survives `new URL`. Dropping
+  // it from the count would under-report exactly the kind this row exists to surface.
+  const row = addedRow(JSON.stringify([{ key: 'u1', kind: 'url', url: 'not a url' }]));
+  assert.match(row.summary(row.value), /1 from the web/);
+});
+
+test('a corrupt index degrades to "none" instead of breaking the screen', () => {
+  for (const junk of ['not json', '{}', 'null', '42']) {
+    const row = addedRow(junk);
+    assert.deepEqual(row.value, [], `${junk} -> fallback`);
+    assert.equal(row.summary(row.value), 'None — only the built-ins');
+  }
+});
+
+test('junk entries inside a good index are ignored', () => {
+  const row = addedRow(JSON.stringify([null, 'nope', { noKey: true }, { key: 'u1', kind: 'url', url: 'https://x.test/a.js' }]));
+  assert.equal(row.value.length, 1, 'only the entry with a usable key');
+});
+
+test('the row is routed and offers no Clear', () => {
+  // Routed because the manager is the real editor — it lists origins and has Remove. And
+  // un-clearable on purpose: wiping this index would orphan every OPFS source and package
+  // it points at, which is data loss dressed up as a preference reset.
+  const row = addedRow(JSON.stringify([{ key: 'u1', kind: 'url', url: 'https://x.test/a.js' }]));
+  assert.equal(controlFor(row), 'route');
+  assert.ok(row.editedAt && /Plugins/.test(row.editedAt), 'and it says where the real control is');
+});
+
+test('the plugin manager is still the only writer of its index', () => {
+  // `set()` here reports that a value was ACCEPTED, not that it reached the disk;
+  // plugin-manager's writeJSON reports a real quota failure. That difference cost an
+  // authored plugin once — it loaded, worked, and was gone on reload.
+  const src = readFileSync('core/plugin-manager.js', 'utf8');
+  assert.match(src, /writeJSON\(LS_USER/, 'the manager keeps its own reporting write path');
+  const decl = src.slice(src.indexOf('const addedPluginsSetting'), src.indexOf('const CATALOG_VERSION'));
+  assert.doesNotMatch(decl.replace(/\/\*[\s\S]*?\*\//g, ''), /\.set\(/,
+    'the declaration must not become a second writer of this key');
 });

@@ -281,6 +281,17 @@ real control, or reports a secret's state without printing it.
       Expect: it distinguishes device settings from project settings, so the Frequency
       weight row is not mistaken for a preference.
 
+- [ ] **Plugins you added or created (a routed row)**
+      Recipe: **Edit ▸ Plugins… ▸ Add from file…** with a small authored plugin, and
+      **Add from URL…** with one served from a host. Then **Edit ▸ Settings…** → the
+      **Plugins** group.
+      Expect: one row, reading something like *1 from the web (thathost.example) · 1 from
+      a file*. The **host** is named — that is the point of the row, since a URL plugin is
+      re-fetched from someone else's server and run on every launch. The built-ins are not
+      listed, and there is **no Clear button** (clearing the index would orphan the stored
+      sources). **Open…** opens the plugin manager. Remove one there, reopen Settings.
+      Expect: the count follows. With nothing added it reads *None — only the built-ins*.
+
 - [ ] **Encrypt at rest (a routed row)**
       Recipe: **Edit ▸ Settings…** → the Encrypt at rest row → **Configure…**.
       Expect: the encryption dialog opens. Change the policy, come back.

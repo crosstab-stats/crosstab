@@ -33,6 +33,7 @@ import { ownerToken } from './workspace-store.js';
 import { escapeHtml } from './text.js';
 import { downloadBlob } from './project-bundle.js';
 import { el, identityText } from './plugin-stdlib.js';
+import { defineSetting } from './settings.js';
 
 const LS_DISABLED = 'crosstab.plugins.disabled';
 const LS_CATALOG = 'crosstab.plugins.catalog';
@@ -41,6 +42,79 @@ const LS_USER = 'crosstab.plugins.user';
 /** OPFS filename for a user entry's SOURCE (distinct from a `.ctplugin` package's bytes). */
 const sourceKey = (key) => `src:${key}`;
 const LS_WEB = 'crosstab.plugins.web';
+
+/**
+ * The plugins this person has added themselves, as a **routed** setting.
+ *
+ * `core/settings.js` excluded all of `crosstab.plugins.*` as "install state, not a
+ * preference — it is what the plugin manager *is*". That is right about the *enabled* set
+ * (sixty-odd built-ins whose on/off state is install state, and which nobody wants
+ * enumerated on a preferences screen) and wrong about this key, which is the same half-
+ * right shape that hid `crosstab.identity`: the two were lumped together because they
+ * share a prefix, not because they are the same kind of thing.
+ *
+ * What this key actually holds is a set of **sources the user chose**, and one of those
+ * kinds is a URL — third-party code re-fetched from someone else's host and executed on
+ * every single launch. A screen whose whole purpose is to answer "what have I configured
+ * in this app?" cannot omit that and be doing its job; of everything in the registry it is
+ * the entry most worth seeing at a glance.
+ *
+ * **Declared, but the plugin manager stays the only writer.** This is not the usual
+ * accessor hand-off: {@link defineSetting}'s `set()` returns whether a value was
+ * *accepted*, explicitly not whether it reached the disk, while {@link writeJSON} reports
+ * an actual quota failure — a distinction this file paid for once, when a swallowed write
+ * meant an authored plugin loaded, worked, and was gone on reload. So the registry
+ * describes this key and the manager keeps writing it. Routed settings are never written
+ * by the Settings screen anyway, and a routed row offers no Clear — which matters here,
+ * because clearing the index would orphan every OPFS source and package it points at.
+ */
+const addedPluginsSetting = defineSetting({
+  id: 'plugins.added',
+  key: LS_USER,
+  json: true,
+  fallback: [],
+  coerce: (v) => (Array.isArray(v)
+    ? v.filter((e) => e && typeof e === 'object' && typeof e.key === 'string')
+    : undefined),
+  label: 'Plugins you added or created',
+  group: 'Plugins',
+  editedAt: 'the plugin manager (Edit ▸ Plugins…)',
+  hint: 'A plugin added from a URL is re-fetched from that host and run every time the app '
+    + 'starts; one added from a file or created here keeps its own copy on this device. '
+    + 'The built-in plugins are not listed — this is only what you added.',
+  summary: (v) => {
+    const list = Array.isArray(v) ? v : [];
+    if (!list.length) return 'None — only the built-ins';
+    const hosts = [];
+    let web = 0;
+    let local = 0;
+    let authored = 0;
+    for (const e of list) {
+      if (e?.kind === 'url') {
+        web++;
+        try {
+          const { host } = new URL(e.url);
+          if (host && !hosts.includes(host)) hosts.push(host);
+        } catch {
+          /* an entry whose URL no longer parses still counts — just unnamed */
+        }
+      } else if (e?.kind === 'authored') authored++;
+      else local++; // 'file' and 'package' are both "a copy lives here"
+    }
+    const parts = [];
+    // Named, and first. The host is the part worth reading: it says whose code this app
+    // fetches and runs on every launch. The full URLs stay in the manager — a summary
+    // line is not the place for them, and the host is what identifies the trust decision.
+    if (web) {
+      const shown = hosts.slice(0, 3).join(', ');
+      const more = hosts.length > 3 ? `, +${hosts.length - 3} more` : '';
+      parts.push(`${web} from the web${shown ? ` (${shown}${more})` : ''}`);
+    }
+    if (local) parts.push(`${local} from a file`);
+    if (authored) parts.push(`${authored} created here`);
+    return parts.join(' · ');
+  },
+});
 
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped

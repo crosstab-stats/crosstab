@@ -404,6 +404,15 @@ export class ProjectSync {
    */
   onNeedSpace = null;
 
+  /**
+   * Opens the plugin manager, set by the app for the same reason as {@link onNeedSpace}:
+   * the manager is built after this module and owns its own dialog. Used by the Settings
+   * screen's routed "Plugins you added or created" row, so it can hand you the editor
+   * rather than only naming where it lives.
+   * @type {(() => void)|null}
+   */
+  onOpenPlugins = null;
+
   constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, items, collections, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers, getSurfaces }) {
     this.#store = projectStore;
     this.#datasets = datasets;
@@ -628,6 +637,13 @@ export class ProjectSync {
           // screen could only name where it lives, and the whole complaint was that
           // nobody finds it there.
           'collab.identity': () => showIdentityDialog(),
+          // The plugins you added yourself — routed to the manager that already lists
+          // them with their origins and a Remove button. Reached through a callback
+          // rather than an import because the plugin manager is constructed after this
+          // module and holds the dialog itself; `onNeedSpace` above takes the same route
+          // for the same reason. Optional-called so a host that wires no plugin manager
+          // (tests, a stripped embed) gets a dead button rather than a thrown error.
+          'plugins.added': () => this.onOpenPlugins?.(),
         },
         // The project's own settings (#207). A provider, read each time the screen
         // renders, so the rows describe what is open NOW rather than what was open when
