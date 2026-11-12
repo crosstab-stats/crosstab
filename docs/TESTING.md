@@ -292,6 +292,17 @@ real control, or reports a secret's state without printing it.
       sources). **Open…** opens the plugin manager. Remove one there, reopen Settings.
       Expect: the count follows. With nothing added it reads *None — only the built-ins*.
 
+- [ ] **Network access you granted to plugins (a routed row)**
+      Recipe: run a plugin that fetches from the web and **allow** it when asked. Then
+      **Edit ▸ Settings…** → the **Plugins** group.
+      Expect: a row naming the **hosts**, e.g. *1 plugin · api.example.com*. A grant to a
+      plain `http://` host keeps its scheme so it stands out; `https://` ones are shown
+      without it. There is **no Clear button** — the grants are live in memory for the
+      life of the page, so a Settings-screen wipe would leave the plugin fetching with no
+      prompt until a reload. **Open…** opens the plugin manager; revoke there (the `web`
+      action on the plugin's row), reopen Settings.
+      Expect: the row follows, and the plugin is asked again next time it fetches.
+
 - [ ] **Encrypt at rest (a routed row)**
       Recipe: **Edit ▸ Settings…** → the Encrypt at rest row → **Configure…**.
       Expect: the encryption dialog opens. Change the policy, come back.

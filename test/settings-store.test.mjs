@@ -641,7 +641,127 @@ test('the plugin manager is still the only writer of its index', () => {
   // authored plugin once — it loaded, worked, and was gone on reload.
   const src = readFileSync('core/plugin-manager.js', 'utf8');
   assert.match(src, /writeJSON\(LS_USER/, 'the manager keeps its own reporting write path');
-  const decl = src.slice(src.indexOf('const addedPluginsSetting'), src.indexOf('const CATALOG_VERSION'));
+  // Bound the slice BEFORE reading it. `indexOf` answers -1 for a declaration that is not
+  // there, which silently yields an empty string that passes any doesNotMatch — the exact
+  // vacuous-assertion shape that let "crosstab.plugins.user is not a setting" stand for
+  // months. Caught here by running this file against the pre-change code.
+  const from = src.indexOf('const addedPluginsSetting');
+  const to = src.indexOf('const CATALOG_VERSION');
+  assert.ok(from > 0 && to > from, 'the declaration must be findable, or this proves nothing');
+  const decl = src.slice(from, to);
   assert.doesNotMatch(decl.replace(/\/\*[\s\S]*?\*\//g, ''), /\.set\(/,
     'the declaration must not become a second writer of this key');
+});
+
+// =============================================================================
+// Network access granted to plugins (found by audit, 2026-11-12)
+// =============================================================================
+
+/** The web-grants row as the Settings screen would see it. */
+const grantRow = (json) => {
+  let row = null;
+  withStorage(fakeStorage(json === undefined ? {} : { 'crosstab.plugins.web': json }), () => {
+    row = listSettings().find((s) => s.id === 'plugins.webAccess');
+  });
+  return row;
+};
+
+test('standing network grants are visible somewhere other than a one-letter badge', () => {
+  // A grant is a permission given once in a modal about a thing that then happens
+  // silently forever. Before this the only trace was a `web` badge on a row inside the
+  // plugin manager.
+  const row = grantRow(JSON.stringify({ 'builtin-x': ['https://api.example.com'] }));
+  assert.ok(row, 'the row must exist at all');
+  assert.equal(row.group, 'Plugins');
+  assert.equal(row.key, 'crosstab.plugins.web', 'and over the key the manager already used');
+});
+
+test('the summary names the hosts, not just a count', () => {
+  const row = grantRow(JSON.stringify({
+    'p.one': ['https://api.example.com'],
+    'p.two': ['https://cdn.other.net'],
+  }));
+  const s = row.summary(row.value);
+  assert.match(s, /2 plugins/);
+  assert.match(s, /api\.example\.com/);
+  assert.match(s, /cdn\.other\.net/);
+});
+
+test('a plain-http grant keeps its scheme, because that is the notable one', () => {
+  // `https://` on every entry is noise that makes the rows harder to scan; an http grant
+  // is the one a person should notice.
+  const row = grantRow(JSON.stringify({ a: ['http://legacy.local'], b: ['https://api.example.com'] }));
+  const s = row.summary(row.value);
+  assert.match(s, /http:\/\/legacy\.local/, 'cleartext stays visible');
+  assert.doesNotMatch(s, /https:\/\//, 'and the ordinary case is not repeated at you');
+});
+
+test('one plugin is a plugin, not 1 plugins', () => {
+  assert.match(grantRow(JSON.stringify({ a: ['https://x.test'] })).summary({ a: ['https://x.test'] }), /1 plugin ·/);
+});
+
+test('many hosts are summarised', () => {
+  const v = { a: ['https://h1.test', 'https://h2.test'], b: ['https://h3.test', 'https://h4.test', 'https://h5.test'] };
+  assert.match(grantRow(JSON.stringify(v)).summary(v), /\+2 more/);
+});
+
+test('the same host granted to two plugins is named once', () => {
+  const v = { a: ['https://same.test'], b: ['https://same.test'] };
+  const s = grantRow(JSON.stringify(v)).summary(v);
+  assert.equal(s.match(/same\.test/g).length, 1, 'hosts are deduplicated for reading');
+  assert.match(s, /2 plugins/, 'but both plugins still count');
+});
+
+test('nothing granted says so', () => {
+  assert.equal(grantRow(undefined).summary({}), 'None granted');
+  assert.equal(grantRow('{}').summary({}), 'None granted');
+});
+
+test('the dropped legacy format reads as nothing granted, never as a grant', () => {
+  // v1 was a flat `[id, …]` array meaning "this plugin may reach ANY host". The manager
+  // intentionally drops it rather than migrating (#89), so the screen must agree — showing
+  // it as a live grant would describe a permission that no longer exists.
+  const row = grantRow(JSON.stringify(['old-plugin-id', 'another']));
+  assert.deepEqual(row.value, {});
+  assert.equal(row.summary(row.value), 'None granted');
+});
+
+test('a corrupt or partial grants object degrades rather than throwing', () => {
+  for (const junk of ['not json', 'null', '42', '"text"']) {
+    const row = grantRow(junk);
+    assert.deepEqual(row.value, {}, junk);
+  }
+  const mixed = grantRow(JSON.stringify({ good: ['https://x.test'], bad: 'not-an-array', empty: [] }));
+  assert.deepEqual(Object.keys(mixed.value), ['good'], 'only usable entries survive');
+});
+
+test('the grants row is routed, and offers no Clear — on purpose', () => {
+  // The grants live in a Map on the manager for the life of the page; the stored object is
+  // persistence, not the source of truth. A Clear here would delete the key behind the
+  // manager's back and leave every grant live in memory, so the "revoked" plugin would
+  // keep fetching with no prompt until a reload. A revoke that does not revoke is worse
+  // than no button.
+  const row = grantRow(JSON.stringify({ a: ['https://x.test'] }));
+  assert.equal(controlFor(row), 'route');
+  assert.ok(/Plugins/.test(row.editedAt), 'and it points at the manager, where revoke lives');
+});
+
+test('the manager is still the only writer of the grants key', () => {
+  const src = readFileSync('core/plugin-manager.js', 'utf8');
+  assert.match(src, /writeJSON\(LS_WEB/, 'the manager keeps #persistWeb');
+  const from = src.indexOf('const webGrantsSetting');
+  const to = src.indexOf('/** Bump when the catalog');
+  assert.ok(from > 0 && to > from, 'the declaration must be findable, or this proves nothing');
+  const decl = src.slice(from, to);
+  assert.doesNotMatch(decl.replace(/\/\*[\s\S]*?\*\//g, ''), /\.set\(|\.clear\(/,
+    'the declaration must not become a second writer, or an in-memory grant outlives it');
+});
+
+test('revoking in the manager is what the row sends you to', () => {
+  // The row would be theatre if the destination had no control. `revokeWeb` is wired to a
+  // per-plugin action in the picker.
+  const picker = readFileSync('core/plugin-picker.js', 'utf8');
+  assert.match(picker, /revokeWeb\(/, 'the manager can actually take a grant back');
+  const sync = readFileSync('core/project-sync.js', 'utf8');
+  assert.match(sync, /'plugins\.webAccess':\s*\(\)\s*=>\s*this\.onOpenPlugins/, 'and the row opens it');
 });

@@ -116,6 +116,68 @@ const addedPluginsSetting = defineSetting({
   },
 });
 
+/**
+ * Which plugins may reach which hosts — the standing answers to "allow this plugin to
+ * fetch from …?", as a **routed** setting.
+ *
+ * Found by auditing the rest of `crosstab.*` after the added-plugins gap above, and it is
+ * the sharper of the two. A grant here is a **permission the user gave once, in a modal,
+ * about a thing that then happens silently forever**: a plugin that was allowed to reach
+ * `api.example.com` reaches it on every run from then on, and until now the only trace was
+ * a one-letter `web` badge on a row inside the plugin manager. A preferences screen that
+ * can tell you your avatar colour but not which third parties your plugins talk to has its
+ * priorities inverted.
+ *
+ * **Routed, and deliberately without a Clear.** The grants live in a `Map` on this manager
+ * for the lifetime of the page; the stored object is its persistence, not its source of
+ * truth. A Clear button on the Settings screen would delete the key behind the manager's
+ * back and leave `#webAllowed` holding every grant in memory — so the "revoked" plugin
+ * would keep fetching, with no prompt, until a reload. A revoke that does not revoke is
+ * worse than no button at all. {@link revokeWeb} is the real control, per plugin, in the
+ * manager this row opens.
+ */
+const webGrantsSetting = defineSetting({
+  id: 'plugins.webAccess',
+  key: LS_WEB,
+  json: true,
+  fallback: {},
+  // The same shape `readWebGrants` accepts, and the same refusal: the legacy v1 format was
+  // a flat `[id, …]` array meaning "this plugin may reach ANY host", and it is dropped on
+  // read rather than migrated (#89). An array here must therefore read as nothing granted,
+  // not as something to display.
+  coerce: (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    const out = {};
+    for (const [id, origins] of Object.entries(v)) {
+      if (!Array.isArray(origins)) continue;
+      const kept = origins.filter((o) => typeof o === 'string' && o);
+      if (kept.length) out[id] = kept;
+    }
+    return out;
+  },
+  label: 'Network access you granted to plugins',
+  group: 'Plugins',
+  editedAt: 'the plugin manager (Edit ▸ Plugins…)',
+  hint: 'A plugin can only fetch from a host you have approved, and it is asked once per '
+    + 'host. These are the approvals still standing — open the plugin manager to take one '
+    + 'back.',
+  summary: (v) => {
+    const map = v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    const ids = Object.keys(map);
+    if (!ids.length) return 'None granted';
+    const origins = [];
+    for (const list of Object.values(map)) {
+      for (const o of list) if (!origins.includes(o)) origins.push(o);
+    }
+    // `https://` is the unremarkable case and reads as noise; a plain-http grant is the
+    // one worth noticing, so it keeps its scheme and the secure ones lose theirs.
+    const shown = origins.slice(0, 3).map((o) => o.replace(/^https:\/\//, ''));
+    const more = origins.length > 3 ? `, +${origins.length - 3} more` : '';
+    const plural = ids.length === 1 ? 'plugin' : 'plugins';
+    return `${ids.length} ${plural} · ${shown.join(', ')}${more}`;
+  },
+});
+
 /** Bump when the catalog shape OR built-in manifests' metadata change, so a
  * stale persisted catalog (e.g. missing newly-declared `disciplines`) is dropped
  * and re-probed on next load. */

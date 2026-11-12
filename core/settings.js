@@ -51,8 +51,17 @@
  * that it reached the disk, and that file's own write path reports a real quota failure
  * after once losing an authored plugin to a swallowed one.
  *
- * Found the same way as the identity gap: the owner working the manual test pass. Both
- * were exclusions written as a *family* when only one member of the family qualified.
+ * `crosstab.plugins.web` came out of the same wildcard, and is the sharper of the two: it
+ * is the standing set of "yes, this plugin may fetch from that host" answers. A permission
+ * given once in a modal, about a thing that then happens silently on every run, whose only
+ * previous trace was a one-letter badge inside the plugin manager. It is declared and
+ * routed beside the other. Neither offers a Clear, and the grants one must not: those
+ * grants live in a `Map` for the life of the page, so deleting the key from here would
+ * leave every one of them working until a reload — a revoke that does not revoke.
+ *
+ * Found the same way as the identity gap: the owner working the manual test pass, then an
+ * audit of every remaining key. All three were exclusions written as a *family* when only
+ * one member of the family qualified.
  *
  * `crosstab.identity` was on that last line too, as "data, not preference". That was half
  * right, and it is the half that hid the other: `authorId` is an identifier the user

@@ -644,6 +644,9 @@ export class ProjectSync {
           // for the same reason. Optional-called so a host that wires no plugin manager
           // (tests, a stripped embed) gets a dead button rather than a thrown error.
           'plugins.added': () => this.onOpenPlugins?.(),
+          // And the standing "may this plugin fetch from …?" answers. Same destination:
+          // the manager is where a grant is taken back, per plugin.
+          'plugins.webAccess': () => this.onOpenPlugins?.(),
         },
         // The project's own settings (#207). A provider, read each time the screen
         // renders, so the rows describe what is open NOW rather than what was open when
