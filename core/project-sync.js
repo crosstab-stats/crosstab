@@ -419,6 +419,16 @@ export class ProjectSync {
    */
   onOpenDropbox = null;
 
+  /**
+   * Supplies the read-only "This install" rows, and opens the full details. Set by the
+   * app, which holds the loader and plugin manager the diagnostics read.
+   * @type {(() => Promise<Array<object>>)|null}
+   */
+  onEnvironment = null;
+
+  /** @type {(() => void)|null} */
+  onShowDetails = null;
+
   constructor({ projectStore, datasets, ui, menus, bus, results, statusEl, items, collections, getActivePlugins, applyActivePlugins, getWorkspaceOps, applyWorkspaces, getAssetOps, applyAssetOps, assetBytes, getItemOps, applyItemOps, projectLog, getOutput, applyOutput, getAnalysisLog, applyAnalysisLog, materializeAnalyses, applyProjectPlugins, getPluginStates, pluginIdentities, getMergers, getSurfaces }) {
     this.#store = projectStore;
     this.#datasets = datasets;
@@ -661,6 +671,12 @@ export class ProjectSync {
         // renders, so the rows describe what is open NOW rather than what was open when
         // the menu was built — and so a change can re-read the value it just wrote.
         projectSettings: () => projectSettings(this.#datasets),
+        // What this copy of the app IS: build, deployment, whether the fast R path is
+        // available. Read-only, and supplied through the app for the same reason the
+        // openers are — the diagnostics need the loader and the plugin manager, which
+        // this module has no business holding.
+        environment: () => this.onEnvironment?.(),
+        onDetails: this.onShowDetails ? () => this.onShowDetails() : null,
       }),
     });
     this.#bus.on(CoreEvents.DATA_CHANGED, (s) => this.#onChange(s));

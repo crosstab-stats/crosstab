@@ -98,6 +98,13 @@ const server = createServer(async (req, res) => {
     const body = await readFile(filePath);
     setIsolationHeaders(res);
     res.setHeader('Content-Type', MIME[extname(filePath).toLowerCase()] || 'application/octet-stream');
+    // `Last-Modified` is where the app's build stamp comes from: `core/build-stamp.js`
+    // reads it off `core/app.js` to answer "which build is running", which drives the
+    // launcher's update strip and the "App build" line in diagnostics. Without it both
+    // report "unknown" locally — so the one thing a contributor cannot check on the dev
+    // server is the thing people most often ask support about. `Cache-Control: no-store`
+    // above still means edits always reload; this only makes the stamp readable.
+    res.setHeader('Last-Modified', info.mtime.toUTCString());
     res.writeHead(200).end(body);
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' }).end(`500 ${err.message}`);

@@ -170,8 +170,12 @@ test('the project group is LAST and visibly a different scope', () => {
   const projectAt = SCREEN.indexOf("text: 'This project'");
   assert.ok(deviceAt > 0 && projectAt > deviceAt);
   const css = readFileSync('index.html', 'utf8');
-  assert.match(css, /\.ct-settings__group--project \{[^}]*border-top/,
+  // `[^{]*` rather than a literal ` {`: the install scope (2026-11-12) shares this rule,
+  // and a grouped selector is still one visible break per scope.
+  assert.match(css, /\.ct-settings__group--project[^{]*\{[^}]*border-top/,
     'a different scope needs a visible break, not just a heading');
+  assert.match(css, /\.ct-settings__group--install[^{]*\{[^}]*border-top/,
+    'and so does the read-only install scope');
 });
 
 test('a refused write puts the control back and says why', () => {

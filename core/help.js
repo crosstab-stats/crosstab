@@ -118,6 +118,72 @@ export async function collectDiagnostics({ datasets, loader, plugins } = {}) {
 }
 
 /**
+ * The environment facts, for the Settings screen's read-only "This install" section.
+ *
+ * These are not settings in the sense the registry means — nobody can change them from a
+ * screen, and none of them is stored under a key. They are settings in the other sense the
+ * owner named: **details that change how the thing works.** Whether the fast multi-threaded
+ * R path is available, which deployment this is, and what build is actually running are
+ * the first three questions of nearly every "why is my app not working", and until now the
+ * only way to see them was to start filing a bug report — which someone only does once they
+ * have already decided something is broken.
+ *
+ * Phrased as consequences rather than as the flags behind them. "Cross-origin isolation:
+ * false" is a fact about a header; "R runs single-threaded here" is what it costs you, and
+ * is the thing a person can act on or report.
+ *
+ * Lives HERE rather than in `settings-screen.js` for the reason that file already learnt
+ * once with the weight descriptor: a generic screen that knows what any particular row
+ * MEANS has domain knowledge leaking into it. The screen renders `{label, value, hint}`
+ * and knows nothing about isolation or deployments.
+ *
+ * @param {object} deps same shape {@link collectDiagnostics} takes
+ * @returns {Promise<Array<{label: string, value: string, hint?: string}>>}
+ */
+export async function environmentRows(deps = {}) {
+  const diag = await collectDiagnostics(deps);
+  const rows = [
+    {
+      label: 'App build',
+      value: diag.build,
+      hint: 'The version actually running on this device. The update strip in the launcher '
+        + 'is what moves it, and it is the first thing to check after an update.',
+    },
+    {
+      label: 'Install',
+      // '' is the stock build: `installLabel` only answers when a deploy.json was applied.
+      // Saying so beats an empty row, and "which build is this" is exactly the question a
+      // support person is asking when a department ships its own.
+      value: diag.install || 'Stock build (no deployment settings)',
+      hint: 'Which deployment this copy came from. An institution that hosts its own can '
+        + 'add site plugins and point support at its own help desk.',
+    },
+    {
+      label: 'Fast R path',
+      value: diag.isolated === 'true'
+        ? 'Available — R can use all cores'
+        : 'Unavailable — R runs single-threaded',
+      hint: 'Needs cross-origin isolation, which the service worker supplies. When it is '
+        + 'missing everything still works, just more slowly on large jobs.',
+    },
+    {
+      label: 'Connection',
+      value: diag.online === 'true' ? 'Online' : 'Offline',
+      hint: 'Offline, CrossTab serves itself and any cached R packages from this device.',
+    },
+  ];
+  return rows;
+}
+
+/** Open the bug-report review dialog — the full details, and the only thing that sends
+ *  any of them anywhere. Exported so the Settings screen can hand someone the complete
+ *  set (browser, platform, dataset shape, loaded plugins, last error) without making
+ *  "report a bug" the only route to seeing it. */
+export function showBugReport(deps) {
+  return openBugReport(deps);
+}
+
+/**
  * The issue body, in the order a reader of the issue wants it: what happened first,
  * machine details last.
  *

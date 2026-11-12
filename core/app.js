@@ -25,7 +25,7 @@ import {
   DropboxBackend, WebDavBackend, FolderBackend, OpfsBackend, backendFor,
 } from './storage-backend.js';
 import { openProjectManager } from './project-manager.js';
-import { registerHelpMenu } from './help.js';
+import { registerHelpMenu, environmentRows, showBugReport } from './help.js';
 import { addDeployIssues, loadDeployConfig } from './deploy-config.js';
 import { loadSitePlugins } from './site-plugins.js';
 import { openSyntaxGuide } from './syntax-guide.js';
@@ -2059,6 +2059,12 @@ export async function boot(mounts) {
   // The Settings screen's Dropbox row. Saving writes through the module's own writer, so
   // the declaration stays a describer; Forget stores an empty config rather than removing
   // the key, which is the same end state by the same path everything else uses.
+  // The Settings screen's read-only "This install" section, and the full details behind
+  // it. Wired here because the diagnostics read the LOADER (the authority on what is
+  // actually wired) and the plugin manager, neither of which project-sync holds.
+  projects.onEnvironment = () => environmentRows({ datasets, loader, plugins });
+  projects.onShowDetails = () => void showBugReport({ datasets, loader, plugins });
+
   projects.onOpenDropbox = async () => {
     const res = await promptDropbox(loadDbxConfig(), { settings: true });
     if (!res) return;

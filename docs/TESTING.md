@@ -323,6 +323,19 @@ real control, or reports a secret's state without printing it.
       Expect: it is back to remembering your selection; the choice applies to one launch.
       Nothing you enabled was turned off by any of this.
 
+- [ ] **This install (read-only facts)**
+      Recipe: **Edit ▸ Settings…** → scroll to the bottom.
+      Expect: a **This install** section, visibly separated, saying plainly that these are
+      not settings. Four rows — **App build** (a real date, not "unknown"), **Install**
+      (*Stock build* unless a `deploy.json` is applied, in which case the site name),
+      **Fast R path** (*Available* under cross-origin isolation, *Unavailable — R runs
+      single-threaded* without), **Connection**. **None of them has a control** — no
+      select, no Clear, nothing to change. The isolation row must describe the consequence,
+      never print `true`/`false`.
+      Then: **Full details…**.
+      Expect: the Report a bug review dialog, with browser, platform, dataset shape and
+      loaded plugins — and nothing sent anywhere until you choose to send it.
+
 - [ ] **Encrypt at rest (a routed row)**
       Recipe: **Edit ▸ Settings…** → the Encrypt at rest row → **Configure…**.
       Expect: the encryption dialog opens. Change the policy, come back.

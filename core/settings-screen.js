@@ -160,8 +160,20 @@ export function describeValue(spec) {
 /**
  * Show the Settings dialog.
  *
+ * Three kinds of content, and only the first comes from the registry. The other two are
+ * providers because their contracts differ — a device setting is written through the
+ * registry, a project setting by calling the same method a menu would, and an install
+ * fact is not written at all. Bending any of them into `defineSetting` would mean
+ * inventing `localStorage` keys for values that have none.
+ *
  * @param {{openers?: Object<string, () => void>,
- *          projectSettings?: () => Array<object>}} [opts]
+ *          projectSettings?: () => Array<object>,
+ *          environment?: () => Promise<Array<{label: string, value: string, hint?: string}>>,
+ *          onDetails?: () => void}} [opts]
+ *   `environment` supplies the read-only "This install" rows (build, deployment, whether
+ *   the fast R path is available) and `onDetails` opens the full set. Async, and awaited
+ *   after the first paint, so a slow network never delays what someone came to change.
+ *
  *   `projectSettings` supplies the project-scoped rows (#207) — a provider rather than a
  *   store handle, so this file renders what it is given and never learns what a weight is.
  *   `openers` maps a setting id to a
@@ -171,7 +183,7 @@ export function describeValue(spec) {
  *   App wiring lives where everything else is already wired.
  * @returns {Promise<void>} resolves when the dialog closes
  */
-export function showSettings({ openers = {}, projectSettings = null } = {}) {
+export function showSettings({ openers = {}, projectSettings = null, environment = null, onDetails = null } = {}) {
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog ct-settings';
@@ -205,6 +217,12 @@ export function showSettings({ openers = {}, projectSettings = null } = {}) {
     const body = el('div', { class: 'ct-settings__body' });
     form.append(body);
 
+    // Fetched ONCE per opening, not per render: `render()` runs again after every write,
+    // and `collectDiagnostics` fetches the build stamp over the network. `null` means
+    // "not back yet", which is a different thing from an empty list and is shown as such.
+    let envRows = null;
+    let envError = false;
+
     const render = () => {
       body.textContent = '';
       for (const { group, items } of settingsGroups()) {
@@ -226,6 +244,52 @@ export function showSettings({ openers = {}, projectSettings = null } = {}) {
           for (const p of rows) body.append(projectRow(p));
         }
       }
+      // What this copy of the app IS, last of all and read-only.
+      //
+      // Not settings in the registry's sense — nobody can change them here and none is
+      // stored under a key, so forcing them through `defineSetting` would mean inventing
+      // keys for values that have none and breaking "one key, one owner" to do it. They
+      // are settings in the other sense: details that change how the thing works. The
+      // first three questions of almost every "why is my app not working" live here, and
+      // the only way to see them used to be to start filing a bug report.
+      //
+      // Same seam as the project section above: a provider, rendered by a row function
+      // whose contract differs. The screen never learns what any of these mean — see
+      // `environmentRows` in help.js.
+      if (environment) {
+        body.append(el('h3', { class: 'ct-settings__group ct-settings__group--install', text: 'This install' }));
+        body.append(el('p', {
+          class: 'ct-settings__hint',
+          text: 'Not settings — this is what the app is doing here. Worth quoting if you ask for help.',
+        }));
+        if (envError) {
+          body.append(el('p', { class: 'ct-settings__hint', text: 'These details could not be read.' }));
+        } else if (envRows === null) {
+          // The build stamp is fetched, so this section fills a moment after the rest.
+          body.append(el('p', { class: 'ct-settings__hint', text: 'Checking…' }));
+        } else {
+          for (const f of envRows) body.append(factRow(f));
+          if (onDetails) {
+            const more = el('button', { type: 'button', class: 'ct-field', text: 'Full details…' });
+            more.addEventListener('click', () => onDetails());
+            body.append(el('div', { class: 'ct-settings__control', children: [more] }));
+          }
+        }
+      }
+    };
+
+    /** One read-only fact. No control, because there is nothing here to set. */
+    const factRow = (f) => {
+      const wrap = el('div', { class: 'ct-settings__row' });
+      const head = el('div', { class: 'ct-settings__label' });
+      head.append(el('span', { text: f.label }));
+      if (f.hint) head.append(el('span', { class: 'ct-settings__hint', text: f.hint }));
+      wrap.append(head);
+      wrap.append(el('div', {
+        class: 'ct-settings__control',
+        children: [el('span', { class: 'ct-settings__value', text: f.value })],
+      }));
+      return wrap;
     };
 
     /**
@@ -393,6 +457,19 @@ export function showSettings({ openers = {}, projectSettings = null } = {}) {
     };
 
     render();
+
+    // Kicked off after the first paint, so a slow or absent network delays nothing a
+    // person came here to change. A failure fills in a line, never an empty section.
+    if (environment) {
+      (async () => {
+        try {
+          envRows = (await environment()) || [];
+        } catch {
+          envError = true;
+        }
+        if (dialog.open) render();
+      })();
+    }
 
     const footer = el('menu', { class: 'ct-dialog__buttons' });
     const done = el('button', { class: 'ct-dialog__primary', text: 'Done' });
