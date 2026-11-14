@@ -82,7 +82,12 @@ export const manifest = {
     + 'or direction: the stable majority plus the fast decliners that a single growth curve averages '
     + 'away. Three or more occasions.' +
     '\nSyntax: run builtin-mixture.gmm {"waves": ["t1", "t2", "t3", "t4"], "classes": 3, "seed": 12345, "save": "no"}\n' +
-    '  • waves — one column per occasion, in time order. Equally spaced, so the slope is per occasion.',
+    '  • waves — one column per occasion, in time order. Equally spaced, so the slope is per occasion.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // poLCA closure: poLCA, scatterplot3d, MASS. flexmix closure: flexmix, lattice, modeltools,
   // nnet. Both tiny — checked against repo.r-wasm.org's index for R 4.6, not guessed.
   // How-to topics (#192). The index is small and always-resident; the prose lives
@@ -126,7 +131,7 @@ export const manifest = {
         { name: 'classes', kind: 'number', label: 'Most classes to consider', hint: 'Every number of classes from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
         { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
         { name: 'save', kind: 'choice', label: 'Save each case’s class?', hint: 'Puts the class and its probability in a new dataset, so classes can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with class membership' }], default: 'no' },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -137,8 +142,8 @@ export const manifest = {
             { value: 'profile', label: 'Class profile plot' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'mixture-lpa',
@@ -150,7 +155,7 @@ export const manifest = {
         { name: 'classes', kind: 'number', label: 'Most profiles to consider', hint: 'Every number of profiles from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
         { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
         { name: 'save', kind: 'choice', label: 'Save each case’s profile?', hint: 'Puts the profile and its probability in a new dataset, so profiles can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with profile membership' }], default: 'no' },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -161,8 +166,8 @@ export const manifest = {
             { value: 'profile', label: 'Class profile plot' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'mixture-gmm',
@@ -174,7 +179,7 @@ export const manifest = {
         { name: 'classes', kind: 'number', label: 'Most classes to consider', hint: 'Every number of trajectory classes from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
         { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
         { name: 'save', kind: 'choice', label: 'Save each person’s class?', hint: 'Puts the trajectory class and its probability in a new dataset, so classes can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with class membership' }], default: 'no' },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -185,8 +190,8 @@ export const manifest = {
             { value: 'profile', label: 'Trajectory plot (one line per class)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

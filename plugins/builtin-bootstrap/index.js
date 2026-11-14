@@ -37,7 +37,12 @@ export const manifest = {
     'Syntax: run builtin-bootstrap.permutation {"y": "score", "group": "condition", "stat": "mean", "reps": 5000}\n' +
     '  • x / y — the numeric variable; reps — number of resamples (default 2000) or permutations (5000).\n' +
     '  • stat — bootStatistic: "mean"|"median"|"sd"|"var"|"IQR"|"trim"; permutation: "mean"|"median".\n' +
-    '  • other actions: Bootstrap a correlation — run builtin-bootstrap.bootCorr {"x": "x", "y": "y", "reps": 2000}; Power by simulation — run builtin-bootstrap.power {"n": 30, "d": 0.5, "alpha": 0.05, "reps": 2000}.',
+    '  • other actions: Bootstrap a correlation — run builtin-bootstrap.bootCorr {"x": "x", "y": "y", "reps": 2000}; Power by simulation — run builtin-bootstrap.power {"n": 30, "d": 0.5, "alpha": 0.05, "reps": 2000}.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -93,7 +98,7 @@ export const manifest = {
       inputs: [
         { name: 'x', kind: 'variables', hint: 'The numeric variable whose mean you want a robust interval for.', types: ['numeric'], multiple: false },
         { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -130,7 +135,7 @@ export const manifest = {
           ],
         },
         { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -153,7 +158,7 @@ export const manifest = {
         { name: 'x', kind: 'variables', label: 'Variable X', hint: 'One of the two numeric variables to correlate.', multiple: false, types: ['numeric'], unique: true },
         { name: 'y', kind: 'variables', label: 'Variable Y', hint: 'The other numeric variable to correlate with the first.', multiple: false, types: ['numeric'], unique: true },
         { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -189,7 +194,7 @@ export const manifest = {
           ],
         },
         { name: 'reps', kind: 'number', label: 'Number of permutations', hint: 'How many random label-shuffles to run; more sharpens the p-value.', default: 5000 },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',

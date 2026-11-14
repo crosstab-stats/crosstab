@@ -32,7 +32,12 @@ export const manifest = {
     'GUI: Categorical ▸ Risk / odds ratios (2×2)…, then pick a binary exposure and a binary outcome. You get the 2×2 table plus RR, OR, risk difference, NNT/NNH and attributable fraction with 95% CIs.\n' +
     'Syntax: run builtin-epi.run {"exposure": "treated", "outcome": "relapse"}\n' +
     '  • exposure — binary exposure/treatment (1 = exposed).\n' +
-    '  • outcome — binary outcome (1 = case/event).',
+    '  • outcome — binary outcome (1 = case/event).' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -58,7 +63,7 @@ export const manifest = {
         { name: 'exposed', kind: 'level', of: 'exposure', preferLast: true, label: 'Which category is EXPOSED?', hint: 'Every measure below is the effect of being in this category. With 1 = Yes / 2 = No coding, pick Yes — otherwise the risk ratio describes the effect of being unexposed.' },
         { name: 'outcome', kind: 'variables', label: 'Outcome', hint: 'The yes/no outcome marking who became a case.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
         { name: 'case', kind: 'level', of: 'outcome', preferLast: true, label: 'Which category is a CASE?', hint: 'The outcome you are counting — the event, illness or relapse, rather than its absence.' },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -69,8 +74,8 @@ export const manifest = {
             { value: 'forest', label: 'Risk and odds ratios (log axis)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

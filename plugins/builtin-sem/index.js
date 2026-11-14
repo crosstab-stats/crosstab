@@ -60,7 +60,12 @@ export const manifest = {
     'Syntax: run builtin-sem.cfa {"items": ["x1", "x2", "x3"], "factorName": "Factor"}\n' +
     'Syntax: run builtin-sem.sem {"vars": ["x1", "x2", "x3", "x4"], "model": "f1 =~ x1+x2 ; f2 =~ x3+x4 ; f1 ~~ f2"}\n' +
     '  • items / factorName — CFA: the one-factor items and an optional factor name.\n' +
-    '  • vars / model — SEM: every variable used, plus lavaan model syntax (equations separated by ";").',
+    '  • vars / model — SEM: every variable used, plus lavaan model syntax (equations separated by ";").' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   disciplines: ['Psychology', 'Sociology'],
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
@@ -101,7 +106,7 @@ export const manifest = {
       inputs: [
         { name: 'items', kind: 'variables', label: 'Items (one factor)', hint: 'The scale items expected to measure one underlying factor.', multiple: true, types: ['numeric'] },
         { name: 'factorName', kind: 'text', label: 'Factor name', hint: 'A short name for the factor these items measure.', default: 'Factor', optional: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -112,8 +117,8 @@ export const manifest = {
             { value: 'loadings', label: 'Standardized loadings' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'sem-growth',

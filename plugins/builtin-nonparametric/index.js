@@ -38,7 +38,12 @@ export const manifest = {
     'Syntax: run builtin-nonparametric.wilcoxon {"x1": "before", "x2": "after"}\n' +
     'Syntax: run builtin-nonparametric.kruskal {"y": "score", "g": "group"}\n' +
     '  • mannWhitney / kruskal: y — test variable; g — grouping variable (2 groups vs 3+).\n' +
-    '  • wilcoxon: x1 / x2 — two paired measures on the same cases.',
+    '  • wilcoxon: x1 / x2 — two paired measures on the same cases.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -80,7 +85,7 @@ export const manifest = {
         { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable that splits cases into groups; pick the two to compare next.', multiple: false, types: ['factor', 'string'], unique: true },
         { name: 'g1', kind: 'level', of: 'g', label: 'Group 1', hint: 'The first group to compare. A variable with more than two groups can now be compared two at a time rather than being refused.' },
         { name: 'g2', kind: 'level', of: 'g', exclude: 'g1', label: 'Group 2', hint: 'The second group, compared against Group 1.' },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -91,8 +96,8 @@ export const manifest = {
             { value: 'dist', label: 'Distribution by group (box plot)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'nonparametric-wilcoxon',
@@ -102,7 +107,7 @@ export const manifest = {
       inputs: [
         { name: 'x1', kind: 'variables', label: 'Variable 1', hint: 'The first of two repeated measures on the same cases.', multiple: false, types: ['numeric'], unique: true },
         { name: 'x2', kind: 'variables', label: 'Variable 2', hint: 'The second measure, compared against the first.', multiple: false, types: ['numeric'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -114,8 +119,8 @@ export const manifest = {
             { value: 'diff', label: 'Distribution of the differences' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'nonparametric-kruskal',
@@ -125,7 +130,7 @@ export const manifest = {
       inputs: [
         { name: 'y', kind: 'variables', label: 'Test variable', hint: 'The numeric or ordinal measure whose ranks you compare.', multiple: false, types: ['numeric'], unique: true },
         { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable that splits cases into three or more groups.', multiple: false, types: ['factor', 'string'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -136,8 +141,8 @@ export const manifest = {
             { value: 'dist', label: 'Distribution by group (box plot)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

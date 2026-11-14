@@ -53,7 +53,12 @@ export const manifest = {
     '  • dv — the outcome to model.\n' +
     '  • ivs — one or more predictors.\n' +
     '  • family — "logistic" (default) | "probit" | "poisson" | "linear".\n' +
-    '  • kind — "ame" (default) | "mem".',
+    '  • kind — "ame" (default) | "mem".' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -102,7 +107,7 @@ export const manifest = {
             { value: 'mem', label: 'Marginal effect at the mean (MEM)' },
           ],
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -113,8 +118,8 @@ export const manifest = {
             { value: 'coef', label: 'Marginal effects with 95% CI' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

@@ -63,7 +63,12 @@ export const manifest = {
     + '  • metric — "nominal" (default) | "ordinal" | "interval" | "ratio"; sets how α '
     + 'weights a disagreement (nominal treats all disagreements alike).\n'
     + '  • weight — κ weighting for exactly 2 raters: "unweighted" (default) | "equal" | "squared".\n'
-    + 'Syntax: run builtin-agreement.fromCodings {"metric": "nominal"}',
+    + 'Syntax: run builtin-agreement.fromCodings {"metric": "nominal"}' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -114,7 +119,7 @@ export const manifest = {
           options: ['unweighted', 'equal', 'squared'],
           default: 'unweighted',
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -125,8 +130,8 @@ export const manifest = {
             { value: 'ba', label: 'Bland-Altman (agreement) plot' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'agreement-codings',

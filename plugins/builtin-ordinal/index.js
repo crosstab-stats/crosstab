@@ -40,7 +40,12 @@ export const manifest = {
     'Syntax: run builtin-ordinal.ordinal {"dv": "satisfaction", "ivs": ["age", "income"]}\n' +
     'Syntax: run builtin-ordinal.multinomial {"dv": "party", "ivs": ["age", "income"]}\n' +
     '  • dv — the categorical outcome (ordered for ordinal, unordered for multinomial).\n' +
-    '  • ivs — one or more predictors.',
+    '  • ivs — one or more predictors.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -72,7 +77,7 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Ordered outcome', hint: 'The ranked outcome to model, such as a Likert agreement scale.', multiple: false, unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think shift the outcome up or down.', multiple: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -83,8 +88,8 @@ export const manifest = {
             { value: 'coef', label: 'Odds-ratio plot (log axis)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'ordinal-multinomial',
@@ -95,7 +100,7 @@ export const manifest = {
         { name: 'dv', kind: 'variables', label: 'Unordered outcome', hint: 'The category outcome with no natural order, like party chosen.', multiple: false, unique: true },
         { name: 'base', kind: 'level', of: 'dv', label: 'Reference category', hint: 'Every other category is compared against this one, so it decides what each relative-risk ratio means. Defaults to the first category.' },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict which category cases fall into.', multiple: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -106,8 +111,8 @@ export const manifest = {
             { value: 'coef', label: 'Odds-ratio plot (log axis)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

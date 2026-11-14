@@ -43,7 +43,12 @@ export const manifest = {
     'Syntax: run builtin-bayesian.bfCorr {"x": "x", "y": "y"}\n' +
     'Syntax: run builtin-bayesian.bvar {"series": ["gdp", "cpi"], "lags": 2, "horizon": 8}\n' +
     '  • dv/ivs — outcome and predictors; y/group — numeric outcome and 2-level group.\n' +
-    '  • series — 2+ numeric columns in time order; lags / horizon — past steps in, future steps out.',
+    '  • series — 2+ numeric columns in time order; lags / horizon — past steps in, future steps out.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -91,7 +96,7 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to model and explain.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -102,8 +107,8 @@ export const manifest = {
             { value: 'coef', label: 'Posterior means with 95% credible intervals' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'bayes-ttest',

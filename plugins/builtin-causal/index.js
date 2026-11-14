@@ -41,7 +41,12 @@ export const manifest = {
     'Syntax: run builtin-causal.rdd {"y": "outcome", "run": "score", "cutoff": 0, "bw": 0}\n' +
     'Syntax: run builtin-causal.matching {"y": "outcome", "treat": "treated", "covs": ["age", "sex"], "distance": "glm"}\n' +
     '  • y — the numeric outcome; treat / post — 1 = treated / 1 = after indicators; covs — covariates.\n' +
-    '  • run / cutoff / bw — running variable, threshold, and bandwidth (0 = automatic); distance — "glm" (propensity) or "mahalanobis".',
+    '  • run / cutoff / bw — running variable, threshold, and bandwidth (0 = automatic); distance — "glm" (propensity) or "mahalanobis".' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -113,7 +118,7 @@ export const manifest = {
           { value: 'glm', label: 'Propensity score (logistic)' },
           { value: 'mahalanobis', label: 'Mahalanobis distance' },
         ] },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -124,8 +129,8 @@ export const manifest = {
             { value: 'love', label: 'Covariate balance (love plot)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

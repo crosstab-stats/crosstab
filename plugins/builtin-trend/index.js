@@ -33,7 +33,12 @@ export const manifest = {
   howto:
     "GUI: Time Series ▸ Mann-Kendall trend + Sen's slope…, then pick a numeric series in time order. You get Kendall's tau, the trend test, and Sen's slope (a robust per-step rate).\n" +
     'Syntax: run builtin-trend.run {"series": "value"}\n' +
-    '  • series — the numeric measure to test, rows in time order.',
+    '  • series — the numeric measure to test, rows in time order.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -55,7 +60,7 @@ export const manifest = {
       order: 90,
       inputs: [
         { name: 'series', kind: 'variables', label: 'Series (in time order)', hint: 'The numeric measure to check for a trend, rows in time order.', multiple: false, types: ['numeric'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -66,8 +71,8 @@ export const manifest = {
             { value: 'series', label: "Series with Sen's slope" },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

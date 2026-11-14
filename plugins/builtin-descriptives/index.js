@@ -81,7 +81,12 @@ export const manifest = {
     'Point estimate, lower bound and upper bound at a confidence level you choose, optionally split by a grouping variable.\n' +
     'Syntax: run builtin-descriptives.explore {"vars": ["tvhours"], "level": 99, "by": "sex"}\n' +
     '  • vars — the measures; level — confidence level in percent (default 95); by — optional grouping variable.\n' +
-    '  • Both actions take an optional weight — a survey weight read as a frequency weight, so N becomes its sum.',
+    '  • Both actions take an optional weight — a survey weight read as a frequency weight, so N becomes its sum.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -174,7 +179,7 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the estimates describe the population rather than ' +
             'the sample. Cancel this to count each case once. The caption names the weight used.',
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -186,8 +191,8 @@ export const manifest = {
             { value: 'hist', label: 'Histogram' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

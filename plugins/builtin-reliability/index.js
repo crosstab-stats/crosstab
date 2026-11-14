@@ -31,7 +31,12 @@ export const manifest = {
     'GUI: Scale ▸ Reliability analysis, then pick the scale items (2+). ' +
     "You get Cronbach's α (raw + standardized), McDonald's ω, and per-item statistics (item-total r, α if deleted).\n" +
     'Syntax: run builtin-reliability.run {"vars": ["q1", "q2", "q3"]}\n' +
-    '  • vars — the numeric scale items expected to measure one construct.',
+    '  • vars — the numeric scale items expected to measure one construct.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -65,8 +70,8 @@ export const manifest = {
             { value: 'drop', label: 'Alpha if item deleted' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

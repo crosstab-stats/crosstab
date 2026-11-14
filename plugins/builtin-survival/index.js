@@ -40,7 +40,12 @@ export const manifest = {
     'Syntax: run builtin-survival.cox {"time": "months", "status": "died", "preds": ["age", "treatment"]}\n' +
     '  • time — follow-up time until the event or censoring.\n' +
     '  • status — event indicator (1 = event, 0 = censored).\n' +
-    '  • group — optional grouping variable (Kaplan–Meier); preds — covariates (Cox).',
+    '  • group — optional grouping variable (Kaplan–Meier); preds — covariates (Cox).' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -86,7 +91,7 @@ export const manifest = {
         { name: 'status', kind: 'variables', label: 'Event indicator', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
         { name: 'event', kind: 'level', of: 'status', preferLast: true, label: 'Which category means the EVENT happened?', hint: 'Everything else counts as censored. Hazard ratios are ratios of the hazard of THIS outcome.' },
         { name: 'preds', kind: 'variables', label: 'Predictors', hint: 'The variables you think speed up or slow down the event.', multiple: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -97,8 +102,8 @@ export const manifest = {
             { value: 'coef', label: 'Hazard-ratio plot (log axis)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

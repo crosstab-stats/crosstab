@@ -40,7 +40,12 @@ export const manifest = {
     'Syntax: run builtin-multilevel.linear {"y": "achievement", "fixed": ["ses"], "group": "school"}\n' +
     'Syntax: run builtin-multilevel.logistic {"y": "passed", "fixed": ["ses"], "group": "school"}\n' +
     '  • y — outcome (binary for logistic); fixed — one or more fixed-effect predictors; group — the cluster variable (random intercept).\n' +
-    '  • slope — (linear only) optional predictor given a random slope across groups.',
+    '  • slope — (linear only) optional predictor given a random slope across groups.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -74,7 +79,7 @@ export const manifest = {
         { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', hint: 'Predictors whose average effect you want to estimate.', multiple: true, unique: true },
         { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', hint: 'The cluster each case belongs to, such as school or clinic.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
         { name: 'slope', kind: 'variables', label: 'Random slope for (optional)', hint: 'A predictor whose effect is allowed to vary across groups.', multiple: false, types: ['numeric'], optional: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -86,8 +91,8 @@ export const manifest = {
             { value: 're', label: 'Random effects (caterpillar plot)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'multilevel-logistic',
@@ -99,7 +104,7 @@ export const manifest = {
         { name: 'yes', kind: 'level', of: 'y', preferLast: true, label: 'Which category is being modelled?', hint: 'Odds ratios describe the odds of THIS category. With 1 = Yes / 2 = No coding, pick Yes — otherwise every effect is reported upside down.' },
         { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', hint: 'Predictors whose average effect you want to estimate.', multiple: true, unique: true },
         { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', hint: 'The cluster each case belongs to, such as school or clinic.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -111,8 +116,8 @@ export const manifest = {
             { value: 're', label: 'Random effects (caterpillar plot)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

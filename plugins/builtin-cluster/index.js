@@ -34,7 +34,12 @@ export const manifest = {
     'Syntax: run builtin-cluster.kmeans {"vars": ["x", "y"], "k": 3, "standardize": "z"}\n' +
     '  • vars — the numeric variables used to judge similarity between cases.\n' +
     '  • k — number of clusters to split cases into (default 3).\n' +
-    '  • standardize — "z" (z-scores, default) or "raw".',
+    '  • standardize — "z" (z-scores, default) or "raw".' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -69,7 +74,7 @@ export const manifest = {
             { value: 'raw', label: 'No — raw values' },
           ],
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -81,8 +86,8 @@ export const manifest = {
             { value: 'sizes', label: 'Cluster sizes' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

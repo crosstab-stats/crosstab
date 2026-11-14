@@ -31,7 +31,12 @@ export const manifest = {
     '  • y — numeric outcome.\n' +
     '  • ivs — one or more predictors.\n' +
     '  • m — number of imputations (default 5).\n' +
-    '  • model — "linear" (default) | "logistic".',
+    '  • model — "linear" (default) | "logistic".' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -60,7 +65,7 @@ export const manifest = {
           { value: 'linear', label: 'Linear (OLS)' },
           { value: 'logistic', label: 'Logistic (binary outcome)' },
         ] },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -71,8 +76,8 @@ export const manifest = {
             { value: 'coef', label: 'Pooled estimates with 95% CI' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

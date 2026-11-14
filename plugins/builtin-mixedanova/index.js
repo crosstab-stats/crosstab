@@ -40,7 +40,12 @@ export const manifest = {
     'Syntax: run builtin-mixedanova.ancova {"y": "score", "factors": ["group"], "covs": ["pretest"]}\n' +
     'Syntax: run builtin-mixedanova.mixedAnova {"within": ["time1", "time2", "time3"], "between": "group"}\n' +
     '  • ancova: y — outcome; factors — one or more grouping factors; covs — one or more covariates to adjust for.\n' +
-    '  • mixedAnova: within — one column per condition/time (wide format); between — optional between-subjects factor.',
+    '  • mixedAnova: within — one column per condition/time (wide format); between — optional between-subjects factor.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -73,7 +78,7 @@ export const manifest = {
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose group means you want to compare.', multiple: false, types: ['numeric'], unique: true },
         { name: 'factors', kind: 'variables', label: 'Factor(s)', hint: 'The grouping variables whose effect on the outcome you test.', multiple: true, types: ['factor', 'string', 'numeric'], unique: true },
         { name: 'covs', kind: 'variables', label: 'Covariate(s)', hint: 'Continuous variables to adjust for before testing the factors.', multiple: true, types: ['numeric'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -84,8 +89,8 @@ export const manifest = {
             { value: 'emm', label: 'Estimated marginal means with 95% CI' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'ancova-mixed',

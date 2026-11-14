@@ -31,7 +31,12 @@ export const manifest = {
     'Syntax: run builtin-clusterse.run {"y": "score", "ivs": ["x", "z"], "cluster": "school"}\n' +
     '  • y — the numeric outcome to explain.\n' +
     '  • ivs — one or more predictors.\n' +
-    '  • cluster — the grouping variable (e.g. school or person) SEs allow correlation within.',
+    '  • cluster — the grouping variable (e.g. school or person) SEs allow correlation within.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -56,7 +61,7 @@ export const manifest = {
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         { name: 'cluster', kind: 'variables', label: 'Cluster variable', hint: 'The group cases fall into, like school or person.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -67,8 +72,8 @@ export const manifest = {
             { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

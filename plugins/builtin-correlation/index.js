@@ -35,7 +35,12 @@ export const manifest = {
     '  • method — "pearson" (default) | "spearman" | "kendall".\n' +
     'Syntax: run builtin-correlation.partial {"vars": ["age", "income"], "controls": ["education"], "type": "partial"}\n' +
     '  • controls — variables to partial out.\n' +
-    '  • type — "partial" (default) | "semipartial".',
+    '  • type — "partial" (default) | "semipartial".' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -89,7 +94,7 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the correlation describes the population rather ' +
             'than the sample. Pearson only. Cancel this to count each case once.',
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -100,8 +105,8 @@ export const manifest = {
             { value: 'scatter', label: 'Scatterplot of the first two variables' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'correlation-partial',

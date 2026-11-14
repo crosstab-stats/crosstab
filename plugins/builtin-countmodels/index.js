@@ -32,7 +32,12 @@ export const manifest = {
     'Syntax: run builtin-countmodels.poisson {"dv": "events", "ivs": ["age", "treatment"]}\n' +
     'Syntax: run builtin-countmodels.negbin {"dv": "events", "ivs": ["age", "treatment"]}\n' +
     '  • dv — non-negative count outcome.\n' +
-    '  • ivs — one or more predictors. (negbin is the over-dispersed alternative to poisson.)',
+    '  • ivs — one or more predictors. (negbin is the over-dispersed alternative to poisson.)' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',

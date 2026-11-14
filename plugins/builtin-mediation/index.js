@@ -50,7 +50,12 @@ export const manifest = {
     'Syntax: run builtin-mediation.mediation {"x": "stress", "m": "coping", "y": "wellbeing", "se": "delta"}\n' +
     'Syntax: run builtin-mediation.moderation {"y": "wellbeing", "x": "stress", "w": "support"}\n' +
     '  • mediation: x / m / y — predictor, mediator, outcome; covs — optional controls; se — "delta" (default) | "bootstrap".\n' +
-    '  • moderation: y / x / w — outcome, focal predictor, moderator; covs — optional controls.',
+    '  • moderation: y / x / w — outcome, focal predictor, moderator; covs — optional controls.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -88,7 +93,7 @@ export const manifest = {
           { value: 'delta', label: 'Delta method (fast)' },
           { value: 'bootstrap', label: 'Bootstrap (1000 resamples, slower)' },
         ] },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -99,8 +104,8 @@ export const manifest = {
             { value: 'effects', label: 'Effects with 95% CI' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'mediation-moderation',
@@ -112,7 +117,7 @@ export const manifest = {
         { name: 'x', kind: 'variables', label: 'Focal predictor (X)', hint: 'The predictor whose effect you think depends on the moderator.', multiple: false, types: ['numeric'], unique: true },
         { name: 'w', kind: 'variables', label: 'Moderator (W)', hint: 'The variable that may strengthen or weaken X\'s effect.', multiple: false, types: ['numeric'], unique: true },
         { name: 'covs', kind: 'variables', label: 'Covariates (optional)', hint: 'Extra controls to adjust for, if any.', multiple: true, optional: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -123,8 +128,8 @@ export const manifest = {
             { value: 'slopes', label: 'Simple slopes' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

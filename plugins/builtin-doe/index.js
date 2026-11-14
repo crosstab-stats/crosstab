@@ -30,7 +30,12 @@ export const manifest = {
     'GUI: Regression ▸ Response surface (second-order)…, pick a response and 2+ continuous factors. You get the quadratic model, the stationary point, and a canonical (max/min/saddle) classification.\n' +
     'Syntax: run builtin-doe.run {"y": "yield", "factors": ["temp", "time"]}\n' +
     '  • y — the numeric response to optimize.\n' +
-    '  • factors — two or more continuous factor variables.',
+    '  • factors — two or more continuous factor variables.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -54,7 +59,7 @@ export const manifest = {
       inputs: [
         { name: 'y', kind: 'variables', label: 'Response', hint: 'The measured result you want to optimize.', multiple: false, types: ['numeric'], unique: true },
         { name: 'factors', kind: 'variables', label: 'Factors (2+ continuous)', hint: 'The dials you varied in the experiment, two or more.', multiple: true, types: ['numeric'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -65,8 +70,8 @@ export const manifest = {
             { value: 'pareto', label: 'Pareto of effects' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

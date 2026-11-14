@@ -51,7 +51,12 @@ export const manifest = {
     'Syntax: run builtin-survey.regression {"dv": "voted", "ivs": ["age", "income"], "family": "logistic", "weight": "wt"}\n' +
     '  • weight — the survey weight (required); strata / cluster — optional design ids.\n' +
     '  • vars / rowvar+colvar / dv+ivs — the measures, the two crosstab variables, or the outcome + predictors.\n' +
-    '  • family — regression only: "linear" (default) or "logistic".',
+    '  • family — regression only: "linear" (default) or "logistic".' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   disciplines: ['Social Science', 'Sociology', 'Political Science', 'Ethnic Studies', "Women's & Gender Studies", 'Public Health'],
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
@@ -92,7 +97,7 @@ export const manifest = {
       inputs: [
         { name: 'vars', kind: 'variables', label: 'Variables (numeric)', hint: 'The numeric measures whose weighted averages you want.', multiple: true, types: ['numeric'], unique: true },
         ...DESIGN_INPUTS,
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -103,8 +108,8 @@ export const manifest = {
             { value: 'means', label: 'Weighted means with 95% CI' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'survey-crosstab',

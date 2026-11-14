@@ -39,7 +39,12 @@ export const manifest = {
     'Syntax: run builtin-econometrics.iv {"dv": "wage", "endog": ["educ"], "instruments": ["nearc"], "controls": ["exper"]}\n' +
     '  • iv: endog — endogenous regressor(s); instruments — instrument(s); controls — optional exogenous controls.\n' +
     'Syntax: run builtin-econometrics.panel {"dv": "wage", "ivs": ["educ"], "id": "person", "time": "year", "model": "within"}\n' +
-    '  • panel: id — unit id; time — time index; model — "within" (default) | "random" | "pooling".',
+    '  • panel: id — unit id; time — time index; model — "within" (default) | "random" | "pooling".' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -79,7 +84,7 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think drive the outcome.', multiple: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -90,8 +95,8 @@ export const manifest = {
             { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'econ-iv',
@@ -103,7 +108,7 @@ export const manifest = {
         { name: 'endog', kind: 'variables', label: 'Endogenous regressor(s)', hint: 'The predictor suspected of being tangled up with the error.', multiple: true, unique: true },
         { name: 'instruments', kind: 'variables', label: 'Instrument(s)', hint: 'Variables that affect the regressor but not the outcome directly.', multiple: true, unique: true },
         { name: 'controls', kind: 'variables', label: 'Exogenous controls (optional)', hint: 'Other clean predictors to hold constant.', multiple: true, optional: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -114,8 +119,8 @@ export const manifest = {
             { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'econ-panel',
@@ -139,7 +144,7 @@ export const manifest = {
           ],
           default: 'within',
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -150,8 +155,8 @@ export const manifest = {
             { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

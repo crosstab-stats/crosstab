@@ -31,7 +31,12 @@ export const manifest = {
     'You get the four multivariate tests (Pillai, Wilks, Hotelling–Lawley, Roy) plus per-outcome ANOVAs.\n' +
     'Syntax: run builtin-manova.run {"dvs": ["score1", "score2"], "group": "treatment"}\n' +
     '  • dvs — two or more numeric outcomes compared at once.\n' +
-    '  • group — the factor that sorts cases into groups.',
+    '  • group — the factor that sorts cases into groups.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -55,7 +60,7 @@ export const manifest = {
       inputs: [
         { name: 'dvs', kind: 'variables', label: 'Outcomes (2+ numeric)', hint: 'The numeric measures to compare across groups all at once.', multiple: true, types: ['numeric'], unique: true },
         { name: 'group', kind: 'variables', label: 'Factor', hint: 'The variable that sorts cases into the groups being compared.', types: ['factor', 'string', 'numeric'], unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -66,8 +71,8 @@ export const manifest = {
             { value: 'profile', label: 'Profile of group means across the outcomes' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

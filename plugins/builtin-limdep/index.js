@@ -38,7 +38,12 @@ export const manifest = {
     'Syntax: run builtin-limdep.tobit {"y": "hours", "ivs": ["age"], "left": 0, "right": 0}\n' +
     '  • tobit: left/right — lower/upper censoring limits (0/blank = none).\n' +
     'Syntax: run builtin-limdep.heckman {"y": "wage", "outIv": ["educ"], "sel": "working", "selIv": ["kids"]}\n' +
-    '  • heckman: sel — selection indicator (1 = observed); outIv/selIv — outcome / selection predictors.',
+    '  • heckman: sel — selection indicator (1 = observed); outIv/selIv — outcome / selection predictors.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -79,7 +84,7 @@ export const manifest = {
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome whose distribution you want to model.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think shape the outcome.', multiple: true, unique: true },
         { name: 'taus', kind: 'text', label: 'Quantiles (comma-separated)', hint: 'Which points of the outcome to model, like .25, .5, .75.', default: '0.25, 0.5, 0.75' },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -90,8 +95,8 @@ export const manifest = {
             { value: 'path', label: 'Coefficient path across quantiles' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'limdep-tobit',
@@ -103,7 +108,7 @@ export const manifest = {
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         { name: 'left', kind: 'number', label: 'Lower censoring limit (blank = none)', hint: 'The floor value many cases are stuck at, if any.', default: 0, optional: true },
         { name: 'right', kind: 'number', label: 'Upper censoring limit (blank = none)', hint: 'The ceiling value many cases are stuck at, if any.', default: 0, optional: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -114,8 +119,8 @@ export const manifest = {
             { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'limdep-heckman',
@@ -127,7 +132,7 @@ export const manifest = {
         { name: 'outIv', kind: 'variables', label: 'Outcome predictors', hint: 'The variables you think predict the outcome itself.', multiple: true, unique: true },
         { name: 'sel', kind: 'variables', label: 'Selection indicator (1 = observed)', hint: 'Marks who is observed: 1 if selected, 0 if not.', multiple: false, unique: true },
         { name: 'selIv', kind: 'variables', label: 'Selection predictors', hint: 'The variables you think drive whether a case is observed.', multiple: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -138,8 +143,8 @@ export const manifest = {
             { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

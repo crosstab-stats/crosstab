@@ -35,7 +35,12 @@ export const manifest = {
     'diagnostic plots SPSS does not print.\n' +
     'Syntax: run builtin-regression.run {"dv": "income", "ivs": ["age", "education"]}\n' +
     '  • dv — the numeric outcome to explain.\n' +
-    '  • ivs — one or more predictor variables.',
+    '  • ivs — one or more predictor variables.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // No svglite: the diagnostics are chart MODELS now, drawn by the host. Dropping the
   // declaration matters beyond tidiness — the offline cache pre-fetches the R packages of
   // ENABLED plugins, so a stale entry costs every user a download they never use.
@@ -62,7 +67,7 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric measure you want to explain or predict.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -73,8 +78,8 @@ export const manifest = {
             { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

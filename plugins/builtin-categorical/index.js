@@ -40,7 +40,12 @@ export const manifest = {
     '  • variable / outcome / groups — the categorical variable(s); expected — comma-separated proportions (blank = equal); p0 — the test proportion.\n' +
     '  • category (oneProp) — which of the two categories is tested against p0; omit to test the second category.\n' +
     '  • weight (oneProp) — optional frequency weight; with it N is the sum of weights and the test uses a normal approximation instead of the exact binomial.\n' +
-    '  • other actions: McNemar\'s test (paired) — run builtin-categorical.mcnemar {"v1": "before", "v2": "after"}; Log-linear model — run builtin-categorical.loglinear {"vars": ["a", "b"], "model": "homogeneous"}.',
+    '  • other actions: McNemar\'s test (paired) — run builtin-categorical.mcnemar {"v1": "before", "v2": "after"}; Log-linear model — run builtin-categorical.loglinear {"vars": ["a", "b"], "model": "homogeneous"}.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -96,7 +101,7 @@ export const manifest = {
       inputs: [
         { name: 'variable', kind: 'variables', label: 'Variable', hint: 'The categorical variable whose distribution you want to test.', types: ['factor', 'string', 'numeric'] },
         { name: 'expected', kind: 'text', label: 'Expected proportions (comma-separated; blank = equal)', hint: 'The proportions you expect per category; blank assumes equal.', optional: true },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -107,8 +112,8 @@ export const manifest = {
             { value: 'obsexp', label: 'Observed vs expected counts' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
     {
       howto: 'categorical-oneprop',

@@ -105,7 +105,12 @@ export const manifest = {
     'Syntax: run builtin-frequencies.run {"vars": ["gender", "region"], "statistics": ["mode", "median"]}\n' +
     '  • vars — one or more variables to tabulate.\n' +
     '  • statistics — optional list from: ' + STATS.map((s) => s.value).join(', ') + '.\n' +
-    '  • weight — optional survey weight; counts become weighted case counts and the caption names it.',
+    '  • weight — optional survey weight; counts become weighted case counts and the caption names it.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // The how-to INDEX (#192) — ids, titles and search terms only; the prose lives in
   // `howtoFile`, which ships with the plugin and is read on demand. The one-line `howto`
   // above stays: it is the short form shown behind the 🔍 in the plugin manager.
@@ -179,7 +184,7 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the table describes the population rather than ' +
             'the sample. Cancel this to count each case once. The caption names the weight used.',
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -191,8 +196,8 @@ export const manifest = {
             { value: 'pie', label: 'Pie chart' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };

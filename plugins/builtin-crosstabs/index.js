@@ -36,7 +36,12 @@ export const manifest = {
     '  • pmethod — "asymptotic" (default) or "montecarlo" (sparse tables).\n' +
     '  • percent — "none" | "row" | "column" | "total".\n' +
     '  • measures — association measures (see the dialog for options).\n' +
-    '  • weight — optional survey weight; cells become weighted case counts.',
+    '  • weight — optional survey weight; cells become weighted case counts.' +
+    '\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. The dialog lists\n'
+    + '    what this analysis offers; every chart arrives live, with its error bars,\n'
+    + '    marks and palette as controls on the chart itself.',
+
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -123,7 +128,7 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the table describes the population rather than ' +
             'the sample. Cancel this to count each case once. The caption names the weight used.',
         },
-              {
+        {
           name: 'plots',
           kind: 'choice',
           label: 'Plots',
@@ -135,8 +140,8 @@ export const manifest = {
             { value: 'stacked', label: 'Stacked bar chart (100%)' },
           ],
           default: [],
-      },
-],
+        },
+      ],
     },
   ],
 };
