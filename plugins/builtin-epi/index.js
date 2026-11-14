@@ -17,7 +17,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, ci, labelOf, metaMap, unpackR: flat } = globalThis.ctStd;
+const { fixed: f, ci, labelOf, metaMap, unpackR: flat, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -58,12 +58,24 @@ export const manifest = {
         { name: 'exposed', kind: 'level', of: 'exposure', preferLast: true, label: 'Which category is EXPOSED?', hint: 'Every measure below is the effect of being in this category. With 1 = Yes / 2 = No coding, pick Yes — otherwise the risk ratio describes the effect of being unexposed.' },
         { name: 'outcome', kind: 'variables', label: 'Outcome', hint: 'The yes/no outcome marking who became a case.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
         { name: 'case', kind: 'level', of: 'outcome', preferLast: true, label: 'Which category is a CASE?', hint: 'The outcome you are counting — the event, illness or relapse, rather than its absence.' },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the table.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'forest', label: 'Risk and odds ratios (log axis)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
-export async function run(app, { exposure: expName, outcome: outName, exposed, case: caseLevel }) {
+export async function run(app, { exposure: expName, outcome: outName, exposed, case: caseLevel, plots }) {
   if (!expName || !outName) {
     await app.results.appendError('Choose an exposure variable and an outcome variable (both binary).');
     return;
@@ -148,6 +160,24 @@ export async function run(app, { exposure: expName, outcome: outName, exposed, c
       caption: `Effect Measures — exposed = ${lv(expName, expPos)}, case = ${lv(outName, outPos)}`,
     },
   );
+
+  if ([].concat(plots ?? []).includes('forest')) {
+    // A 2x2 effect measure is published as exactly this row, which is why the kind is
+    // called forest. Both ratios on one LOG axis against 1: RR and OR answer slightly
+    // different questions and seeing them together is how a reader judges whether the
+    // odds ratio is exaggerating a common outcome.
+    const model = coefficientForest({
+      terms: ['Risk ratio (RR)', 'Odds ratio (OR)'],
+      est: [rr, or],
+      lo: [Math.exp(Math.log(rr) - 1.96 * seLogRr), Math.exp(Math.log(or) - 1.96 * seLogOr)],
+      hi: [Math.exp(Math.log(rr) + 1.96 * seLogRr), Math.exp(Math.log(or) + 1.96 * seLogOr)],
+      title: `Effect of ${lv(expName, expPos)} on ${lv(outName, outPos)}`,
+      xTitle: 'Ratio (log scale)',
+      ratio: true,
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
   await app.results.appendText(
     '**RR** and **OR** > 1 mean exposure raises the outcome; **RD** is the absolute risk change; **NNT/NNH** = 1/|RD| is how many exposed for one extra (averted) case. RR and risk difference are interpretable only with cohort/experimental sampling; in case-control designs use the OR. CIs are Wald.',
   );

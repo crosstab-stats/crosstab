@@ -93,6 +93,18 @@ export const manifest = {
       inputs: [
         { name: 'x', kind: 'variables', hint: 'The numeric variable whose mean you want a robust interval for.', types: ['numeric'], multiple: false },
         { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. Showing the sampling distribution is the whole argument of the method.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'dist', label: 'Bootstrap distribution, with the interval marked' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -118,6 +130,18 @@ export const manifest = {
           ],
         },
         { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. Showing the sampling distribution is the whole argument of the method.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'dist', label: 'Bootstrap distribution, with the interval marked' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -129,6 +153,18 @@ export const manifest = {
         { name: 'x', kind: 'variables', label: 'Variable X', hint: 'One of the two numeric variables to correlate.', multiple: false, types: ['numeric'], unique: true },
         { name: 'y', kind: 'variables', label: 'Variable Y', hint: 'The other numeric variable to correlate with the first.', multiple: false, types: ['numeric'], unique: true },
         { name: 'reps', kind: 'number', label: 'Number of resamples', hint: 'How many bootstrap samples to draw; more gives a smoother estimate.', default: 2000 },
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. Showing the sampling distribution is the whole argument of the method.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'dist', label: 'Bootstrap distribution, with the interval marked' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -153,6 +189,18 @@ export const manifest = {
           ],
         },
         { name: 'reps', kind: 'number', label: 'Number of permutations', hint: 'How many random label-shuffles to run; more sharpens the p-value.', default: 5000 },
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. Showing the sampling distribution is the whole argument of the method.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'dist', label: 'Permutation distribution, with the observed difference marked' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -174,7 +222,8 @@ export const manifest = {
  * @param {object} app
  * @param {{x: string, reps: number}} inputs
  */
-export async function run(app, { x: name, reps }) {
+export async function run(app, { x: name, reps, plots }) {
+  const wantDist = [].concat(plots ?? []).includes('dist');
   if (!name) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
   const label = meta.get(name)?.label || name;
@@ -212,6 +261,27 @@ export async function run(app, { x: name, reps }) {
     },
     { caption: `Bootstrap of the mean — ${label} (${(r.reps || reps).toLocaleString()} resamples)` },
   );
+
+  if (wantDist) {
+    // The sampling distribution IS the argument. A bootstrap interval printed as two
+    // numbers asks the reader to take the shape on trust — whether it is symmetric,
+    // whether it is skewed, whether the interval sits where the mass is. With the
+    // bounds as guides, the figure makes its own case.
+    const reps = r.boot || [];
+    if (reps.length) {
+      await app.results.appendChart({
+        kind: 'histogram',
+        title: `Bootstrap distribution of the mean — ${label}`,
+        values: reps,
+        axes: { x: { title: 'Resampled mean' }, y: { title: 'Resamples' } },
+        guides: [
+          { axis: 'x', at: r.observed, label: 'Observed' },
+          { axis: 'x', at: r.ci_lo, label: 'Lower' },
+          { axis: 'x', at: r.ci_hi, label: 'Upper' },
+        ],
+      });
+    }
+  }
   await app.results.appendText(
     `The ${(r.reps || reps).toLocaleString()} resampled means are now a dataset, **Bootstrap mean of ${name}** ` +
       '(the active dataset). Plot it with **Graphs ▸ Histogram** on `boot_mean`.',
@@ -248,7 +318,8 @@ const STAT_LABEL = {
  * @param {object} app
  * @param {{x: string, stat: string, reps: number}} inputs
  */
-export async function bootStatistic(app, { x: name, stat, reps }) {
+export async function bootStatistic(app, { x: name, stat, reps, plots }) {
+  const wantDist = [].concat(plots ?? []).includes('dist');
   if (!name) return;
   await app.webr.installPackages(['boot']);
   const meta = metaMap(await app.data.getVariableMeta());
@@ -266,7 +337,8 @@ export async function bootStatistic(app, { x: name, stat, reps }) {
       function(d, i) mean(d[i]))
     b <- boot(x, fn, R = B)
     bca <- tryCatch(boot.ci(b, type = "bca")$bca[4:5], error = function(e) c(NA_real_, NA_real_))
-    list(observed = b$t0, se = sd(b$t), lo = bca[1], hi = bca[2], n = n, reps = B)`;
+    list(observed = b$t0, se = sd(b$t), lo = bca[1], hi = bca[2], n = n, reps = B,
+         boot = ${wantDist ? 'as.numeric(b$t)' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = unpackR(result);
@@ -277,6 +349,27 @@ export async function bootStatistic(app, { x: name, stat, reps }) {
     },
     { caption: `Bootstrap — ${STAT_LABEL[stat] || stat} of ${labelOf(meta.get(name), name)}` },
   );
+
+  if (wantDist) {
+    // The sampling distribution IS the argument. A bootstrap interval printed as two
+    // numbers asks the reader to take the shape on trust — whether it is symmetric,
+    // whether it is skewed, whether the interval sits where the mass is. With the
+    // bounds as guides, the figure makes its own case.
+    const reps = r.nums('boot');
+    if (reps.length) {
+      await app.results.appendChart({
+        kind: 'histogram',
+        title: `Bootstrap distribution — ${STAT_LABEL[stat] || stat}`,
+        values: reps,
+        axes: { x: { title: `Resampled ${STAT_LABEL[stat] || stat}` }, y: { title: 'Resamples' } },
+        guides: [
+          { axis: 'x', at: r.num1('observed'), label: 'Observed' },
+          { axis: 'x', at: r.num1('lo'), label: 'Lower' },
+          { axis: 'x', at: r.num1('hi'), label: 'Upper' },
+        ],
+      });
+    }
+  }
   await app.results.appendText(
     'The CI is **bias-corrected and accelerated (BCa)** — generally the most accurate bootstrap interval, and unlike a textbook formula it needs no assumption about the statistic’s sampling distribution.',
   );
@@ -286,7 +379,8 @@ export async function bootStatistic(app, { x: name, stat, reps }) {
  * @param {object} app
  * @param {{x: string, y: string, reps: number}} inputs
  */
-export async function bootCorr(app, { x: xName, y: yName, reps }) {
+export async function bootCorr(app, { x: xName, y: yName, reps, plots }) {
+  const wantDist = [].concat(plots ?? []).includes('dist');
   if (!xName || !yName) return;
   await app.webr.installPackages(['boot']);
   const meta = metaMap(await app.data.getVariableMeta());
@@ -297,7 +391,8 @@ export async function bootCorr(app, { x: xName, y: yName, reps }) {
     B <- as.integer(min(max(if (is.finite(reps)) reps else 2000, 200), 100000))
     b <- boot(d, function(dat, i) cor(dat$x[i], dat$y[i]), R = B)
     bca <- tryCatch(boot.ci(b, type = "bca")$bca[4:5], error = function(e) c(NA_real_, NA_real_))
-    list(observed = b$t0, se = sd(b$t), lo = bca[1], hi = bca[2], n = nrow(d), reps = B)`;
+    list(observed = b$t0, se = sd(b$t), lo = bca[1], hi = bca[2], n = nrow(d), reps = B,
+         boot = ${wantDist ? 'as.numeric(b$t)' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = unpackR(result);
@@ -308,6 +403,27 @@ export async function bootCorr(app, { x: xName, y: yName, reps }) {
     },
     { caption: `Bootstrap correlation — ${labelOf(meta.get(xName), xName)} & ${labelOf(meta.get(yName), yName)}` },
   );
+
+  if (wantDist) {
+    // The sampling distribution IS the argument. A bootstrap interval printed as two
+    // numbers asks the reader to take the shape on trust — whether it is symmetric,
+    // whether it is skewed, whether the interval sits where the mass is. With the
+    // bounds as guides, the figure makes its own case.
+    const reps = r.nums('boot');
+    if (reps.length) {
+      await app.results.appendChart({
+        kind: 'histogram',
+        title: 'Bootstrap distribution of r',
+        values: reps,
+        axes: { x: { title: 'Resampled r' }, y: { title: 'Resamples' } },
+        guides: [
+          { axis: 'x', at: r.num1('observed'), label: 'Observed' },
+          { axis: 'x', at: r.num1('lo'), label: 'Lower' },
+          { axis: 'x', at: r.num1('hi'), label: 'Upper' },
+        ],
+      });
+    }
+  }
 }
 
 // --- Permutation / randomization test ----------------------------------------
@@ -316,7 +432,8 @@ export async function bootCorr(app, { x: xName, y: yName, reps }) {
  * @param {object} app
  * @param {{y: string, group: string, stat: string, reps: number}} inputs
  */
-export async function permutation(app, { y: yName, group: gName, g1, g2, stat, reps }) {
+export async function permutation(app, { y: yName, group: gName, g1, g2, stat, reps, plots }) {
+  const wantDist = [].concat(plots ?? []).includes('dist');
   const g1want = g1 != null && g1 !== '' ? JSON.stringify(String(g1)) : 'NULL';
   const g2want = g2 != null && g2 !== '' ? JSON.stringify(String(g2)) : 'NULL';
   if (!yName || !gName) return;
@@ -342,7 +459,8 @@ export async function permutation(app, { y: yName, group: gName, g1, g2, stat, r
     perm <- replicate(B, diff(sample(N, na)))
     p <- (1 + sum(abs(perm) >= abs(obs))) / (B + 1)
     list(lv = as.character(lv), n1 = length(a), n2 = length(b), m1 = mean(a), m2 = mean(b),
-         obs = obs, p = p, reps = B)`;
+         obs = obs, p = p, reps = B,
+         perm = ${wantDist ? 'as.numeric(perm)' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = unpackR(result);
@@ -358,6 +476,22 @@ export async function permutation(app, { y: yName, group: gName, g1, g2, stat, r
     },
     { caption: `Permutation test — ${labelOf(meta.get(yName), yName)} by ${labelOf(meta.get(gName), gName)}` },
   );
+
+  if (wantDist) {
+    // The null distribution the p-value counts against, with the observed difference
+    // standing in it. This is the one figure that makes a permutation test explain
+    // itself: everything to the right of the line is the tail being counted.
+    const perm = r.nums('perm');
+    if (perm.length) {
+      await app.results.appendChart({
+        kind: 'histogram',
+        title: 'Permutation distribution (null)',
+        values: perm,
+        axes: { x: { title: 'Difference under the null' }, y: { title: 'Permutations' } },
+        guides: [{ axis: 'x', at: r.num1('obs'), label: 'Observed' }],
+      });
+    }
+  }
   await app.results.appendTable(
     {
       columns: [`Observed difference in ${what}`, 'Permutation p (two-sided)', 'Permutations'],

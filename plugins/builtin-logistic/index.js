@@ -38,7 +38,7 @@ const CASEWISE_CAP = 500;
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, fmtP, labelOf, rStr, unpackR } = globalThis.ctStd;
+const { fixed: f, fmtP, labelOf, rStr, unpackR, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -118,6 +118,8 @@ export const manifest = {
             { value: 'ci', label: `CI for Exp(B) (${CI_LEVEL}%)` },
             { value: 'hl', label: 'Hosmer–Lemeshow goodness-of-fit' },
             { value: 'plot', label: 'Classification plot' },
+            { value: 'roc', label: 'ROC curve (with AUC)' },
+            { value: 'or', label: 'Odds-ratio plot (log axis)' },
             { value: 'casewise', label: `Casewise listing of residuals (|ZResid| > ${CASEWISE_SD})` },
           ],
           default: ['class'],
@@ -247,6 +249,20 @@ ${needPred ? '    pred <- as.integer(p >= 0.5)\n' : ''}${want.has('class') ? `
       cwObs = yv[sel], cwPred = p[sel], cwGroup = pred[sel],
       cwResid = (yv - p)[sel], cwZ = zres[sel]
     ))
+` : ''}${want.has('roc') ? `
+    # The ROC curve and its AUC, written out rather than taken from pROC: it is a sort
+    # and two cumulative sums, and a package for that is a multi-megabyte download into
+    # a browser. AUC is the Mann-Whitney statistic — the probability that a random
+    # positive outranks a random negative — which is also how ties are handled right.
+    ord <- order(p, decreasing = TRUE)
+    ys <- yv[ord]
+    tp <- cumsum(ys); fp <- cumsum(1 - ys)
+    nPos <- sum(yv == 1); nNeg <- sum(yv == 0)
+    rk <- rank(p)
+    auc <- if (nPos > 0 && nNeg > 0) (sum(rk[yv == 1]) - nPos * (nPos + 1) / 2) / (nPos * nNeg) else NA_real_
+    res <- c(res, list(
+      rocTpr = c(0, tp / max(1, nPos)), rocFpr = c(0, fp / max(1, nNeg)), auc = auc
+    ))
 ` : ''}${want.has('plot') ? `
     br <- seq(0, 1, by = 0.05)
     pb <- cut(p, breaks = br, include.lowest = TRUE)
@@ -352,6 +368,15 @@ ${needPred ? '    pred <- as.integer(p >= 0.5)\n' : ''}${want.has('class') ? `
 
   // --- Variables in the Equation ------------------------------------------------
   const ci = want.has('ci');
+  /** A coefficient's row name — shared by the table and the odds-ratio plot, so the
+   * figure and the table cannot end up calling the same term two different things. */
+  const rowName = (i) => {
+    const t = m.terms[i];
+    const v = m.termVar[i] || t;
+    const lvl = m.termLevel[i] || '';
+    if (t === '(Intercept)') return 'Constant';
+    return lvl ? `${labelOf(meta.get(v), v)} = ${textOf(v, lvl)}` : labelOf(meta.get(v), v);
+  };
   await app.results.appendTable(
     {
       columns: [
@@ -360,13 +385,7 @@ ${needPred ? '    pred <- as.integer(p >= 0.5)\n' : ''}${want.has('class') ? `
       ],
       rows: m.terms.map((t, i) => {
         const wald = Number.isFinite(m.z[i]) ? m.z[i] * m.z[i] : NaN;
-        const v = m.termVar[i] || t;
-        const lv = m.termLevel[i] || '';
-        const name = t === '(Intercept)'
-          ? 'Constant'
-          : lv
-            ? `${labelOf(meta.get(v), v)} = ${textOf(v, lv)}`
-            : labelOf(meta.get(v), v);
+        const name = rowName(i);
         return [
           name,
           f(m.estimate[i], 3), f(m.se[i], 3), f(wald, 3), '1', fmtP(m.p[i]), f(m.expb[i], 3),
@@ -418,6 +437,47 @@ ${needPred ? '    pred <- as.integer(p >= 0.5)\n' : ''}${want.has('class') ? `
         );
       }
     }
+  }
+
+  // --- ROC curve ------------------------------------------------------------------
+  if (want.has('roc') && m.rocTpr.length > 1) {
+    // The standard discrimination figure. The chance diagonal is a REFERENCE, not a
+    // finding — it is what the curve is read against — so it rides on the reference
+    // line the frames gained with the guide layer, which is the thing that made a
+    // ROC curve drawable here at all.
+    await app.results.appendChart({
+      kind: 'steps',
+      title: `ROC curve — ${dvLabel} = ${outcomeText(m.positive)}${
+        Number.isFinite(m.auc) ? ` (AUC = ${f(m.auc, 3)})` : ''}`,
+      series: [{
+        key: 'roc',
+        label: 'Model',
+        points: m.rocFpr.map((x, i) => ({ x, y: m.rocTpr[i] })),
+      }],
+      reference: { slope: 1, intercept: 0, label: 'Chance' },
+      axes: { x: { title: '1 − specificity (false positive rate)' }, y: { title: 'Sensitivity (true positive rate)' } },
+    });
+    await app.results.appendText(
+      `**AUC = ${f(m.auc, 3)}** — the probability that a randomly chosen `
+      + `${outcomeText(m.positive)} case is given a higher predicted probability than a `
+      + `randomly chosen ${outcomeText(m.negative)} one. 0.5 is the diagonal (no `
+      + 'discrimination); .7–.8 is usually called acceptable, .8–.9 excellent.',
+    );
+  }
+
+  // --- Odds ratios ----------------------------------------------------------------
+  if (want.has('or')) {
+    const model = coefficientForest({
+      terms: m.terms.map((_t, i) => rowName(i)),
+      est: m.expb,
+      lo: m.expbLo,
+      hi: m.expbHi,
+      title: 'Odds ratios (95% CI)',
+      xTitle: 'Odds ratio',
+      valueHeading: 'OR [95% CI]',
+      ratio: true,
+    });
+    if (model) await app.results.appendChart(model);
   }
 
   // --- Classification plot --------------------------------------------------------
@@ -479,6 +539,9 @@ function normalizeResult(rList) {
     cwResid: r.nums('cwResid'),
     cwZ: r.nums('cwZ'),
     plBin: r.strs('plBin'),
+    rocTpr: r.nums('rocTpr'),
+    rocFpr: r.nums('rocFpr'),
+    auc: r.num1('auc'),
     plC0: r.nums('plC0'),
     plC1: r.nums('plC1'),
   };

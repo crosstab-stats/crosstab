@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap: metaMapOf, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap: metaMapOf, unpackR: flat, bucketRaw, SUBJECT_LINE_LIMIT } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -80,7 +80,19 @@ export const manifest = {
         { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable that splits cases into groups; pick the two to compare next.', multiple: false, types: ['factor', 'string'], unique: true },
         { name: 'g1', kind: 'level', of: 'g', label: 'Group 1', hint: 'The first group to compare. A variable with more than two groups can now be compared two at a time rather than being refused.' },
         { name: 'g2', kind: 'level', of: 'g', exclude: 'g1', label: 'Group 2', hint: 'The second group, compared against Group 1.' },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want. A rank test is read off the distributions, so that is what these draw.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'dist', label: 'Distribution by group (box plot)' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'nonparametric-wilcoxon',
@@ -90,7 +102,20 @@ export const manifest = {
       inputs: [
         { name: 'x1', kind: 'variables', label: 'Variable 1', hint: 'The first of two repeated measures on the same cases.', multiple: false, types: ['numeric'], unique: true },
         { name: 'x2', kind: 'variables', label: 'Variable 2', hint: 'The second measure, compared against the first.', multiple: false, types: ['numeric'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the table.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'subjects', label: 'One line per case (before-after)' },
+            { value: 'diff', label: 'Distribution of the differences' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'nonparametric-kruskal',
@@ -100,15 +125,28 @@ export const manifest = {
       inputs: [
         { name: 'y', kind: 'variables', label: 'Test variable', hint: 'The numeric or ordinal measure whose ranks you compare.', multiple: false, types: ['numeric'], unique: true },
         { name: 'g', kind: 'variables', label: 'Groups', hint: 'The variable that splits cases into three or more groups.', multiple: false, types: ['factor', 'string'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want. A rank test is read off the distributions, so that is what these draw.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'dist', label: 'Distribution by group (box plot)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
 // --- Mann-Whitney U ----------------------------------------------------------
 
-export async function mannWhitney(app, { y: yName, g: gName, g1, g2 }) {
+export async function mannWhitney(app, { y: yName, g: gName, g1, g2, plots }) {
   if (!yName || !gName) return;
+  const wantDist = [].concat(plots ?? []).includes('dist');
   const g1want = g1 != null && g1 !== '' ? JSON.stringify(String(g1)) : 'NULL';
   const g2want = g2 != null && g2 !== '' ? JSON.stringify(String(g2)) : 'NULL';
   const meta = await metaMap(app);
@@ -137,7 +175,9 @@ export async function mannWhitney(app, { y: yName, g: gName, g1, g2 }) {
     Z <- (U1 - mU) / sU
     p <- 2 * pnorm(-abs(Z))
     list(levels = lv, n = c(n1, n2), meanRank = c(R1 / n1, R2 / n2), sumRank = c(R1, R2),
-         U = U, W = min(R1, R2), Z = Z, p = p, r = abs(Z) / sqrt(N))`;
+         U = U, W = min(R1, R2), Z = Z, p = p, r = abs(Z) / sqrt(N),
+         rawY = ${wantDist ? 'y' : 'numeric(0)'},
+         rawG = ${wantDist ? 'as.integer(g == lv[2]) + 1L' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -157,12 +197,35 @@ export async function mannWhitney(app, { y: yName, g: gName, g1, g2 }) {
     },
     { caption: 'Mann-Whitney U Test' },
   );
+
+  if (wantDist) {
+    // A rank test is a statement about the DISTRIBUTIONS, so the figure is the
+    // distributions. A bar of means would be the one chart that contradicts the test
+    // being run — the whole reason to reach for a rank test is that the mean is not
+    // the summary you trust here.
+    const raw = bucketRaw(r.nums('rawY'), r.nums('rawG'), 2);
+    const groups = lv.map((l) => valueLabel(meta, gName, l))
+      .map((lab, i) => ({ key: `g${i}`, label: String(lab), values: raw[i] || [] }))
+      .filter((g) => g.values.length);
+    if (groups.length) {
+      await app.results.appendChart({
+        kind: 'box',
+        title: `${label(meta, yName)} by ${label(meta, gName)}`,
+        groups,
+        axes: { x: { title: label(meta, gName) }, y: { title: label(meta, yName) } },
+        view: { showPoints: groups.every((g) => g.values.length <= 60) },
+      });
+    }
+  }
 }
 
 // --- Wilcoxon signed-rank ----------------------------------------------------
 
-export async function wilcoxon(app, { x1: n1, x2: n2 }) {
+export async function wilcoxon(app, { x1: n1, x2: n2, plots }) {
   if (!n1 || !n2) return;
+  const wantP = new Set([].concat(plots ?? []));
+  const wantPairs = wantP.has('subjects');
+  const wantDiff = wantP.has('diff');
   const meta = await metaMap(app);
   const rCode = `
     x1 <- as.numeric(x1); x2 <- as.numeric(x2)
@@ -183,7 +246,9 @@ export async function wilcoxon(app, { x1: n1, x2: n2 }) {
     list(nNeg = nNeg, nPos = nPos, ties = ties,
          mrNeg = if (nNeg) sum(rank(abs(nz))[nz < 0]) / nNeg else 0,
          mrPos = if (nPos) sum(rank(abs(nz))[nz > 0]) / nPos else 0,
-         srNeg = sumNeg, srPos = sumPos, Z = Z, p = p, r = abs(Z) / sqrt(n))`;
+         srNeg = sumNeg, srPos = sumPos, Z = Z, p = p, r = abs(Z) / sqrt(n),
+         rawX1 = ${wantPairs ? 'x1' : 'numeric(0)'}, rawX2 = ${wantPairs ? 'x2' : 'numeric(0)'},
+         rawD = ${wantDiff ? 'd' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -206,11 +271,47 @@ export async function wilcoxon(app, { x1: n1, x2: n2 }) {
     },
     { caption: `Wilcoxon Signed-Rank Test — ${label(meta, n1)} vs ${label(meta, n2)}` },
   );
+
+  if (wantPairs) {
+    const a = r.nums('rawX1');
+    const b = r.nums('rawX2');
+    if (a.length && a.length === b.length) {
+      if (a.length > SUBJECT_LINE_LIMIT) {
+        await app.results.appendText(
+          `_Per-case lines skipped: ${int(a.length)} pairs would be an unreadable thicket `
+          + `(the limit is ${SUBJECT_LINE_LIMIT})._`,
+        );
+      } else {
+        await app.results.appendChart({
+          kind: 'paired',
+          title: `${label(meta, n1)} → ${label(meta, n2)}`,
+          conditions: [{ key: 'c1', label: label(meta, n1) }, { key: 'c2', label: label(meta, n2) }],
+          subjects: a.map((v, i) => ({ key: `s${i}`, label: `Case ${i + 1}`, values: [v, b[i]] })),
+          axes: { x: { title: '' }, y: { title: label(meta, n1) } },
+        });
+      }
+    }
+  }
+  if (wantDiff) {
+    const d = r.nums('rawD');
+    if (d.length) {
+      // The signed differences are what the test ranks, so this is the test's own
+      // quantity — with zero marked, which is the hypothesis.
+      await app.results.appendChart({
+        kind: 'histogram',
+        title: `Differences (${label(meta, n2)} − ${label(meta, n1)})`,
+        values: d,
+        axes: { x: { title: 'Difference' }, y: { title: 'Count' } },
+        guides: [{ axis: 'x', at: 0, label: 'No change' }],
+      });
+    }
+  }
 }
 
 // --- Kruskal-Wallis ----------------------------------------------------------
 
-export async function kruskal(app, { y: yName, g: gName }) {
+export async function kruskal(app, { y: yName, g: gName, plots }) {
+  const wantDist = [].concat(plots ?? []).includes('dist');
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   const rCode = `
@@ -223,7 +324,9 @@ export async function kruskal(app, { y: yName, g: gName }) {
     list(levels = levels(g), n = as.integer(tapply(y, g, length)),
          meanRank = as.numeric(tapply(rk, g, mean)),
          H = unname(kt$statistic), df = unname(kt$parameter), p = kt$p.value,
-         eps2 = max(0, (unname(kt$statistic) - k + 1) / (N - k)))`;
+         eps2 = max(0, (unname(kt$statistic) - k + 1) / (N - k)),
+         rawY = ${wantDist ? 'y' : 'numeric(0)'},
+         rawG = ${wantDist ? 'match(as.character(g), levels(g))' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -243,6 +346,26 @@ export async function kruskal(app, { y: yName, g: gName }) {
     },
     { caption: 'Kruskal-Wallis Test' },
   );
+
+  if (wantDist) {
+    // A rank test is a statement about the DISTRIBUTIONS, so the figure is the
+    // distributions. A bar of means would be the one chart that contradicts the test
+    // being run — the whole reason to reach for a rank test is that the mean is not
+    // the summary you trust here.
+    const raw = bucketRaw(r.nums('rawY'), r.nums('rawG'), lv.length);
+    const groups = lv.map((l) => valueLabel(meta, gName, l))
+      .map((lab, i) => ({ key: `g${i}`, label: String(lab), values: raw[i] || [] }))
+      .filter((g) => g.values.length);
+    if (groups.length) {
+      await app.results.appendChart({
+        kind: 'box',
+        title: `${label(meta, yName)} by ${label(meta, gName)}`,
+        groups,
+        axes: { x: { title: label(meta, gName) }, y: { title: label(meta, yName) } },
+        view: { showPoints: groups.every((g) => g.values.length <= 60) },
+      });
+    }
+  }
 }
 
 // --- helpers -----------------------------------------------------------------
