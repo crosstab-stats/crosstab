@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat, levelLabel } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -33,15 +33,23 @@ export const manifest = {
   disciplines: ['Psychology', 'Nutrition, Food & Dietetics', 'Education', 'Family & Consumer Sciences', 'Gerontology', 'Public Health'],
   howto:
     "GUI: Comparison ▸ Factorial ANOVA, pick an outcome and 2+ factors; you get SPSS's three blocks — Descriptive Statistics, Levene's Test of Equality of Error Variances, and Tests of Between-Subjects Effects with Type III sums of squares and partial η². Or Comparison ▸ Repeated-measures ANOVA for a within-subjects factor given as several numeric columns.\n" +
-    'Syntax: run builtin-anova.factorial {"dv": "score", "facs": ["group", "time"]}\n' +
-    'Syntax: run builtin-anova.repeated {"vars": ["time1", "time2", "time3"]}\n' +
+    'Syntax: run builtin-anova.factorial {"dv": "score", "facs": ["group", "time"], "plots": ["means", "tukey"]}\n' +
+    'Syntax: run builtin-anova.repeated {"vars": ["time1", "time2", "time3"], "plots": ["means", "diff"]}\n' +
     "  • Repeated-measures output follows SPSS: Descriptive Statistics, Mauchly's Test of\n" +
     '    Sphericity (W, approx. chi-square, df, Sig. and the three epsilons), then Tests of\n' +
     '    Within-Subjects Effects with the Sphericity Assumed / Greenhouse-Geisser / Huynh-Feldt\n' +
     '    / Lower-bound rows. With only two conditions sphericity cannot be violated, so no test\n' +
     '    is run and the single row stands.\n' +
     '  • dv — the numeric outcome to compare; facs — two or more grouping factors.\n' +
-    '  • vars — the repeated-measure columns (same people at each time/condition).',
+    '  • vars — the repeated-measure columns (same people at each time/condition).\n' +
+    '  • plots — optional, and nothing is drawn unless you ask. Factorial: "means" (cell\n' +
+    '    means with error bars), "profile" (the same means as lines, where non-parallel\n' +
+    '    lines are the interaction), "tukey" (each pair of groups as a difference with its\n' +
+    '    Tukey 95% interval, against a zero line). Repeated measures: "means", "subjects"\n' +
+    '    (a line per subject), "diff" (each pair as a within-subject difference,\n' +
+    '    Bonferroni-adjusted). Every one arrives as a live chart — the error bars, the\n' +
+    '    data points, the bar/line mark and the palette are controls on the chart itself,\n' +
+    '    so the figure is adjustable without re-running the analysis.',
   // How-to topics (#192). The index is small and always-resident; the prose lives
   // in howto.md, which ships with the plugin and is read when a topic is opened.
   howtoFile: 'howto.md',
@@ -73,6 +81,20 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose averages you want to compare.', types: ['numeric'], unique: true },
         { name: 'facs', kind: 'variables', label: 'Factors (2+)', hint: 'Two or more grouping variables whose effects you want to test.', multiple: true, unique: true },
+        {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: "Tick the charts you want beside the tables, as in SPSS's Plots dialog. Each one arrives as a live chart: the error bars, the data points and the bar/line mark are all controls on the chart itself.",
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'means', label: 'Cell means with error bars' },
+            { value: 'profile', label: 'Interaction (profile) plot' },
+            { value: 'tukey', label: 'Pairwise differences (Tukey 95% CI)' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -80,17 +102,37 @@ export const manifest = {
       label: 'Repeated-measures ANOVA…',
       run: 'repeated',
       order: 60,
-      inputs: [{ name: 'vars', kind: 'variables', label: 'Repeated measures (2+ columns)', hint: 'The columns measuring the same people at each time or condition.', multiple: true, types: ['numeric'] }],
+      inputs: [
+        { name: 'vars', kind: 'variables', label: 'Repeated measures (2+ columns)', hint: 'The columns measuring the same people at each time or condition.', multiple: true, types: ['numeric'] },
+        {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one arrives as a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'means', label: 'Condition means with error bars' },
+            { value: 'subjects', label: 'One line per subject (before-after)' },
+            { value: 'diff', label: 'Pairwise differences (Bonferroni 95% CI)' },
+          ],
+          default: [],
+        },
+      ],
     },
   ],
 };
 
-export async function factorial(app, { dv, facs }) {
+export async function factorial(app, { dv, facs, plots }) {
   const facNames = Array.isArray(facs) ? facs : facs ? [facs] : [];
   if (!dv || facNames.length < 2) {
     await app.results.appendError('Factorial ANOVA needs an outcome and at least 2 factors.');
     return;
   }
+  // An analysis recorded before the Plots input existed has no `plots` key, so it replays
+  // exactly as it ran: tables, no charts.
+  const want = new Set([].concat(plots ?? []));
+  const wantRaw = want.has('means') || want.has('profile');
   const meta = metaMap(await app.data.getVariableMeta());
   // Factors are renamed F1..Fk inside R. The names a user picks can contain anything,
   // and they end up inside formula terms and row labels; tokens keep the formula sane
@@ -140,7 +182,48 @@ export async function factorial(app, { dv, facs }) {
     fModel <- (ssModel / dfModel) / (rssF / dfRes)
     pModel <- stats::pf(fModel, dfModel, dfRes, lower.tail = FALSE)
 
+    # --- chart data (only what was ticked) -----------------------------------
+    # Computed HERE rather than re-read on the JS side so a chart is drawn from the
+    # same complete cases, in the same cell order, as the tables above it. A figure
+    # that quietly used a different n from the table beside it is the kind of thing
+    # nobody checks until a reviewer does.
+    toks <- c(${tok.map(rStr).join(', ')})
+    rawY <- numeric(0); rawCell <- numeric(0)
+    tkFac <- numeric(0); tkA <- character(0); tkB <- character(0)
+    tkDiff <- numeric(0); tkLo <- numeric(0); tkHi <- numeric(0)
+    ${wantRaw ? `
+    rawY <- d$.y
+    rawCell <- as.integer(cell)` : ''}
+    ${want.has('tukey') ? `
+    # Tukey's HSD, from stats, on an aov fit under the DEFAULT contrasts — the
+    # contr.sum dance above is for Type III sums of squares and is already undone.
+    fitA <- stats::aov(stats::as.formula(${rStr(`.y ~ ${rhs}`)}), data = d)
+    for (ii in seq_along(toks)) {
+      tt <- try(stats::TukeyHSD(fitA, which = toks[ii]), silent = TRUE)
+      if (inherits(tt, "try-error") || is.null(tt[[1]])) next
+      mm <- tt[[1]]
+      lv <- levels(d[[toks[ii]]])
+      # Split "b-a" back into its two levels by MATCHING against the levels rather
+      # than splitting on the hyphen: real factor levels contain hyphens ("25-34"),
+      # and a naive split turns an age band into a nonsense contrast.
+      for (rr in seq_len(nrow(mm))) {
+        rn <- rownames(mm)[rr]; aa <- NA_character_; bb <- NA_character_
+        for (x in lv) {
+          for (y2 in lv) {
+            if (identical(rn, paste0(x, "-", y2))) { aa <- x; bb <- y2; break }
+          }
+          if (!is.na(aa)) break
+        }
+        if (is.na(aa)) next
+        tkFac <- c(tkFac, ii); tkA <- c(tkA, aa); tkB <- c(tkB, bb)
+        tkDiff <- c(tkDiff, mm[rr, "diff"]); tkLo <- c(tkLo, mm[rr, "lwr"]); tkHi <- c(tkHi, mm[rr, "upr"])
+      }
+    }` : ''}
+
     list(terms = rownames(a3)[keep],
+         rawY = rawY, rawCell = rawCell,
+         tkFac = tkFac, tkA = tkA, tkB = tkB,
+         tkDiff = tkDiff, tkLo = tkLo, tkHi = tkHi,
          fModel = fModel, pModel = pModel,
          ss = a3[keep, "Sum of Sq"], df = a3[keep, "Df"],
          F = a3[keep, "F value"], p = a3[keep, "Pr(>F)"],
@@ -219,6 +302,73 @@ export async function factorial(app, { dv, facs }) {
     { caption: `Tests of Between-Subjects Effects — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})` },
   );
 
+  // --- charts ---------------------------------------------------------------
+  // Chart MODELS, not pictures: the host renders them and hangs its own controls off
+  // them, so the error bars, the data-point overlay, the palette and the bar/line mark
+  // are all adjustable after the fact, and the figure survives into a saved project.
+  const dvLab = label(meta, dv);
+  const cellLabel = (fi, lvl) => valueLabel(meta, facNames[fi], lvl);
+  if (wantRaw) {
+    const raw = bucketRaw(r.nums('rawY'), r.nums('rawCell'), cells.length);
+    const shared = {
+      cells,
+      means: r.nums('cellMean'),
+      raw,
+      labelFor: cellLabel,
+      xTitle: label(meta, facNames[0]),
+      yTitle: `Mean ${dvLab}`,
+    };
+    const restLab = facNames.slice(1).map((n) => label(meta, n)).join(' × ');
+    if (want.has('means')) {
+      await app.results.appendChart(cellChartModel({
+        ...shared, mark: 'bar', title: `Mean ${dvLab} by ${facNames.map((n) => label(meta, n)).join(' and ')}`,
+      }));
+    }
+    if (want.has('profile')) {
+      await app.results.appendChart(cellChartModel({
+        ...shared, mark: 'line', title: `${dvLab}: ${restLab} × ${shared.xTitle} interaction`,
+      }));
+    }
+  }
+  if (want.has('tukey')) {
+    const tkFac = r.nums('tkFac');
+    const tkA = r.strs('tkA');
+    const tkB = r.strs('tkB');
+    const tkDiff = r.nums('tkDiff');
+    const tkLo = r.nums('tkLo');
+    const tkHi = r.nums('tkHi');
+    // One chart per factor, as SPSS prints one post-hoc table per factor: the pairs of
+    // different factors are not on a common footing, and a single axis would invite
+    // reading across them.
+    for (let fi = 0; fi < facNames.length; fi++) {
+      const rows = tkDiff
+        .map((diff, i) => ({ i, diff }))
+        .filter(({ i }) => tkFac[i] === fi + 1)
+        .map(({ i, diff }) => ({
+          label: `${valueLabel(meta, facNames[fi], tkA[i])} − ${valueLabel(meta, facNames[fi], tkB[i])}`,
+          diff,
+          lo: tkLo[i],
+          hi: tkHi[i],
+        }));
+      if (!rows.length) continue;
+      await app.results.appendChart(pairsForestModel({
+        pairs: rows,
+        title: `Pairwise differences in ${dvLab} by ${label(meta, facNames[fi])} (Tukey HSD)`,
+        xTitle: `Difference in mean ${dvLab}`,
+        valueHeading: 'Difference [95% CI]',
+      }));
+    }
+    await app.results.appendText(
+      '**Reading the difference plot.** Each row is one pair of groups: the point is how '
+      + 'much the first group’s mean exceeds the second, and the bar is Tukey’s 95% '
+      + 'confidence interval for that difference, already adjusted for the number of '
+      + 'comparisons. A bar that clears the zero line is a difference the data support at '
+      + '.05; one that straddles it is not. This is the honest way to read "how much more?" '
+      + '— eyeballing whether two means’ error bars overlap is not the same test, and two '
+      + '95% intervals can overlap while the difference between them is significant.',
+    );
+  }
+
   await app.results.appendText(
     '**Type III** sums of squares: the contribution each term makes given every other '
     + 'term, '
@@ -233,13 +383,15 @@ export async function factorial(app, { dv, facs }) {
   );
 }
 
-export async function repeated(app, { vars }) {
+export async function repeated(app, { vars, plots }) {
   const names = Array.isArray(vars) ? vars : vars ? [vars] : [];
   if (names.length < 2) {
     await app.results.appendError('Repeated-measures ANOVA needs at least 2 measurement columns.');
     return;
   }
   const meta = metaMap(await app.data.getVariableMeta());
+  const want = new Set([].concat(plots ?? []));
+  const wantRaw = want.has('means') || want.has('subjects');
 
   const rCode = `
     d <- as.data.frame(vars, check.names = FALSE)
@@ -296,7 +448,33 @@ export async function repeated(app, { vars }) {
                        lower.tail = FALSE)
     }
 
+    # --- chart data (only what was ticked) -----------------------------------
+    # Same complete cases as the tables: d has already been reduced listwise, which
+    # for a within-subjects design is the only defensible set anyway — a subject
+    # missing one condition is missing from every comparison that uses it.
+    rawFlat <- numeric(0)
+    pdI <- numeric(0); pdJ <- numeric(0)
+    pdDiff <- numeric(0); pdLo <- numeric(0); pdHi <- numeric(0); pdLevel <- NA_real_
+    ${wantRaw ? `
+    rawFlat <- val` : ''}
+    ${want.has('diff') ? `
+    # Pairwise paired t intervals, Bonferroni-adjusted across the k(k-1)/2 pairs —
+    # the correction SPSS applies by default to its within-subjects pairwise
+    # comparisons. Each interval is for the MEAN DIFFERENCE within subject, which is
+    # the quantity this design actually estimates.
+    mPairs <- k * (k - 1) / 2
+    pdLevel <- if (mPairs > 1) 1 - 0.05 / mPairs else 0.95
+    for (ii in seq_len(k - 1)) for (jj in (ii + 1):k) {
+      tt <- try(stats::t.test(d[[jj]], d[[ii]], paired = TRUE, conf.level = pdLevel), silent = TRUE)
+      if (inherits(tt, "try-error")) next
+      pdI <- c(pdI, ii); pdJ <- c(pdJ, jj)
+      pdDiff <- c(pdDiff, unname(tt$estimate))
+      pdLo <- c(pdLo, tt$conf.int[1]); pdHi <- c(pdHi, tt$conf.int[2])
+    }` : ''}
+
     list(
+      rawFlat = rawFlat, pdI = pdI, pdJ = pdJ,
+      pdDiff = pdDiff, pdLo = pdLo, pdHi = pdHi, pdLevel = pdLevel,
       means = colMeans(d), sds = apply(d, 2, sd), n = n, k = k,
       ssCond = ws["cond", "Sum Sq"], dfCond = ws["cond", "Df"], msCond = ws["cond", "Mean Sq"],
       F = ws["cond", "F value"], p = ws["cond", "Pr(>F)"],
@@ -372,6 +550,77 @@ export async function repeated(app, { vars }) {
     { caption: 'Tests of Within-Subjects Effects' },
   );
 
+  // --- charts ---------------------------------------------------------------
+  const condLabels = names.map((nm) => label(meta, nm));
+  const nSubj = r.num1('n');
+  const cols = wantRaw ? unflattenColumns(r.nums('rawFlat'), nSubj, names.length) : [];
+  if (want.has('means') && cols.length) {
+    await app.results.appendChart({
+      kind: 'categorical',
+      title: 'Condition means',
+      categories: condLabels.map((lab, i) => ({ key: `c${i}`, label: lab })),
+      series: [{ key: 'mean', label: 'Mean', values: means.slice(0, names.length), rawValues: cols }],
+      axes: { x: { title: 'Condition' }, y: { title: 'Mean' } },
+      view: { mark: 'bar', legend: 'none', errorBars: 'ci95' },
+    });
+    await app.results.appendText(
+      '**A caution about these error bars.** They are computed across subjects, so they '
+      + "describe how precisely each condition's own mean is pinned down — they are not the "
+      + 'ruler for the within-subjects comparison this design tests. In a repeated-measures '
+      + 'design each subject is their own control, so the comparison can be far sharper than '
+      + 'overlapping between-subject bars suggest. For "how big is the change", read the '
+      + 'pairwise-differences plot, where the interval is computed on each subject’s own '
+      + 'change.',
+    );
+  }
+  if (want.has('subjects') && cols.length) {
+    // A line per subject stops being a figure and becomes a smear somewhere in the low
+    // hundreds. Named rather than silently thinned: a chart that quietly dropped nine in
+    // ten subjects would still look like a complete picture.
+    if (nSubj > SUBJECT_LINE_LIMIT) {
+      await app.results.appendText(
+        `_Per-subject lines skipped: ${int(nSubj)} subjects would be an unreadable thicket `
+        + `(the limit is ${SUBJECT_LINE_LIMIT}). The condition means and the pairwise `
+        + 'differences carry the same information at this size._',
+      );
+    } else {
+      await app.results.appendChart({
+        kind: 'paired',
+        title: 'Each subject across conditions',
+        conditions: condLabels.map((lab, i) => ({ key: `c${i}`, label: lab })),
+        subjects: subjectRows(cols).map((values, i) => ({ key: `s${i}`, label: `Subject ${i + 1}`, values })),
+        axes: { x: { title: 'Condition' }, y: { title: 'Value' } },
+      });
+    }
+  }
+  if (want.has('diff')) {
+    const pdI = r.nums('pdI');
+    const pdJ = r.nums('pdJ');
+    const pdDiff = r.nums('pdDiff');
+    const level = r.num1('pdLevel');
+    const pct = Number.isFinite(level) ? f(level * 100, 1).replace(/\.0$/, '') : '95';
+    const pairs = pdDiff.map((diff, i) => ({
+      label: `${condLabels[pdJ[i] - 1]} − ${condLabels[pdI[i] - 1]}`,
+      diff,
+      lo: r.nums('pdLo')[i],
+      hi: r.nums('pdHi')[i],
+    }));
+    if (pairs.length) {
+      await app.results.appendChart(pairsForestModel({
+        pairs,
+        title: 'Pairwise differences between conditions',
+        xTitle: 'Mean within-subject difference',
+        valueHeading: `Difference [${pct}% CI]`,
+      }));
+      await app.results.appendText(
+        `Each row is the mean of **each subject’s own change** between two conditions, with a `
+        + `${pct}% confidence interval — Bonferroni-widened across the ${int(pairs.length)} `
+        + 'pairs, so the whole set holds at 95% together. A bar clear of the zero line is a '
+        + 'change the data support; one that straddles it is not.',
+      );
+    }
+  }
+
   if (tested) {
     await app.results.appendText(
       "**Mauchly's test** asks whether the variances of all the pairwise differences "
@@ -390,10 +639,160 @@ export async function repeated(app, { vars }) {
   }
 }
 
+// --- chart models (pure, and tested as such) ---------------------------------
+
+/** Above this many subjects, a line each is a smear rather than a figure. */
+export const SUBJECT_LINE_LIMIT = 300;
+
+/**
+ * Raw observations, bucketed by the cell they belong to.
+ *
+ * R hands back two flat vectors — every value, and the cell index of every value —
+ * rather than a ragged list, because a list of numeric vectors is the one shape that
+ * does not survive the bridge cleanly.
+ *
+ * @param {number[]} values
+ * @param {number[]} cellIdx 1-based index into the cell list, as R counts
+ * @param {number} nCells
+ * @returns {number[][]} one array per cell, aligned to the cell list
+ */
+export function bucketRaw(values, cellIdx, nCells) {
+  const out = Array.from({ length: nCells }, () => []);
+  for (let i = 0; i < values.length; i++) {
+    const c = cellIdx[i] - 1;
+    if (c >= 0 && c < nCells && Number.isFinite(values[i])) out[c].push(values[i]);
+  }
+  return out;
+}
+
+/**
+ * The means / profile chart, as a MODEL for the host to render.
+ *
+ * Categories are the levels of the FIRST factor and each remaining crossing is a series,
+ * which is the layout both figures want: as bars it reads as "the means, with their
+ * uncertainty"; as lines it reads as the interaction, because non-parallel lines ARE the
+ * interaction term in the table above. One model serves both, and the mark is a control
+ * on the chart, so a reader who wants the other one does not have to re-run anything.
+ *
+ * `rawValues` is what makes it adjustable rather than a picture: the host computes SD,
+ * SEM or 95% CI from the observations itself, and offers the data-point overlay, so the
+ * choice of error bar stays the reader's. The default is the 95% CI, because the question
+ * an ANOVA answers is about means, and the SD of individuals is a different question.
+ *
+ * @param {object} a
+ * @param {string[]} a.cells interaction level names, e.g. `['1.1', '2.1']`
+ * @param {number[]} a.means cell means, aligned to `cells`
+ * @param {?number[][]} a.raw raw observations per cell, aligned to `cells`
+ * @param {(factorIndex: number, level: string) => string} a.labelFor display label resolver
+ * @param {string} a.title
+ * @param {string} a.xTitle
+ * @param {string} a.yTitle
+ * @param {'bar'|'line'} [a.mark]
+ * @returns {object} a chart model for `app.results.appendChart`
+ */
+export function cellChartModel({
+  cells, means, raw = null, labelFor, title, xTitle, yTitle, mark = 'bar',
+}) {
+  const parts = cells.map((c) => String(c).split('.'));
+  const catKeys = [];
+  const serKeys = [];
+  for (const p of parts) {
+    const cat = p[0];
+    const ser = p.slice(1).join('.');
+    if (!catKeys.includes(cat)) catKeys.push(cat);
+    if (!serKeys.includes(ser)) serKeys.push(ser);
+  }
+  const at = (cat, ser) => parts.findIndex((p) => p[0] === cat && p.slice(1).join('.') === ser);
+  const series = serKeys.map((ser) => {
+    const idx = catKeys.map((cat) => at(cat, ser));
+    return {
+      key: ser || 'all',
+      // A one-factor call has no series to name, so the measure names itself.
+      label: ser ? ser.split('.').map((lvl, j) => labelFor(j + 1, lvl)).join(' × ') : yTitle,
+      values: idx.map((i) => (i < 0 ? null : means[i] ?? null)),
+      ...(raw ? { rawValues: idx.map((i) => (i < 0 ? [] : raw[i] || [])) } : {}),
+    };
+  });
+  return {
+    kind: 'categorical',
+    title,
+    categories: catKeys.map((k) => ({ key: k, label: labelFor(0, k) })),
+    series,
+    axes: { x: { title: xTitle }, y: { title: yTitle } },
+    view: {
+      mark,
+      legend: serKeys.length > 1 ? 'right' : 'none',
+      ...(raw ? { errorBars: 'ci95' } : {}),
+    },
+  };
+}
+
+/**
+ * Pairwise differences as a forest plot — the chart that actually answers "how much
+ * more?", which a plot of group means only invites the reader to estimate by eye.
+ *
+ * The forest kind already draws exactly this (an estimate, its interval, a reference
+ * line), so it is reused rather than reinvented; it is given no pooled summary, because
+ * these contrasts are not studies to pool.
+ *
+ * @param {object} a
+ * @param {{label: string, diff: number, lo: number, hi: number}[]} a.pairs
+ * @param {string} a.title
+ * @param {string} a.xTitle
+ * @param {string} a.valueHeading
+ * @returns {object} a chart model for `app.results.appendChart`
+ */
+export function pairsForestModel({ pairs, title, xTitle, valueHeading }) {
+  return {
+    kind: 'forest',
+    title,
+    refLine: 0, // no difference
+    valueHeading,
+    axes: { x: { title: xTitle } },
+    studies: pairs.map((p, i) => ({
+      key: `p${i}`, label: p.label, est: p.diff, lo: p.lo, hi: p.hi,
+    })),
+  };
+}
+
+/**
+ * A column-major flat vector (R's `unlist` of a k-column frame) back into k columns.
+ *
+ * @param {number[]} flat
+ * @param {number} n rows
+ * @param {number} k columns
+ * @returns {number[][]} k arrays of n
+ */
+export function unflattenColumns(flat, n, k) {
+  if (!(n > 0) || !(k > 0) || flat.length < n * k) return [];
+  return Array.from({ length: k }, (_, c) => flat.slice(c * n, c * n + n));
+}
+
+/** k condition-columns → one row per subject, in condition order. */
+export function subjectRows(cols) {
+  const n = cols[0]?.length ?? 0;
+  return Array.from({ length: n }, (_, i) => cols.map((c) => c[i]));
+}
+
 // --- helpers -----------------------------------------------------------------
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
+}
+
+/**
+ * A factor level's display label.
+ *
+ * This was MISSING: the descriptives table has called `valueLabel` since the Type III
+ * rewrite (38aa2a2) and nothing in this file ever defined it, so every Factorial ANOVA
+ * threw `valueLabel is not defined` while building its first table — after the R had
+ * run, so the cost was the whole analysis. Two other plugins carry a local copy; this
+ * one delegates to the stdlib's `levelLabel` instead, which is the superset of those
+ * copies (it guards R's literal "NA", and it tries a numeric key, so a labelled numeric
+ * factor shows its labels rather than its codes).
+ */
+function valueLabel(meta, name, code) {
+  return levelLabel(meta.get(name), code);
 }
 /** Clean an aov term: factor(`x`) → x; an interaction's ":" → " × ". */
 function prettyTerm(t) {
