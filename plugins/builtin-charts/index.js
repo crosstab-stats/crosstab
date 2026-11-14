@@ -947,7 +947,16 @@ export function chartKinds(lib) {
       // kind defaults `showPoints` off and this one defaults it on: naming the
       // CONTROL rather than the view key is what lets one builder serve both.
       pointSizeControl({ default: 3, visibleWhen: { control: 'showPoints', truthy: true } }),
-      summaryControl([['median', 'Median + quartiles'], ['mean', 'Mean + SD'], ['none', 'None']], 'median'),
+      // Mean + 95% CI is the combination these kinds existed for and did not offer: the
+      // Prism convention is the data points WITH an interval around the mean, and an
+      // SD-only option left the one question a comparison asks ("how well is each mean
+      // pinned down?") unanswerable without leaving the chart.
+      summaryControl([
+        ['median', 'Median + quartiles'],
+        ['mean', 'Mean + SD'],
+        ['ci95', 'Mean + 95% CI'],
+        ['none', 'None'],
+      ], 'median'),
       // The SuperPlot convention (Lord et al. 2020): colour points by biological
       // replicate and mark each replicate's MEAN, so the reader sees that the effect
       // reproduces across experiments rather than across pooled cells.
@@ -1010,10 +1019,16 @@ export function chartKinds(lib) {
           out.push(`<line x1="${r(cx - half * 0.55)}" y1="${r(yScale(q))}" x2="${r(cx + half * 0.55)}" y2="${r(yScale(q))}" stroke="#222222" stroke-width="1"/>`);
         }
       } else {
-        const sd = Math.sqrt(values.reduce((a, x) => a + (x - s.mean) ** 2, 0) / Math.max(1, values.length - 1));
-        out.push(`<line x1="${r(cx - half)}" y1="${r(yScale(s.mean))}" x2="${r(cx + half)}" y2="${r(yScale(s.mean))}" stroke="#222222" stroke-width="2"/>`);
-        out.push(`<line x1="${r(cx)}" y1="${r(yScale(s.mean - sd))}" x2="${r(cx)}" y2="${r(yScale(s.mean + sd))}" stroke="#222222" stroke-width="1"/>`);
-        for (const e of [s.mean - sd, s.mean + sd]) {
+        // 'mean' (± SD) and 'ci95' (± t·SEM) draw the same three marks and differ only in
+        // the ruler, so they ask the stdlib for bounds rather than each doing their own
+        // arithmetic — which is also how the SD stopped being hand-rolled here while the
+        // bar chart's identical SD came from computeStats two files away.
+        const stats = computeStats(values);
+        const eb = errorBounds(stats, mode === 'ci95' ? 'ci95' : 'sd');
+        if (!eb) return;
+        out.push(`<line x1="${r(cx - half)}" y1="${r(yScale(stats.mean))}" x2="${r(cx + half)}" y2="${r(yScale(stats.mean))}" stroke="#222222" stroke-width="2"/>`);
+        out.push(`<line x1="${r(cx)}" y1="${r(yScale(eb.lo))}" x2="${r(cx)}" y2="${r(yScale(eb.hi))}" stroke="#222222" stroke-width="1"/>`);
+        for (const e of [eb.lo, eb.hi]) {
           out.push(`<line x1="${r(cx - half * 0.4)}" y1="${r(yScale(e))}" x2="${r(cx + half * 0.4)}" y2="${r(yScale(e))}" stroke="#222222" stroke-width="1"/>`);
         }
       }

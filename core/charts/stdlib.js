@@ -709,13 +709,47 @@ export function computeStats(values) {
   return { mean, n, sd, sem };
 }
 
+/**
+ * The two-tailed 95% critical value of Student's t on `df` degrees of freedom.
+ *
+ * This exists because the 95% interval was drawn as mean ± 1.96·SEM, and 1.96 is the
+ * NORMAL quantile — the right number only when the SD is known rather than estimated.
+ * On the sample sizes these plots are made for that is not a rounding difference: with
+ * three observations per group, the sort of dot plot this library draws all day, the
+ * correct multiplier is 4.303, so the interval was less than HALF the width it claims
+ * on the control. A figure that understates its own uncertainty by 2× is the kind of
+ * thing a reviewer catches and an author cannot defend.
+ *
+ * Exact table to df = 30, where the difference is large and a formula would be the
+ * weakest link; a Cornish–Fisher expansion beyond, where t is already within half a
+ * percent of z and the expansion is good to ~1e-6. Both halves are checked against R's
+ * `qt(0.975, df)` in test/t-critical.test.mjs, which carries R's own values.
+ *
+ * @param {number} df degrees of freedom (n − 1)
+ * @returns {number} t such that P(|T| > t) = 0.05
+ */
+export function tCritical95(df) {
+  const TABLE = [
+    12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+    2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+    2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042,
+  ];
+  if (!Number.isFinite(df) || df < 1) return TABLE[0];
+  if (df <= 30) return TABLE[Math.floor(df) - 1];
+  const z = 1.959964; // the normal quantile this used to use unconditionally
+  return z + (z ** 3 + z) / (4 * df) + (5 * z ** 5 + 16 * z ** 3 + 3 * z) / (96 * df * df);
+}
+
 /** Error bar bounds for a given type. Returns {lo, hi} or null. */
 export function errorBounds(stats, type) {
   if (!stats) return null;
-  const { mean, sd, sem } = stats;
+  const { mean, sd, sem, n } = stats;
   if (type === 'sem') return { lo: mean - sem, hi: mean + sem };
   if (type === 'sd') return { lo: mean - sd, hi: mean + sd };
-  if (type === 'ci95') return { lo: mean - 1.96 * sem, hi: mean + 1.96 * sem };
+  if (type === 'ci95') {
+    const t = tCritical95((n ?? 2) - 1);
+    return { lo: mean - t * sem, hi: mean + t * sem };
+  }
   return null;
 }
 
