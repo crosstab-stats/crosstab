@@ -179,7 +179,20 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the table describes the population rather than ' +
             'the sample. Cancel this to count each case once. The caption names the weight used.',
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: "Tick the charts you want beside the tables, as in SPSS's Charts dialog.",
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'bar', label: 'Bar chart' },
+            { value: 'pie', label: 'Pie chart' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -188,7 +201,7 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[], statistics?: string[]}} inputs
  */
-export async function run(app, { vars, statistics, weight }) {
+export async function run(app, { vars, statistics, weight, plots }) {
   if (!vars || !vars.length) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
   const wanted = pickStats(statistics);
@@ -244,6 +257,37 @@ export async function run(app, { vars, statistics, weight }) {
     await app.results.appendTable(buildSpec(d.meta, d.data), {
       caption: (d.meta?.label ? `${d.meta.label} (${d.name})` : d.name) + wSuffix,
     });
+
+    // SPSS's Frequencies dialog has had a Charts button since forever, and this is it:
+    // the same counts the table above prints, as bars or a pie. The percent/count choice
+    // is a control on the chart, so it is the reader's rather than a decision baked in
+    // here — which is also why the model carries counts and lets the host do the rest.
+    const want = new Set([].concat(plots ?? []));
+    if (want.size) {
+      const labels = d.meta?.valueLabels ?? {};
+      const cats = d.data.values.map((v, i2) => ({ key: String(v), label: String(labels[v] ?? v) }));
+      const counts = d.data.counts.map((c) => (Number.isFinite(c) ? c : 0));
+      if (want.has('bar')) {
+        await app.results.appendChart({
+          kind: 'categorical',
+          title: d.meta?.label || d.name,
+          categories: cats,
+          series: [{ key: 'n', label: 'Frequency', values: counts }],
+          counts: true,
+          axes: { x: { title: d.meta?.label || d.name }, y: { title: 'Frequency' } },
+          view: { mark: 'bar', legend: 'none' },
+        });
+      }
+      if (want.has('pie')) {
+        // A pie answers "what share of the whole?" and only that; it is offered because
+        // SPSS offers it and a single nominal variable is the one case it suits.
+        await app.results.appendChart({
+          kind: 'pie',
+          title: d.meta?.label || d.name,
+          slices: cats.map((c, i2) => ({ key: c.key, label: c.label, value: counts[i2] })),
+        });
+      }
+    }
   }
 
   if (weight) {

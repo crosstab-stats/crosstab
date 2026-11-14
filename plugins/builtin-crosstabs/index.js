@@ -123,7 +123,20 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the table describes the population rather than ' +
             'the sample. Cancel this to count each case once. The caption names the weight used.',
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: "Tick the charts you want beside the table, as in SPSS's Crosstabs dialog.",
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'clustered', label: 'Clustered bar chart' },
+            { value: 'stacked', label: 'Stacked bar chart (100%)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -132,7 +145,7 @@ export const manifest = {
  * @param {object} app
  * @param {{rowvar: string, colvar: string}} inputs
  */
-export async function run(app, { rowvar: rowName, colvar: colName, pmethod, measures, percent, weight }) {
+export async function run(app, { rowvar: rowName, colvar: colName, pmethod, measures, percent, weight, plots }) {
   if (!rowName || !colName) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
@@ -201,6 +214,43 @@ export async function run(app, { rowvar: rowName, colvar: colName, pmethod, meas
     },
     { caption: `${labelOf(rowMeta, rowName)} × ${labelOf(colMeta, colName)}${wSuffix}` },
   );
+
+  // SPSS's "Display clustered bar charts", plus the stacked variant that answers the
+  // other question. Clustered compares the groups ("is the mix different?"); stacked to
+  // 100% compares the COMPOSITION within each group, which is the reading a column-%
+  // table is for. Both are the same counts as the table — the host does the arithmetic,
+  // so switching between count and percent stays the reader's to make.
+  const wantPlot = new Set([].concat(plots ?? []));
+  if (wantPlot.size) {
+    const cats = x.rowLevels.map((rl) => ({ key: String(rl), label: String(lv(rowMeta, rl)) }));
+    const series = x.colLevels.map((cl, j) => ({
+      key: String(cl),
+      label: String(lv(colMeta, cl)),
+      values: x.rowLevels.map((_, i) => x.counts[i * ncol + j] ?? 0),
+    }));
+    const base = {
+      kind: 'categorical',
+      categories: cats,
+      series,
+      counts: true,
+      axes: { x: { title: labelOf(rowMeta, rowName) }, y: { title: 'Count' } },
+    };
+    if (wantPlot.has('clustered')) {
+      await app.results.appendChart({
+        ...base,
+        title: `${labelOf(rowMeta, rowName)} by ${labelOf(colMeta, colName)}`,
+        view: { mark: 'bar', stack: 'none', legend: 'right' },
+      });
+    }
+    if (wantPlot.has('stacked')) {
+      await app.results.appendChart({
+        ...base,
+        title: `${labelOf(colMeta, colName)} within each ${labelOf(rowMeta, rowName)}`,
+        axes: { x: { title: labelOf(rowMeta, rowName) }, y: { title: 'Percent' } },
+        view: { mark: 'bar', stack: 'percent', legend: 'right' },
+      });
+    }
+  }
 
   // Percentages (#129): row / column / total, SPSS-style. Column % is the one that
   // answers "what's the composition within each column" (e.g. the income mix per year).

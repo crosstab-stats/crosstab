@@ -174,7 +174,20 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the estimates describe the population rather than ' +
             'the sample. Cancel this to count each case once. The caption names the weight used.',
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: "Tick the charts you want beside the tables. Explore's standard figure is the box plot.",
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'box', label: 'Box plot (by group, if grouped)' },
+            { value: 'hist', label: 'Histogram' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -273,12 +286,16 @@ export async function run(app, { vars, weight }) {
  * @param {object} app
  * @param {{vars: string[], by?: string|null, level?: number, weight?: string|null}} inputs
  */
-export async function explore(app, { vars, by, level, weight }) {
+export async function explore(app, { vars, by, level, weight, plots }) {
   if (!vars || !vars.length) return;
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
 
   // A level is a percent strictly between the two useless extremes. Out-of-range
   // input is corrected to 95 and said out loud, rather than handed to R to fail on.
+  const want = new Set([].concat(plots ?? []));
+  // Same rule as the t-tests: a chart built from the observations cannot carry a case
+  // weight, and an unweighted picture beside a weighted table would contradict it.
+  const rawOK = want.size > 0 && !weight;
   const asked = Number(level);
   const valid = Number.isFinite(asked) && asked > 0 && asked < 100;
   const pct = valid ? asked : 95;
@@ -287,6 +304,7 @@ export async function explore(app, { vars, by, level, weight }) {
   const rCode = `
     ${WEIGHTED_R}
     lv <- ${pct / 100}
+    RAW <- ${rawOK ? 'TRUE' : 'FALSE'}
     W0 <- wclean(${weight ? 'weight' : 'NULL'}, nrow(vars))
     KEYS <- c("n","mean","se","lo","hi","trimmed","median","variance","sd","min","max","range","iqr")
     one <- function(x, w) {
@@ -321,12 +339,14 @@ export async function explore(app, { vars, by, level, weight }) {
     for (.n in names(vars)) {
       col <- vars[[.n]]
       if (is.null(grp)) {
-        out[[.n]] <- list(groups = "", stats = list(one(col, W0)))
+        out[[.n]] <- list(groups = "", stats = list(one(col, W0)),
+                          raws = if (RAW) list(as.numeric(suppressWarnings(as.numeric(as.character(col))))) else list())
       } else {
         keep <- !is.na(grp) & grp != ""
         g <- grp[keep]; v <- col[keep]; vw <- W0[keep]
         lvs <- sort(unique(g))
-        out[[.n]] <- list(groups = lvs, stats = lapply(lvs, function(k) one(v[g == k], vw[g == k])))
+        out[[.n]] <- list(groups = lvs, stats = lapply(lvs, function(k) one(v[g == k], vw[g == k])),
+                          raws = if (RAW) lapply(lvs, function(k) as.numeric(suppressWarnings(as.numeric(as.character(v[g == k]))))) else list())
       }
     }
     out`;
@@ -354,7 +374,7 @@ export async function explore(app, { vars, by, level, weight }) {
   for (const name of vars) {
     const entry = perVar[name];
     if (!entry) continue;
-    const { groups, stats } = entry;
+    const { groups, stats, raws = [] } = entry;
     const varLabel = meta.get(name)?.label ? `${meta.get(name).label} (${name})` : name;
     const grouped = !!by && groups.length > 0 && groups[0] !== '';
     const head = grouped ? groups.map((g) => valueLabel(meta, by, g)) : [varLabel];
@@ -372,6 +392,40 @@ export async function explore(app, { vars, by, level, weight }) {
           (weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : ''),
       },
     );
+
+    // Explore's published figure is the box plot — SPSS draws one per group, and the
+    // whole point of the screen is comparing the shapes rather than reading thirteen
+    // statistics off a column. The histogram is the other half of "what does this
+    // variable look like".
+    if (want.size && !rawOK) {
+      await app.results.appendText(
+        '_Charts skipped: they are drawn from the individual observations, which cannot '
+        + 'carry the case weight. Run without the weight to see the distributions._',
+      );
+    } else if (raws.length) {
+      const boxGroups = raws
+        .map((values, gi) => ({ key: `g${gi}`, label: grouped ? String(head[gi]) : varLabel, values }))
+        .filter((g) => g.values.length);
+      if (want.has('box') && boxGroups.length) {
+        await app.results.appendChart({
+          kind: 'box',
+          title: grouped ? `${varLabel} by ${meta.get(by)?.label ?? by}` : varLabel,
+          groups: boxGroups,
+          axes: { x: { title: grouped ? (meta.get(by)?.label ?? by) : '' }, y: { title: varLabel } },
+          view: { showPoints: boxGroups.every((g) => g.values.length <= 60) },
+        });
+      }
+      if (want.has('hist')) {
+        for (const g of boxGroups) {
+          await app.results.appendChart({
+            kind: 'histogram',
+            title: grouped ? `${varLabel} — ${g.label}` : varLabel,
+            values: g.values,
+            axes: { x: { title: varLabel }, y: { title: 'Count' } },
+          });
+        }
+      }
+    }
   }
 
   await app.results.appendText(
@@ -409,7 +463,10 @@ function tagged(rList) {
       keys.forEach((k, j) => (o[k] = nums[j] == null ? NaN : Number(nums[j])));
       return o;
     });
-    out[n] = { groups, stats };
+    const raws = (at('raws')?.values ?? []).map((vec) => plain(vec)
+      .map((x) => (x == null ? NaN : Number(x)))
+      .filter(Number.isFinite));
+    out[n] = { groups, stats, raws };
   });
   return out;
 }
