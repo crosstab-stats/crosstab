@@ -15,7 +15,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -56,12 +56,24 @@ export const manifest = {
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         { name: 'cluster', kind: 'variables', label: 'Cluster variable', hint: 'The group cases fall into, like school or person.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
-export async function run(app, { y: yName, ivs: ivNames, cluster: clName }) {
+export async function run(app, { y: yName, ivs: ivNames, cluster: clName, plots }) {
   if (!yName || !ivNames || !ivNames.length || !clName) {
     await app.results.appendError('Cluster-robust regression: choose an outcome, predictor(s), and a cluster variable.');
     return;
@@ -92,6 +104,20 @@ export async function run(app, { y: yName, ivs: ivNames, cluster: clName }) {
     },
     { caption: `Cluster-Robust OLS — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')}, clusters = ${r.num1('nclust')})` },
   );
+  if ([].concat(plots ?? []).includes('coef')) {
+    // The cluster-robust interval is the one worth drawing: it is the whole point of the
+    // method, and it is wider than the classical one in the last column.
+    const model = coefficientForest({
+      terms: terms.map((t) => prettyTerm(t)),
+      est,
+      lo: est.map((b, i) => b - 1.96 * se[i]),
+      hi: est.map((b, i) => b + 1.96 * se[i]),
+      title: 'Coefficients (95% CI, cluster-robust)',
+      xTitle: 'B',
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
   await app.results.appendText(
     `Standard errors allow for arbitrary correlation within the **${r.num1('nclust')}** clusters of ${labelOf(meta.get(clName), clName)} (CR/HC1). Compare them to the classical SEs in the last column — cluster-robust SEs are usually larger, and the difference is the cost of ignoring clustering. With few clusters (< ~40) the asymptotics get shaky; treat p-values cautiously.`,
   );

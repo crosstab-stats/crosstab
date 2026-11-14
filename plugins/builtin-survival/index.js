@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -86,7 +86,19 @@ export const manifest = {
         { name: 'status', kind: 'variables', label: 'Event indicator', hint: 'Marks whether the event happened or the case was censored.', multiple: false, unique: true },
         { name: 'event', kind: 'level', of: 'status', preferLast: true, label: 'Which category means the EVENT happened?', hint: 'Everything else counts as censored. Hazard ratios are ratios of the hazard of THIS outcome.' },
         { name: 'preds', kind: 'variables', label: 'Predictors', hint: 'The variables you think speed up or slow down the event.', multiple: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Hazard-ratio plot (log axis)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -178,13 +190,19 @@ export async function kaplanMeier(app, { time: timeName, status: statusName, eve
 
 // --- Cox proportional hazards ------------------------------------------------
 
-export async function cox(app, { time: timeName, status: statusName, event, preds: predNames }) {
+export async function cox(app, { time: timeName, status: statusName, event, preds: predNames, plots }) {
   if (!timeName || !statusName || !predNames || !predNames.length) {
     await app.results.appendError('Cox regression: choose a time variable, an event indicator, and at least one predictor.');
     return;
   }
   await app.webr.installPackages(['survival']);
   const meta = metaMap(await app.data.getVariableMeta());
+  // Declared HERE as well as in kaplanMeier, which is where it only used to exist: the
+  // template below interpolates it, so every Cox run threw `eventWant is not defined`
+  // while building its R string — before the fit, before the data, before anything a
+  // user could see a reason for. Found by running the function in a test (#chart work),
+  // the same way the ANOVA's missing valueLabel was.
+  const eventWant = event != null && event !== '' ? JSON.stringify(String(event)) : 'NULL';
   const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
   const formula = `Surv(.time, .st) ~ ${predNames.map(term).join(' + ')}`;
   const rCode = `
@@ -232,6 +250,23 @@ export async function cox(app, { time: timeName, status: statusName, event, pred
     },
     { caption: 'Model Fit' },
   );
+
+  if ([].concat(plots ?? []).includes('coef')) {
+    // Hazard ratios on a log axis against 1 — the figure a Cox model is published with,
+    // beside the survival curves the KM run already draws.
+    const model = coefficientForest({
+      terms: terms.map((t) => prettyTerm(t)),
+      est: hr,
+      lo,
+      hi,
+      title: 'Hazard ratios (95% CI)',
+      xTitle: 'Hazard ratio',
+      valueHeading: 'HR [95% CI]',
+      ratio: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
 
   const zt = r.strs('zphTerms'), zc = r.nums('zphChi'), zp = r.nums('zphP');
   if (zt.length) {

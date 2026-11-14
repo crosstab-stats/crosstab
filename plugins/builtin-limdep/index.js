@@ -20,7 +20,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -79,7 +79,19 @@ export const manifest = {
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome whose distribution you want to model.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think shape the outcome.', multiple: true, unique: true },
         { name: 'taus', kind: 'text', label: 'Quantiles (comma-separated)', hint: 'Which points of the outcome to model, like .25, .5, .75.', default: '0.25, 0.5, 0.75' },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'path', label: 'Coefficient path across quantiles' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'limdep-tobit',
@@ -91,7 +103,19 @@ export const manifest = {
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
         { name: 'left', kind: 'number', label: 'Lower censoring limit (blank = none)', hint: 'The floor value many cases are stuck at, if any.', default: 0, optional: true },
         { name: 'right', kind: 'number', label: 'Upper censoring limit (blank = none)', hint: 'The ceiling value many cases are stuck at, if any.', default: 0, optional: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'limdep-heckman',
@@ -103,7 +127,19 @@ export const manifest = {
         { name: 'outIv', kind: 'variables', label: 'Outcome predictors', hint: 'The variables you think predict the outcome itself.', multiple: true, unique: true },
         { name: 'sel', kind: 'variables', label: 'Selection indicator (1 = observed)', hint: 'Marks who is observed: 1 if selected, 0 if not.', multiple: false, unique: true },
         { name: 'selIv', kind: 'variables', label: 'Selection predictors', hint: 'The variables you think drive whether a case is observed.', multiple: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -112,7 +148,7 @@ const term = (n, meta) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${
 
 // --- Quantile regression -----------------------------------------------------
 
-export async function quantile(app, { y: yName, ivs: ivNames, taus }) {
+export async function quantile(app, { y: yName, ivs: ivNames, taus, plots }) {
   if (!yName || !ivNames || !ivNames.length) {
     await app.results.appendError('Quantile regression: choose an outcome and at least one predictor.');
     return;
@@ -129,8 +165,10 @@ export async function quantile(app, { y: yName, ivs: ivNames, taus }) {
     fit <- rq(as.formula(${rStr(formula)}), tau = taus, data = d)
     ss <- summary(fit, se = "nid"); if (inherits(ss, "summary.rq")) ss <- list(ss)
     est <- sapply(ss, function(s) s$coefficients[, 1]); pv <- sapply(ss, function(s) s$coefficients[, 4])
-    if (is.null(dim(est))) { est <- t(as.matrix(est)); pv <- t(as.matrix(pv)) }
-    list(terms = rownames(ss[[1]]$coefficients), taus = taus, est = as.numeric(est), p = as.numeric(pv), n = nrow(d))`;
+    sev <- sapply(ss, function(s) s$coefficients[, 2])
+    if (is.null(dim(est))) { est <- t(as.matrix(est)); pv <- t(as.matrix(pv)); sev <- t(as.matrix(sev)) }
+    list(terms = rownames(ss[[1]]$coefficients), taus = taus, est = as.numeric(est),
+         se = as.numeric(sev), p = as.numeric(pv), n = nrow(d))`;
   const r = flat(await app.webr.runOrThrow(rCode));
   const terms = r.strs('terms'), taus2 = r.nums('taus'), est = r.nums('est'), p = r.nums('p');
   const nT = terms.length;
@@ -144,6 +182,33 @@ export async function quantile(app, { y: yName, ivs: ivNames, taus }) {
     },
     { caption: `Quantile Regression — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')})` },
   );
+  if ([].concat(plots ?? []).includes('path')) {
+    // The signature figure of quantile regression, and the one the table above makes you
+    // read sideways: one predictor's coefficient ACROSS the quantiles, with its interval.
+    // A flat path says the effect is the same everywhere; a sloping one is the finding —
+    // a policy that helps the bottom of the distribution more than the top.
+    const se = r.nums('se');
+    for (const [i, tm] of terms.entries()) {
+      if (/^\(?Intercept\)?$/i.test(tm)) continue;
+      await app.results.appendChart({
+        kind: 'band',
+        title: `${prettyTerm(tm)} across quantiles`,
+        series: [{
+          key: `q${i}`,
+          label: prettyTerm(tm),
+          points: taus2.map((tau, j) => ({
+            x: tau,
+            y: est[j * nT + i],
+            lo: est[j * nT + i] - 1.96 * se[j * nT + i],
+            hi: est[j * nT + i] + 1.96 * se[j * nT + i],
+          })),
+        }],
+        guides: [{ axis: 'y', at: 0, label: 'No effect' }],
+        axes: { x: { title: 'Quantile (τ)' }, y: { title: `Coefficient on ${prettyTerm(tm)}` } },
+      });
+    }
+  }
+
   await app.results.appendText(
     'Each column is a separate regression at that quantile of the outcome. Comparing a predictor\'s coefficient across quantiles shows whether its effect is larger at the bottom vs the top of the distribution (e.g. a policy that helps low earners more than high earners). Stars: * p<.05, ** p<.01.',
   );
@@ -151,7 +216,7 @@ export async function quantile(app, { y: yName, ivs: ivNames, taus }) {
 
 // --- Tobit -------------------------------------------------------------------
 
-export async function tobit(app, { y: yName, ivs: ivNames, left, right }) {
+export async function tobit(app, { y: yName, ivs: ivNames, left, right, plots }) {
   if (!yName || !ivNames || !ivNames.length) {
     await app.results.appendError('Tobit: choose an outcome and at least one predictor.');
     return;
@@ -183,6 +248,18 @@ export async function tobit(app, { y: yName, ivs: ivNames, left, right }) {
     },
     { caption: `Tobit Regression — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')}; censored: ${r.num1('nLeft')} low, ${r.num1('nRight')} high)` },
   );
+  if ([].concat(plots ?? []).includes('coef')) {
+    const model = coefficientForest({
+      terms: terms.map((t) => prettyTerm(t)),
+      est,
+      lo: est.map((b, i) => b - 1.96 * se[i]),
+      hi: est.map((b, i) => b + 1.96 * se[i]),
+      title: 'Coefficients (95% CI)',
+      xTitle: 'B',
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
   await app.results.appendText(
     'Tobit models a **latent** outcome that is observed only within the censoring limits; coefficients are on that latent scale (the direction and significance read like OLS). Use it when many cases pile up exactly at a floor or ceiling. `Log(scale)` is the log residual SD.',
   );
@@ -190,7 +267,7 @@ export async function tobit(app, { y: yName, ivs: ivNames, left, right }) {
 
 // --- Heckman -----------------------------------------------------------------
 
-export async function heckman(app, { y: yName, outIv: outNames, sel: selName, selIv: selNames }) {
+export async function heckman(app, { y: yName, outIv: outNames, sel: selName, selIv: selNames, plots }) {
   if (!yName || !outNames || !outNames.length || !selName || !selNames || !selNames.length) {
     await app.results.appendError('Heckman: choose an outcome + its predictors, a selection indicator, and selection predictors.');
     return;
@@ -224,6 +301,18 @@ export async function heckman(app, { y: yName, outIv: outNames, sel: selName, se
     },
     { caption: `Heckman Selection — outcome: ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')})` },
   );
+  if ([].concat(plots ?? []).includes('coef')) {
+    const model = coefficientForest({
+      terms: terms.map((t, i) => `${section(i)}${prettyTerm(t)}`),
+      est,
+      lo: est.map((b, i) => b - 1.96 * se[i]),
+      hi: est.map((b, i) => b + 1.96 * se[i]),
+      title: 'Coefficients (95% CI)',
+      xTitle: 'B',
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
   await app.results.appendText(
     'The **selection** equation models who is observed; the **outcome** equation is corrected for that selection. A significant **invMillsRatio** (or **ρ** far from 0) means selection bias was present and OLS on the observed cases alone would be biased. ρ is the correlation between the two equations\' errors.',
   );

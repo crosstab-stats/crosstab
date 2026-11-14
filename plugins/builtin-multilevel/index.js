@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -74,7 +74,20 @@ export const manifest = {
         { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', hint: 'Predictors whose average effect you want to estimate.', multiple: true, unique: true },
         { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', hint: 'The cluster each case belongs to, such as school or clinic.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
         { name: 'slope', kind: 'variables', label: 'Random slope for (optional)', hint: 'A predictor whose effect is allowed to vary across groups.', multiple: false, types: ['numeric'], optional: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+            { value: 're', label: 'Random effects (caterpillar plot)' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'multilevel-logistic',
@@ -86,14 +99,27 @@ export const manifest = {
         { name: 'yes', kind: 'level', of: 'y', preferLast: true, label: 'Which category is being modelled?', hint: 'Odds ratios describe the odds of THIS category. With 1 = Yes / 2 = No coding, pick Yes — otherwise every effect is reported upside down.' },
         { name: 'fixed', kind: 'variables', label: 'Fixed-effect predictors', hint: 'Predictors whose average effect you want to estimate.', multiple: true, unique: true },
         { name: 'group', kind: 'variables', label: 'Grouping variable (random intercept)', hint: 'The cluster each case belongs to, such as school or clinic.', multiple: false, types: ['factor', 'string', 'numeric'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Odds-ratio plot (log axis)' },
+            { value: 're', label: 'Random effects (caterpillar plot)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
 // --- Linear mixed model ------------------------------------------------------
 
-export async function linear(app, { y: yName, fixed: fixedNames, group: groupName, slope: slopeName }) {
+export async function linear(app, { y: yName, fixed: fixedNames, group: groupName, slope: slopeName, plots }) {
   if (!yName || !fixedNames || !fixedNames.length || !groupName) {
     await app.results.appendError('Linear mixed model: choose an outcome, at least one predictor, and a grouping variable.');
     return;
@@ -101,6 +127,8 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
   await app.webr.installPackages(['lme4', 'lmerTest']);
   const meta = metaMap(await app.data.getVariableMeta());
   const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
+  const want = new Set([].concat(plots ?? []));
+  const wantRE = want.has('re');
   const ranPart = slopeName ? `(1 + \`${slopeName}\` | .g)` : `(1 | .g)`;
   const formula = `.y ~ ${fixedNames.map(term).join(' + ')} + ${ranPart}`;
   const rCode = `
@@ -112,7 +140,16 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
     vc <- as.data.frame(VarCorr(fit))
     gvar <- vc$vcov[vc$grp != "Residual" & (is.na(vc$var2)) & vc$var1 == "(Intercept)"][1]
     rvar <- vc$vcov[vc$grp == "Residual"][1]
-    list(terms = rownames(co), est = co[, "Estimate"], se = co[, "Std. Error"],
+    # The per-group deviations and their conditional SDs — what a caterpillar plot is.
+    # Only computed when one was asked for: condVar carries an n-by-n array per group.
+    reLab <- character(0); reEst <- numeric(0); reSe <- numeric(0)
+    if (${wantRE ? 'TRUE' : 'FALSE'}) {
+      rr <- lme4::ranef(fit, condVar = TRUE)$.g
+      pv <- attr(rr, "postVar")
+      reLab <- rownames(rr); reEst <- rr[, 1]
+      reSe <- sqrt(as.numeric(pv[1, 1, ]))
+    }
+    list(reLab = reLab, reEst = reEst, reSe = reSe, terms = rownames(co), est = co[, "Estimate"], se = co[, "Std. Error"],
          df = co[, "df"], t = co[, "t value"], p = co[, "Pr(>|t|)"],
          reGrp = vc$grp, reTerm = vc$var1, reVar = vc$vcov, reSd = vc$sdcor,
          icc = gvar / (gvar + rvar), nobs = nobs(fit), ngrp = as.numeric(ngrps(fit)),
@@ -138,6 +175,40 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
     },
     { caption: 'Random Effects' },
   );
+  if (want.has('coef')) {
+    const model = coefficientForest({
+      terms: terms.map((t) => prettyTerm(t)),
+      est,
+      lo: est.map((b, i) => b - 1.96 * se[i]),
+      hi: est.map((b, i) => b + 1.96 * se[i]),
+      title: 'Fixed effects (95% CI)',
+      xTitle: 'B',
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
+  if (want.has('re')) {
+    // A caterpillar plot: each group's own deviation from the average, with the interval
+    // that says how well that deviation is pinned down. This is the figure a multilevel
+    // model is FOR — a variance component is one number for "groups differ", and the
+    // caterpillar is which ones, by how much, and how sure.
+    const reLab = r.strs('reLab');
+    const reEst = r.nums('reEst');
+    const reSe = r.nums('reSe');
+    const order = reEst.map((v, i) => i).sort((a, b) => reEst[a] - reEst[b]);
+    const model = coefficientForest({
+      terms: order.map((i) => reLab[i]),
+      est: order.map((i) => reEst[i]),
+      lo: order.map((i) => reEst[i] - 1.96 * reSe[i]),
+      hi: order.map((i) => reEst[i] + 1.96 * reSe[i]),
+      title: `Random intercepts by ${labelOf(meta.get(groupName), groupName)}`,
+      xTitle: 'Deviation from the average',
+      valueHeading: 'Deviation [95% CI]',
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
@@ -154,7 +225,7 @@ export async function linear(app, { y: yName, fixed: fixedNames, group: groupNam
 
 // --- Logistic mixed model ----------------------------------------------------
 
-export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: groupName }) {
+export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: groupName, plots }) {
   const want = yes != null && yes !== '' ? JSON.stringify(String(yes)) : 'NULL';
   if (!yName || !fixedNames || !fixedNames.length || !groupName) {
     await app.results.appendError('Logistic mixed model: choose a binary outcome, at least one predictor, and a grouping variable.');
@@ -163,6 +234,8 @@ export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: g
   await app.webr.installPackages(['lme4']);
   const meta = metaMap(await app.data.getVariableMeta());
   const term = (n) => (meta.get(n)?.categorical ? `factor(\`${n}\`)` : `\`${n}\``);
+  const wantPlots = new Set([].concat(plots ?? []));
+  const wantRE = wantPlots.has('re');
   const formula = `.y ~ ${fixedNames.map(term).join(' + ')} + (1 | .g)`;
   const rCode = `
     suppressMessages(library(lme4))
@@ -173,7 +246,16 @@ export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: g
     fit <- glmer(as.formula(${rStr(formula)}), data = d, family = binomial())
     s <- summary(fit); co <- s$coefficients
     vc <- as.data.frame(VarCorr(fit)); gvar <- vc$vcov[vc$grp != "Residual"][1]
-    list(terms = rownames(co), est = co[, "Estimate"], se = co[, "Std. Error"],
+    # The per-group deviations and their conditional SDs — what a caterpillar plot is.
+    # Only computed when one was asked for: condVar carries an n-by-n array per group.
+    reLab <- character(0); reEst <- numeric(0); reSe <- numeric(0)
+    if (${wantRE ? 'TRUE' : 'FALSE'}) {
+      rr <- lme4::ranef(fit, condVar = TRUE)$.g
+      pv <- attr(rr, "postVar")
+      reLab <- rownames(rr); reEst <- rr[, 1]
+      reSe <- sqrt(as.numeric(pv[1, 1, ]))
+    }
+    list(reLab = reLab, reEst = reEst, reSe = reSe, terms = rownames(co), est = co[, "Estimate"], se = co[, "Std. Error"],
          z = co[, "z value"], p = co[, "Pr(>|z|)"],
          gvar = gvar, icc = gvar / (gvar + (pi^2) / 3), nobs = nobs(fit), ngrp = as.numeric(ngrps(fit)),
          ypos = attr(.yb, "pos"))`;
@@ -206,6 +288,44 @@ export async function logistic(app, { y: yName, yes, fixed: fixedNames, group: g
     },
     { caption: 'Random Effects' },
   );
+  if (wantPlots.has('coef')) {
+    // Odds ratios, so the axis is logarithmic and the null sits at 1 — halving and
+    // doubling the odds are the same distance from no effect, and only a log axis
+    // draws them that way.
+    const model = coefficientForest({
+      terms: terms.map((t) => prettyTerm(t)),
+      est: est.map(Math.exp),
+      lo: est.map((b, i) => Math.exp(b - 1.96 * se[i])),
+      hi: est.map((b, i) => Math.exp(b + 1.96 * se[i])),
+      title: 'Fixed effects (odds ratios, 95% CI)',
+      xTitle: 'Odds ratio',
+      ratio: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
+  if (wantPlots.has('re')) {
+    // A caterpillar plot: each group's own deviation from the average, with the interval
+    // that says how well that deviation is pinned down. This is the figure a multilevel
+    // model is FOR — a variance component is one number for "groups differ", and the
+    // caterpillar is which ones, by how much, and how sure.
+    const reLab = r.strs('reLab');
+    const reEst = r.nums('reEst');
+    const reSe = r.nums('reSe');
+    const order = reEst.map((v, i) => i).sort((a, b) => reEst[a] - reEst[b]);
+    const model = coefficientForest({
+      terms: order.map((i) => reLab[i]),
+      est: order.map((i) => reEst[i]),
+      lo: order.map((i) => reEst[i] - 1.96 * reSe[i]),
+      hi: order.map((i) => reEst[i] + 1.96 * reSe[i]),
+      title: `Random intercepts by ${labelOf(meta.get(groupName), groupName)}`,
+      xTitle: 'Deviation from the average',
+      valueHeading: 'Deviation [95% CI]',
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
   await app.results.appendText(
     'Odds ratios are **conditional** (within-group) effects: the odds multiplier for a one-unit change, holding the group random effect fixed. The latent-scale ICC uses the standard logistic residual variance (π²/3 ≈ 3.29).',
   );

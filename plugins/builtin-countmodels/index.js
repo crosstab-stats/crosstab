@@ -16,7 +16,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -77,6 +77,18 @@ function COUNT_INPUTS(dvLabel) {
   return [
     { name: 'dv', kind: 'variables', label: dvLabel, hint: 'A count of events per case; whole numbers, never negative.', multiple: false, types: ['numeric'], unique: true },
     { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think drive the event count up or down.', multiple: true, unique: true },
+    {
+      name: 'plots',
+      kind: 'choice',
+      label: 'Plots',
+      hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+      multiple: true,
+      optional: true,
+      options: [
+        { value: 'coef', label: 'Incidence-rate-ratio plot (log axis)' },
+      ],
+      default: [],
+    },
   ];
 }
 
@@ -93,7 +105,7 @@ export async function negbin(app, inputs) {
  * @param {{dv: string, ivs: string[]}} inputs
  * @param {boolean} nb - negative binomial vs Poisson
  */
-async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
+async function fitCount(app, { dv: dvName, ivs: ivNames, plots }, nb) {
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Count model: choose a count outcome and at least one predictor.');
     return;
@@ -134,6 +146,22 @@ async function fitCount(app, { dv: dvName, ivs: ivNames }, nb) {
     },
     { caption: `${nb ? 'Negative Binomial' : 'Poisson'} Regression — outcome: ${labelOf(meta.get(dvName), dvName)} (N = ${r.num1('n')})` },
   );
+  if ([].concat(plots ?? []).includes('coef')) {
+    // IRRs on a log axis: a rate ratio of 0.5 and one of 2 are the same size of effect
+    // in opposite directions, and the null is 1, not 0.
+    const model = coefficientForest({
+      terms: terms.map((t) => prettyTerm(t)),
+      est: est.map(Math.exp),
+      lo: lo.map(Math.exp),
+      hi: hi.map(Math.exp),
+      title: 'Incidence-rate ratios (95% CI)',
+      xTitle: 'IRR',
+      valueHeading: 'IRR [95% CI]',
+      ratio: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
   const disp = r.num1('dispersion');
   const note = nb
     ? `Negative binomial (θ = ${f(r.num1('theta'), 3)}) allows variance > mean. IRRs are exp(B): an IRR of 1.2 means a 20% higher expected count per unit.`

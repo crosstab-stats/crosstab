@@ -21,7 +21,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fmtP, fixed: f, rounded: int, metaMap, rStr, unpackR: flat, prettyTerm, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -79,7 +79,19 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to explain.', types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think drive the outcome.', multiple: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'econ-iv',
@@ -91,7 +103,19 @@ export const manifest = {
         { name: 'endog', kind: 'variables', label: 'Endogenous regressor(s)', hint: 'The predictor suspected of being tangled up with the error.', multiple: true, unique: true },
         { name: 'instruments', kind: 'variables', label: 'Instrument(s)', hint: 'Variables that affect the regressor but not the outcome directly.', multiple: true, unique: true },
         { name: 'controls', kind: 'variables', label: 'Exogenous controls (optional)', hint: 'Other clean predictors to hold constant.', multiple: true, optional: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'econ-panel',
@@ -115,12 +139,24 @@ export const manifest = {
           ],
           default: 'within',
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
-export async function robust(app, { dv, ivs }) {
+export async function robust(app, { dv, ivs, plots }) {
   const ivNames = asArr(ivs);
   if (!dv || !ivNames.length) return void app.results.appendError('Pick an outcome and at least one predictor.');
   const meta = metaMap(await app.data.getVariableMeta());
@@ -136,7 +172,7 @@ export async function robust(app, { dv, ivs }) {
          bpStat = unname(bp$statistic), bpDf = unname(bp$parameter), bpP = bp$p.value,
          r2 = summary(fit)$r.squared, n = nrow(d))`;
   const r = flat((await app.webr.run(rCode)).result);
-  await coeffTable(app, meta, r, `Robust (HC1) Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`);
+  await coeffTable(app, meta, r, `Robust (HC1) Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`, plots);
   await app.results.appendTable(
     {
       columns: ['', 'Value'],
@@ -153,7 +189,7 @@ export async function robust(app, { dv, ivs }) {
   await app.results.appendText('Standard errors are heteroskedasticity-consistent (HC1). A significant Breusch–Pagan (p < .05) confirms heteroskedasticity — which is exactly what robust SEs guard against.');
 }
 
-export async function iv(app, { dv, endog, instruments, controls }) {
+export async function iv(app, { dv, endog, instruments, controls, plots }) {
   const endogN = asArr(endog);
   const instrN = asArr(instruments);
   const ctrlN = asArr(controls);
@@ -175,7 +211,7 @@ export async function iv(app, { dv, endog, instruments, controls }) {
     list(terms = rownames(co), est = co[, 1], se = co[, 2], t = co[, 3], p = co[, 4],
          diagNames = rownames(dg), diagStat = dg[, "statistic"], diagP = dg[, "p-value"], n = nobs(fit))`;
   const r = flat((await app.webr.run(rCode)).result);
-  await coeffTable(app, meta, r, `2SLS Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`);
+  await coeffTable(app, meta, r, `2SLS Coefficients — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`, plots);
   const dn = r.strs('diagNames');
   const ds = r.nums('diagStat');
   const dp = r.nums('diagP');
@@ -190,7 +226,7 @@ export async function iv(app, { dv, endog, instruments, controls }) {
   await app.results.appendText('Want: weak instruments **significant** (instruments are strong), Wu–Hausman **significant** (endogeneity present, so IV is needed), and Sargan **non-significant** (overidentifying restrictions hold; only with more instruments than endogenous regressors).');
 }
 
-export async function panel(app, { dv, ivs, id, time, model }) {
+export async function panel(app, { dv, ivs, id, time, model, plots }) {
   const ivNames = asArr(ivs);
   if (!dv || !ivNames.length || !id || !time) {
     return void app.results.appendError('Panel regression needs an outcome, predictor(s), a unit id, and a time index.');
@@ -209,7 +245,7 @@ export async function panel(app, { dv, ivs, id, time, model }) {
          r2 = unname(s$r.squared["rsq"]), n = length(residuals(fit)))`;
   const r = flat((await app.webr.run(rCode)).result);
   const mdlLabel = { within: 'Fixed effects (within)', random: 'Random effects', pooling: 'Pooled OLS' }[mdl];
-  await coeffTable(app, meta, r, `Panel — ${mdlLabel} — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`);
+  await coeffTable(app, meta, r, `Panel — ${mdlLabel} — dependent: ${label(meta, dv)} (N = ${int(r.num1('n'))})`, plots);
   await app.results.appendTable(
     { columns: ['', 'Value'], rows: [['R Square', f(r.num1('r2'), 3)]], rowHeaders: true },
     { caption: 'Model Fit' },
@@ -218,8 +254,8 @@ export async function panel(app, { dv, ivs, id, time, model }) {
 
 // --- shared rendering --------------------------------------------------------
 
-async function coeffTable(app, meta, r, caption) {
-  const terms = r.strs('terms');
+async function coeffTable(app, meta, r, caption, plots) {
+  const terms = r.strs('terms', plots);
   const est = r.nums('est');
   const se = r.nums('se');
   const t = r.nums('t');
@@ -238,6 +274,21 @@ async function coeffTable(app, meta, r, caption) {
     },
     { caption },
   );
+
+  // Three estimators share this table, so they share its figure too: the same terms on
+  // one axis against zero. The intercept stays out — on a panel or IV model it is the
+  // fitted value at zero on every regressor, and it squashes everything that matters.
+  if ([].concat(plots ?? []).includes('coef')) {
+    const model = coefficientForest({
+      terms: terms.map((tm) => prettyTerm(tm)),
+      est,
+      lo: est.map((b, i) => b - 1.96 * se[i]),
+      hi: est.map((b, i) => b + 1.96 * se[i]),
+      title: `${caption} (95% CI)`,
+      xTitle: 'B',
+    });
+    if (model) await app.results.appendChart(model);
+  }
 }
 
 // --- helpers -----------------------------------------------------------------

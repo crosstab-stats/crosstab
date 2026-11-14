@@ -1109,6 +1109,63 @@ export function pairsForestModel({ pairs, title, xTitle, valueHeading }) {
 }
 
 /**
+ * A model's coefficients, as the figure a paper prints beside the table.
+ *
+ * Every regression in this project ends the same way: a column of terms, an estimate
+ * each, and an interval. Eighteen plugins print that table and none drew it, which is
+ * the single most repeated missing figure in the whole catalogue — and eighteen
+ * hand-rolled forests would be eighteen chances to disagree about the intercept, the
+ * reference line and the axis.
+ *
+ * Three decisions it makes once, for everyone:
+ *
+ *  - **The intercept is dropped by default.** It is not on the same footing as the
+ *    slopes — it is the fitted value at zero on every predictor, often far outside the
+ *    data — and leaving it in squashes every term that matters into the middle of the
+ *    axis. Pass `keepIntercept` when the model is one where it means something.
+ *  - **Ratios get a log axis and a reference at 1.** An odds ratio of 0.5 and one of 2
+ *    are the same size of effect in opposite directions, and only a log axis draws them
+ *    that way. Differences get a linear axis and a reference at 0.
+ *  - **A term with no interval still gets its point.** A missing CI is a gap in the bar,
+ *    not a reason to drop the row — the reader is entitled to see that the term was in
+ *    the model.
+ *
+ * @param {object} a
+ * @param {string[]} a.terms term labels, already humanised by the caller
+ * @param {number[]} a.est point estimates
+ * @param {number[]} a.lo lower bounds (may be empty or NaN)
+ * @param {number[]} a.hi upper bounds
+ * @param {string} a.title
+ * @param {string} a.xTitle
+ * @param {string} [a.valueHeading] the text column's heading
+ * @param {boolean} [a.ratio] the estimates are ratios (OR, HR, IRR, RR)
+ * @param {boolean} [a.keepIntercept]
+ * @returns {?object} a chart model, or null when nothing is left to draw
+ */
+export function coefficientForest({
+  terms, est, lo = [], hi = [], title, xTitle, valueHeading, ratio = false, keepIntercept = false,
+}) {
+  const INTERCEPT = /^\(?intercept\)?$|^const(ant)?$/i;
+  const rows = (terms || []).map((label, i) => ({
+    key: `b${i}`,
+    label: String(label),
+    est: Number(est?.[i]),
+    lo: Number(lo?.[i]),
+    hi: Number(hi?.[i]),
+  })).filter((rw) => Number.isFinite(rw.est) && (keepIntercept || !INTERCEPT.test(rw.label.trim())));
+  if (!rows.length) return null;
+  return {
+    kind: 'forest',
+    title,
+    refLine: ratio ? 1 : 0,
+    valueHeading: valueHeading || (ratio ? 'Ratio [95% CI]' : 'Estimate [95% CI]'),
+    axes: { x: { title: xTitle } },
+    studies: rows,
+    ...(ratio ? { view: { logScale: true } } : {}),
+  };
+}
+
+/**
  * A column-major flat vector (R's `unlist` of a k-column frame) back into k columns.
  *
  * @param {number[]} flat

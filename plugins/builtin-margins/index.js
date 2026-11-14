@@ -30,7 +30,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, ci: ciAt, unpackR: flat, levelLabel: lvl } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, ci: ciAt, unpackR: flat, levelLabel: lvl, coefficientForest } = globalThis.ctStd;
 
 /** This plugin reports four decimals: a marginal effect or a trend slope can be small
  * enough that three prints `[0.000, 0.001]`. The precision is the caller's; the
@@ -102,7 +102,19 @@ export const manifest = {
             { value: 'mem', label: 'Marginal effect at the mean (MEM)' },
           ],
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Marginal effects with 95% CI' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -118,7 +130,7 @@ const FAMILIES = {
  * @param {object} app
  * @param {{dv: string, ivs: string[], family: string, kind: string}} inputs
  */
-export async function margins(app, { dv: dvName, ivs: ivNames, yes, family, kind }) {
+export async function margins(app, { dv: dvName, ivs: ivNames, yes, family, kind, plots }) {
   const want = yes != null && yes !== '' ? JSON.stringify(String(yes)) : 'NULL';
   const binaryFam = family !== 'poisson' && family !== 'linear';
   if (!dvName || !ivNames || !ivNames.length) {
@@ -214,6 +226,23 @@ export async function margins(app, { dv: dvName, ivs: ivNames, yes, family, kind
         + ` (N = ${r.num1('n')})`,
     },
   );
+
+  if ([].concat(plots ?? []).includes('coef')) {
+    // The figure people run margins FOR: each effect in the outcome's own units, against
+    // the zero line. A marginal effect is already a difference, so the axis is linear and
+    // the null is no effect.
+    const model = coefficientForest({
+      terms: terms.map((t) => prettyMargin(t, meta)),
+      est,
+      lo,
+      hi,
+      title: `${atmeans ? 'Marginal effects at the mean' : 'Average marginal effects'} (95% CI)`,
+      xTitle: `Change in ${fam.metric}`,
+      valueHeading: 'dy/dx [95% CI]',
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
 
   const dxWord = fam.metric === 'probability' ? 'probability' : fam.metric === 'expected count' ? 'expected count' : 'predicted value';
   await app.results.appendText(

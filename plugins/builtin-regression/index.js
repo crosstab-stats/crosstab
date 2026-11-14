@@ -18,7 +18,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, labelOf, fmtP, ci, rStr, unpackR, prettyTerm } = globalThis.ctStd;
+const { fixed: f, labelOf, fmtP, ci, rStr, unpackR, prettyTerm, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -62,7 +62,19 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric measure you want to explain or predict.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Coefficient plot (estimates with 95% CI)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -71,7 +83,7 @@ export const manifest = {
  * @param {object} app
  * @param {{dv: string, ivs: string[]}} inputs
  */
-export async function run(app, { dv: dvName, ivs: ivNames }) {
+export async function run(app, { dv: dvName, ivs: ivNames, plots }) {
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Linear Regression: choose an outcome and at least one predictor.');
     return;
@@ -174,6 +186,21 @@ export async function run(app, { dv: dvName, ivs: ivNames }) {
     },
     { caption: 'Coefficients' },
   );
+  // The coefficients, as the figure a paper prints beside the table. Nothing new is
+  // computed — these are the same estimates and intervals, on one axis against the zero
+  // line, which is the comparison a column of numbers makes the reader do in their head.
+  if ([].concat(plots ?? []).includes('coef')) {
+    const model = coefficientForest({
+      terms: m.terms.map((t) => prettyTerm(t)),
+      est: m.estimate,
+      lo: m.ciLo,
+      hi: m.ciHi,
+      title: 'Coefficients (95% CI)',
+      xTitle: 'B',
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
 
   // Diagnostics: do the model's assumptions hold?
   await app.results.appendTable(

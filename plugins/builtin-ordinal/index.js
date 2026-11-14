@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -72,7 +72,19 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Ordered outcome', hint: 'The ranked outcome to model, such as a Likert agreement scale.', multiple: false, unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think shift the outcome up or down.', multiple: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Odds-ratio plot (log axis)' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'ordinal-multinomial',
@@ -83,7 +95,19 @@ export const manifest = {
         { name: 'dv', kind: 'variables', label: 'Unordered outcome', hint: 'The category outcome with no natural order, like party chosen.', multiple: false, unique: true },
         { name: 'base', kind: 'level', of: 'dv', label: 'Reference category', hint: 'Every other category is compared against this one, so it decides what each relative-risk ratio means. Defaults to the first category.' },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict which category cases fall into.', multiple: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables. Each one is a live chart you can restyle afterwards.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Odds-ratio plot (log axis)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -94,7 +118,7 @@ export const manifest = {
  * @param {object} app
  * @param {{dv: string, ivs: string[]}} inputs
  */
-export async function ordinal(app, { dv: dvName, ivs: ivNames }) {
+export async function ordinal(app, { dv: dvName, ivs: ivNames, plots }) {
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Ordinal regression: choose an ordered outcome and at least one predictor.');
     return;
@@ -152,6 +176,22 @@ export async function ordinal(app, { dv: dvName, ivs: ivNames }) {
     { caption: 'Coefficients' },
   );
 
+  if ([].concat(plots ?? []).includes('coef')) {
+    // exp(B) with a log axis: an ordinal model is read as odds ratios, and halving the
+    // odds has to look like the mirror of doubling them.
+    const model = coefficientForest({
+      terms: terms.map((tm) => prettyTerm(tm)),
+      est: est.map(Math.exp),
+      lo: est.map((b, i) => Math.exp(b - 1.96 * se[i])),
+      hi: est.map((b, i) => Math.exp(b + 1.96 * se[i])),
+      title: 'Odds ratios (95% CI)',
+      xTitle: 'Odds ratio',
+      ratio: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
+
+
   const thrNames = r.strs('thrNames'), thrEst = r.nums('thrEst'), thrSe = r.nums('thrSe');
   await app.results.appendTable(
     {
@@ -172,7 +212,7 @@ export async function ordinal(app, { dv: dvName, ivs: ivNames }) {
  * @param {object} app
  * @param {{dv: string, ivs: string[]}} inputs
  */
-export async function multinomial(app, { dv: dvName, base, ivs: ivNames }) {
+export async function multinomial(app, { dv: dvName, base, ivs: ivNames, plots }) {
   // The reference category the other categories are compared against. NULL keeps the
   // old rule — the first level in sort order — so recorded scripts replay unchanged.
   const baseWant = base != null && base !== '' ? rStr(String(base)) : 'NULL';
@@ -245,6 +285,26 @@ export async function multinomial(app, { dv: dvName, base, ivs: ivNames }) {
       { caption: `Outcome: ${lvl(dvMeta, cls)} (vs ${lvl(dvMeta, reference)})` },
     );
   });
+  if ([].concat(plots ?? []).includes('coef')) {
+    // One plot per contrast, matching the one table per contrast above: the blocks are
+    // not on a common footing — each is "this category versus the reference" — so a
+    // single axis across them would invite a comparison the model does not support.
+    for (const [ci_, cls] of classes.entries()) {
+      const idx = coefTerms.map((_, j) => ci_ * nT + j);
+      const model = coefficientForest({
+        terms: coefTerms.map((tm) => prettyTerm(tm)),
+        est: idx.map((k) => Math.exp(B[k])),
+        lo: idx.map((k) => Math.exp(B[k] - 1.96 * SE[k])),
+        hi: idx.map((k) => Math.exp(B[k] + 1.96 * SE[k])),
+        title: `${lvl(dvMeta, cls)} vs ${lvl(dvMeta, reference)} (RRR, 95% CI)`,
+        xTitle: 'Relative-risk ratio',
+        valueHeading: 'RRR [95% CI]',
+        ratio: true,
+      });
+      if (model) await app.results.appendChart(model);
+    }
+  }
+
   await app.results.appendText(
     `Each block contrasts one outcome category against the reference (**${lvl(dvMeta, reference)}**). **RRR** (relative-risk ratio, exp B) > 1 means the predictor raises the chance of that category relative to the reference. Coefficients are not comparable across blocks the way ordinal ORs are.`,
   );
