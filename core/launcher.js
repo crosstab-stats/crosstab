@@ -1123,15 +1123,14 @@ function injectStyles() {
       padding: 11px 14px; border: 0; border-bottom: 1px solid var(--line, #d8dde2);
       background: #eef4fa; color: var(--accent, #2572a5); cursor: pointer;
     }
-    /* The picker stops being its own scroll container: ONE scroller (the body) rather than a
-       list that traps a touch drag inside itself, which is the mobile behaviour this feature
-       exists to avoid. The list then sizes to its content and the page scrolls past it; the
-       section headers stick to the body scrollport instead of a box that no longer scrolls. */
+    /* The picker stops being its own scroll container on a small screen: ONE scroller rather
+       than a list that traps a touch drag inside itself, which is the mobile behaviour this
+       feature exists to avoid. That rule now lives with the picker (core/plugin-picker.js),
+       because it is the picker's behaviour and not the launcher's — it was written here and
+       applied everywhere, which is how Edit ▸ Plugins ended up with a list that scrolled
+       nowhere and painted its rows over the Done button. What stays here is the launcher's
+       half of the bargain: the body is the scrollport the list gives up. */
     [data-screen="small"] .ctl__picker { min-height: 0; }
-    [data-screen="small"] .ctp__list {
-      overflow: visible; max-height: none; min-height: 0; border: 0; padding: 0;
-    }
-    [data-screen="small"] .ctp__sectionhead { top: 0; }
     /* iOS, measured on the owner's iPhone (2026-10-07): the header sat too high and Start
        too low, which is ONE cause. The launcher is a <dialog> at inset:0, so it escapes the
        safe-area padding <body> already carries, and 100vh on iOS is the LARGE viewport — the

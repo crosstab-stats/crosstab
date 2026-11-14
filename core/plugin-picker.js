@@ -909,7 +909,50 @@ function injectStyles() {
     /* The standalone modal: wider than .ct-dialog--wide's 640px, which the two-column grid
        plus the row's action icons cannot fit. */
     .ctp-dialog.ct-dialog--wide { max-width: min(900px, 94vw); width: 94vw; }
-    .ctp-dialog__body { display: flex; flex-direction: column; min-height: 0; max-height: 60vh; }
+    /* The modal is a column, so the dialog's height gets shared out rather than overrun.
+       The [open] qualifier is load-bearing: a bare "display: flex" outranks the UA sheet's
+       "dialog:not([open]) { display: none }" and shows a CLOSED dialog — the same trap the
+       shell's :not([hidden]) note warns about, approached from a third side.
+
+       What it fixes — half of the iPhone report below, and the half that needs no
+       small-screen rules to show itself: the list was the one thing in here that could not
+       shrink ("min-height: 140px") inside a body nothing clipped, so on a short viewport
+       its rows painted over the Done button; and the form, taller than the dialog, put Done
+       below the fold entirely. Measured at 844x390 with the small-screen rules OFF: the
+       list's box ended 10px past the button row, Done sat 75px below the dialog's visible
+       bottom, and elementFromPoint at Done's own centre returned nothing at all. The body
+       now absorbs the squeeze and clips what is left over, and the button row is outside
+       it, so Done stays on screen at every size. */
+    .ctp-dialog[open] { display: flex; flex-direction: column; }
+    .ctp-dialog .ct-dialog__form { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+    /* Everything that is not the list keeps its measured height; only the body gives way. */
+    .ctp-dialog .ct-dialog__title,
+    .ctp-dialog .ct-dialog__hint,
+    .ctp-dialog .ct-dialog__buttons { flex: none; }
+    .ctp-dialog .ctp__list { min-height: 0; }
+    .ctp-dialog__body { display: flex; flex-direction: column; min-height: 0; max-height: 60vh;
+      flex: 0 1 auto; overflow: hidden; }
+
+    /* --- small screens (core/screen-mode.js) ---------------------------------
+       On a phone the list stops being its own scroll container — one scroller, rather than a
+       list that traps a touch drag inside itself. That is a decision about the PICKER, so it
+       lives here; it used to live in the launcher's sheet, unscoped, which meant the modal
+       inherited "do not scroll" without inheriting the launcher's body scrollport. The list
+       then sized to its content and had nothing to clip it: measured at 360x640, 679px of
+       rows inside a 184px box, painted straight over a Done button that was itself 103px
+       below the dialog's bottom edge (owner, on an iPhone, 2026-11-13).
+
+       The deal is: the list gives up its scroller, the HOST provides one. The launcher's is
+       .ctl__body; the modal's is the dialog body below. */
+    [data-screen="small"] .ctp__list {
+      overflow: visible; max-height: none; min-height: 0; border: 0; padding: 0;
+    }
+    [data-screen="small"] .ctp__sectionhead { top: 0; }
+    [data-screen="small"] .ctp-dialog__body { max-height: none; flex: 1 1 auto; overflow-y: auto; }
+    /* And the picker inside it sizes to its content rather than stretching to the scrollport,
+       or the list would be handed a short definite height again and spill out of it — the
+       launcher does the same thing one level up, with .ctl__center { flex: none }. */
+    [data-screen="small"] .ctp-dialog__body > .ctp { flex: none; }
   `;
   document.head.append(style);
 }
