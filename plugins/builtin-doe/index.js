@@ -15,7 +15,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -54,12 +54,24 @@ export const manifest = {
       inputs: [
         { name: 'y', kind: 'variables', label: 'Response', hint: 'The measured result you want to optimize.', multiple: false, types: ['numeric'], unique: true },
         { name: 'factors', kind: 'variables', label: 'Factors (2+ continuous)', hint: 'The dials you varied in the experiment, two or more.', multiple: true, types: ['numeric'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'pareto', label: 'Pareto of effects' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
-export async function run(app, { y: yName, factors: facNames }) {
+export async function run(app, { y: yName, factors: facNames, plots }) {
   if (!yName || !facNames || facNames.length < 2) {
     await app.results.appendError('Response surface: choose a response and at least two continuous factors.');
     return;
@@ -94,6 +106,32 @@ export async function run(app, { y: yName, factors: facNames }) {
     },
     { caption: `Response Surface (second-order) — ${labelOf(meta.get(yName), yName)} (N = ${r.num1('n')}, R² = ${f(r.num1('r2'), 3)})` },
   );
+
+  if ([].concat(plots ?? []).includes('pareto')) {
+    // A Pareto of effects is a tornado by another name — terms ordered by the size of
+    // their effect, so the few that matter separate from the many that do not. That is
+    // the whole purpose of a screening design, and the kind already exists.
+    const terms = r.strs('terms');
+    const est = r.nums('est');
+    const rows = terms
+      .map((t, i) => ({ label: prettyTerm(t), value: est[i] }))
+      .filter((row) => Number.isFinite(row.value) && !/^\(?Intercept\)?$/i.test(row.label.trim()))
+      .sort((x, y) => Math.abs(y.value) - Math.abs(x.value));
+    if (rows.length) {
+      await app.results.appendChart({
+        kind: 'tornado',
+        title: 'Effects, largest first',
+        baseline: 0,
+        rows: rows.map((row) => ({
+          label: row.label,
+          lo: Math.min(0, row.value),
+          hi: Math.max(0, row.value),
+        })),
+        valueHeading: 'Effect',
+        axes: { x: { title: `Effect on ${labelOf(meta.get(yName), yName)}` } },
+      });
+    }
+  }
 
   const stat = r.nums('stat'), eig = r.nums('eig');
   const kind = eig.every((e) => e < 0) ? 'maximum' : eig.every((e) => e > 0) ? 'minimum' : 'saddle point';

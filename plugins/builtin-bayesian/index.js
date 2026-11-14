@@ -25,7 +25,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -91,7 +91,19 @@ export const manifest = {
       inputs: [
         { name: 'dv', kind: 'variables', label: 'Outcome', hint: 'The numeric outcome you want to model and explain.', multiple: false, types: ['numeric'], unique: true },
         { name: 'ivs', kind: 'variables', label: 'Predictors', hint: 'The variables you think predict the outcome.', multiple: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Posterior means with 95% credible intervals' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'bayes-ttest',
@@ -135,7 +147,7 @@ export const manifest = {
  * @param {object} app
  * @param {{dv: string, ivs: string[]}} inputs
  */
-export async function regression(app, { dv: dvName, ivs: ivNames }) {
+export async function regression(app, { dv: dvName, ivs: ivNames, plots }) {
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Bayesian regression: choose an outcome and at least one predictor.');
     return;
@@ -180,6 +192,22 @@ export async function regression(app, { dv: dvName, ivs: ivNames }) {
     },
     { caption: `Bayesian Regression — outcome: ${labelOf(meta.get(dvName), dvName)} (N = ${r.num1('n')}, ${r.num1('draws')} draws)` },
   );
+
+  if ([].concat(plots ?? []).includes('coef')) {
+    // Posterior means with 95% CREDIBLE intervals. They look like a frequentist forest
+    // and are read differently: this interval is a statement about where the parameter
+    // is, which is the thing people wrongly believe a confidence interval says.
+    const model = coefficientForest({
+      terms: r.strs('terms'),
+      est: r.nums('mean'),
+      lo: r.nums('lo'),
+      hi: r.nums('hi'),
+      title: 'Posterior means (95% credible interval)',
+      xTitle: 'B',
+      valueHeading: 'Posterior mean [95% CrI]',
+    });
+    if (model) await app.results.appendChart(model);
+  }
   await app.results.appendText(
     `Coefficients are **posterior means**; the interval is a **95% credible interval** — given the data and the (weakly informative) default priors, there's a 95% probability the coefficient lies inside it. ` +
       `A coefficient whose interval excludes 0 is "credibly" non-zero. Residual variance σ² ≈ ${f(r.num1('sigma2'), 3)}.`,

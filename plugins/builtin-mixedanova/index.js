@@ -23,7 +23,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -73,7 +73,19 @@ export const manifest = {
         { name: 'y', kind: 'variables', label: 'Outcome', hint: 'The numeric measure whose group means you want to compare.', multiple: false, types: ['numeric'], unique: true },
         { name: 'factors', kind: 'variables', label: 'Factor(s)', hint: 'The grouping variables whose effect on the outcome you test.', multiple: true, types: ['factor', 'string', 'numeric'], unique: true },
         { name: 'covs', kind: 'variables', label: 'Covariate(s)', hint: 'Continuous variables to adjust for before testing the factors.', multiple: true, types: ['numeric'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'emm', label: 'Estimated marginal means with 95% CI' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'ancova-mixed',
@@ -90,7 +102,7 @@ export const manifest = {
 
 // --- ANCOVA ------------------------------------------------------------------
 
-export async function ancova(app, { y: yName, factors: factorNames, covs: covNames }) {
+export async function ancova(app, { y: yName, factors: factorNames, covs: covNames, plots }) {
   if (!yName || !factorNames || !factorNames.length || !covNames || !covNames.length) {
     await app.results.appendError('ANCOVA: choose an outcome, at least one factor, and at least one covariate.');
     return;
@@ -144,6 +156,24 @@ export async function ancova(app, { y: yName, factors: factorNames, covs: covNam
     },
     { caption: 'Estimated Marginal Means (covariate-adjusted)' },
   );
+
+  if ([].concat(plots ?? []).includes('emm')) {
+    // The adjusted means with their intervals — the quantity an ANCOVA exists to produce.
+    // A forest rather than bars because the interval is already computed here (emmeans
+    // returns it), and a bar chart would have to throw it away and recompute something
+    // else from the raw data, which would no longer be covariate-adjusted.
+    const model = coefficientForest({
+      terms: el,
+      est: em,
+      lo: elo,
+      hi: ehi,
+      title: 'Estimated marginal means (95% CI)',
+      xTitle: `Adjusted mean ${labelOf(meta.get(yName), yName)}`,
+      valueHeading: 'Adjusted mean [95% CI]',
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
   await app.results.appendText(
     'ANCOVA tests factor effects **after** removing the linear influence of the covariate(s); the adjusted means are the group means evaluated at the average covariate value. Type III SS (sum-to-zero contrasts) make the factor tests order-independent. Partial η² is each effect\'s share of its own + residual variance.',
   );

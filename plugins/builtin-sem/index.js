@@ -44,7 +44,7 @@ if (!isTRUE(getOption("ct.lavaan.patched"))) {
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, labelOf, metaMap, rStr, unpackR: flat, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -101,7 +101,19 @@ export const manifest = {
       inputs: [
         { name: 'items', kind: 'variables', label: 'Items (one factor)', hint: 'The scale items expected to measure one underlying factor.', multiple: true, types: ['numeric'] },
         { name: 'factorName', kind: 'text', label: 'Factor name', hint: 'A short name for the factor these items measure.', default: 'Factor', optional: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'loadings', label: 'Standardized loadings' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'sem-growth',
@@ -137,7 +149,7 @@ export const manifest = {
  * @param {object} app
  * @param {{items: string[], factorName: ?string}} inputs
  */
-export async function cfa(app, { items, factorName }) {
+export async function cfa(app, { items, factorName, plots }) {
   if (!items || items.length < 2) {
     await app.results.appendError('CFA needs at least 2 items.');
     return;
@@ -183,6 +195,24 @@ export async function cfa(app, { items, factorName }) {
     },
     { caption: 'Standardized Loadings' },
   );
+
+  if ([].concat(plots ?? []).includes('loadings')) {
+    // Loadings with their intervals, sorted as the table lists them: the figure you scan
+    // to see which indicators carry the factor and which are along for the ride.
+    const est = r.nums('std');
+    const se = r.nums('se');
+    const model = coefficientForest({
+      terms: r.strs('items').map((it) => labelOf(meta.get(it), it)),
+      est,
+      lo: est.map((v, i) => v - 1.96 * se[i]),
+      hi: est.map((v, i) => v + 1.96 * se[i]),
+      title: 'Standardized loadings (95% CI)',
+      xTitle: 'Standardized loading',
+      valueHeading: 'Loading [95% CI]',
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
   await app.results.appendText(
     'Good fit (rules of thumb): **CFI/TLI ≥ .95**, **RMSEA ≤ .06**, **SRMR ≤ .08**. Standardized loadings ≥ .5 (ideally ≥ .7) indicate items that represent the factor well. χ² is sensitive to N, so lean on the descriptive indices.',
   );

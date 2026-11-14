@@ -69,7 +69,20 @@ export const manifest = {
             { value: 'raw', label: 'No — raw values' },
           ],
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'profile', label: 'Cluster profiles (centres per variable)' },
+            { value: 'sizes', label: 'Cluster sizes' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -78,7 +91,7 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[], k: number, standardize: string}} inputs
  */
-export async function kmeans(app, { vars, k, standardize }) {
+export async function kmeans(app, { vars, k, standardize, plots }) {
   if (!vars || vars.length < 1) {
     await app.results.appendError('Cluster analysis: choose at least one numeric variable.');
     return;
@@ -120,6 +133,38 @@ export async function kmeans(app, { vars, k, standardize }) {
     },
     { caption: `Cluster Centres (means${identicalRaw(standardize) ? '' : ', original scale'})` },
   );
+
+  const wantC = new Set([].concat(plots ?? []));
+  if (wantC.has('profile')) {
+    // "Compare the centres to characterise each cluster" — the sentence under the table
+    // describes a figure, so here it is. One line per cluster across the variables is how
+    // a k-means solution is actually interpreted.
+    await app.results.appendChart({
+      kind: 'categorical',
+      title: 'Cluster profiles',
+      categories: vnames.map((v) => ({ key: v, label: labelOf(meta.get(v), v) })),
+      series: Array.from({ length: kk }, (_, c) => ({
+        key: `c${c + 1}`,
+        label: `Cluster ${c + 1} (n = ${sizes[c]})`,
+        values: vnames.map((_v, vi) => centers[vi * kk + c]),
+      })),
+      axes: { x: { title: 'Variable' }, y: { title: identicalRaw(standardize) ? 'Mean' : 'Mean (z-scored input, original units)' } },
+      view: { mark: 'line', legend: 'right' },
+    });
+  }
+  if (wantC.has('sizes')) {
+    // Cluster sizes are a diagnostic, not decoration: one cluster holding 2% of the cases
+    // is usually a solution that found outliers rather than structure.
+    await app.results.appendChart({
+      kind: 'categorical',
+      title: 'Cluster sizes',
+      categories: Array.from({ length: kk }, (_, c) => ({ key: `c${c + 1}`, label: `Cluster ${c + 1}` })),
+      series: [{ key: 'n', label: 'Cases', values: sizes }],
+      counts: true,
+      axes: { x: { title: 'Cluster' }, y: { title: 'Cases' } },
+      view: { mark: 'bar', legend: 'none' },
+    });
+  }
   await app.results.appendText(
     `Clusters explain **${f(explained, 1)}%** of total variance (between-cluster SS / total SS). ` +
       'Compare the centres to characterise each cluster. k-means is sensitive to k and to scaling — ' +

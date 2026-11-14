@@ -126,7 +126,19 @@ export const manifest = {
         { name: 'classes', kind: 'number', label: 'Most classes to consider', hint: 'Every number of classes from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
         { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
         { name: 'save', kind: 'choice', label: 'Save each case’s class?', hint: 'Puts the class and its probability in a new dataset, so classes can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with class membership' }], default: 'no' },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. The class profile plot is how a class solution is reported.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'profile', label: 'Class profile plot' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'mixture-lpa',
@@ -138,7 +150,19 @@ export const manifest = {
         { name: 'classes', kind: 'number', label: 'Most profiles to consider', hint: 'Every number of profiles from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
         { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
         { name: 'save', kind: 'choice', label: 'Save each case’s profile?', hint: 'Puts the profile and its probability in a new dataset, so profiles can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with profile membership' }], default: 'no' },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. The class profile plot is how a class solution is reported.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'profile', label: 'Class profile plot' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'mixture-gmm',
@@ -150,7 +174,19 @@ export const manifest = {
         { name: 'classes', kind: 'number', label: 'Most classes to consider', hint: 'Every number of trajectory classes from 1 up to this is fitted and compared; the detail is reported for this one.', default: 3, min: 1, max: 10, step: 1 },
         { name: 'seed', kind: 'number', label: 'Random seed', hint: 'These models start from random values, so the seed is what makes the result reproducible. Change it to check the solution is stable.', default: 12345, step: 1 },
         { name: 'save', kind: 'choice', label: 'Save each person’s class?', hint: 'Puts the trajectory class and its probability in a new dataset, so classes can be crosstabbed or compared.', options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes — new dataset with class membership' }], default: 'no' },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. The trajectory plot is how a growth mixture is reported.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'profile', label: 'Trajectory plot (one line per class)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -172,7 +208,7 @@ const ENTROPY_R = `
  * @param {object} app
  * @param {{items: string[], classes: number, seed: number, save: string}} inputs
  */
-export async function lca(app, { items, classes, seed, save }) {
+export async function lca(app, { items, classes, seed, save, plots }) {
   const names = Array.isArray(items) ? items : items ? [items] : [];
   if (names.length < 3) {
     await app.results.appendError(
@@ -304,6 +340,34 @@ export async function lca(app, { items, classes, seed, save }) {
         'Read down a class: the answers with high probability are what defines it. Read across a '
         + 'row: how much that answer separates the classes.',
       );
+
+      // The signature figure of a latent class analysis: one line per class across the
+      // indicators, which is how a class solution is reported and argued over. The table
+      // above holds the same numbers; nobody has ever interpreted a class solution by
+      // reading down its columns.
+      if ([].concat(plots ?? []).includes('profile')) {
+        const itemOrder = [...cats.keys()];
+        const highest = new Map(); // item -> the category whose probability is profiled
+        for (const [it, catSet] of cats) highest.set(it, Math.max(...catSet));
+        await app.results.appendChart({
+          kind: 'categorical',
+          title: 'Class profiles',
+          categories: itemOrder.map((it) => ({
+            key: it,
+            label: `${labelOf(meta.get(it), it)} = ${labelValue(meta, it, mc[mi.findIndex((x, j) => x === it && mr[j] === highest.get(it))])}`,
+          })),
+          series: Array.from({ length: k }, (_, cl) => ({
+            key: `c${cl + 1}`,
+            label: `Class ${cl + 1} (${f(100 * (r.nums('share')[cl] ?? 0), 1)}%)`,
+            values: itemOrder.map((it) => {
+              const idx = pItem.findIndex((x, j) => x === it && pClass[j] === cl + 1 && pCat[j] === highest.get(it));
+              return idx < 0 ? null : pVal[idx];
+            }),
+          })),
+          axes: { x: { title: 'Indicator' }, y: { title: 'Probability of this answer' } },
+          view: { mark: 'line', legend: 'right' },
+        });
+      }
     },
   });
   await app.results.endAnalysis();
@@ -313,7 +377,7 @@ export async function lca(app, { items, classes, seed, save }) {
  * @param {object} app
  * @param {{items: string[], classes: number, seed: number, save: string}} inputs
  */
-export async function lpa(app, { items, classes, seed, save }) {
+export async function lpa(app, { items, classes, seed, save, plots }) {
   const names = Array.isArray(items) ? items : items ? [items] : [];
   if (names.length < 2) {
     await app.results.appendError('Latent profile analysis needs at least two indicators.');
@@ -396,6 +460,26 @@ export async function lpa(app, { items, classes, seed, save }) {
         rows,
         rowHeaders: true,
       }, { caption: 'Mean of each indicator, by profile' });
+      if ([].concat(plots ?? []).includes('profile')) {
+        // The figure a profile solution is reported as: each profile's means across the
+        // indicators. The table holds the same numbers, and nobody interprets a profile
+        // solution by reading down its columns.
+        await app.results.appendChart({
+          kind: 'categorical',
+          title: 'Profile means',
+          categories: names.map((nm) => ({ key: nm, label: labelOf(meta.get(nm), nm) })),
+          series: Array.from({ length: k }, (_, cl) => ({
+            key: `p${cl + 1}`,
+            label: `Profile ${cl + 1} (${f(100 * (r.nums('share')[cl] ?? 0), 1)}%)`,
+            values: names.map((nm) => {
+              const i = ci.findIndex((x, j) => x === nm && cc[j] === cl + 1);
+              return i < 0 ? null : cv[i];
+            }),
+          })),
+          axes: { x: { title: 'Indicator' }, y: { title: 'Mean' } },
+          view: { mark: 'line', legend: 'right' },
+        });
+      }
       await app.results.appendText(
         'Means are in the indicators’ own units, so profiles are read by comparing across a row. '
         + '**Indicators on very different scales let the widest-ranging one dominate** — if one is '
@@ -441,7 +525,7 @@ export async function lpa(app, { items, classes, seed, save }) {
  * @param {object} app
  * @param {{waves: string[], classes: number, seed: number, save: string}} inputs
  */
-export async function gmm(app, { waves, classes, seed, save }) {
+export async function gmm(app, { waves, classes, seed, save, plots }) {
   const names = Array.isArray(waves) ? waves : waves ? [waves] : [];
   if (names.length < 3) {
     await app.results.appendError(
@@ -556,6 +640,28 @@ export async function gmm(app, { waves, classes, seed, save }) {
         ]),
         rowHeaders: true,
       }, { caption: `Trajectory of each class (k = ${f(k, 0)})` });
+      if ([].concat(plots ?? []).includes('profile')) {
+        // The trajectories, drawn from the intercept and slope the table reports: a
+        // growth mixture's entire claim is that there are DIFFERENT shapes of change in
+        // the data, and four numbers per class is not how anyone judges that.
+        const occ = Array.from({ length: Math.max(2, r.num1('nOcc') || 0) }, (_, i) => i);
+        await app.results.appendChart({
+          kind: 'categorical',
+          title: 'Estimated trajectory by class',
+          categories: occ.map((t) => ({ key: `t${t}`, label: `Occasion ${t + 1}` })),
+          series: Array.from({ length: k }, (_, cl) => {
+            const b0 = cell('coef.(Intercept)', cl + 1);
+            const b1 = cell('coef.time', cl + 1);
+            return {
+              key: `c${cl + 1}`,
+              label: `Class ${cl + 1} (${f(100 * (r.nums('share')[cl] ?? 0), 1)}%)`,
+              values: occ.map((t) => (Number.isFinite(b0) && Number.isFinite(b1) ? b0 + b1 * t : null)),
+            };
+          }),
+          axes: { x: { title: 'Occasion' }, y: { title: 'Estimated value' } },
+          view: { mark: 'line', legend: 'right' },
+        });
+      }
 
       // The reading, and the two ways a growth mixture misleads.
       const slopes = Array.from({ length: k }, (_, i) => cell('coef.time', i + 1)).filter(Number.isFinite);

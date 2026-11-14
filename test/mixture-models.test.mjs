@@ -344,12 +344,13 @@ test('only the two packages that were verified are declared', () => {
 test('all three tools are on the menu with the inputs they need', () => {
   const byRun = Object.fromEntries(manifest.menu.map((m) => [m.run, m]));
   assert.deepEqual(Object.keys(byRun).sort(), ['gmm', 'lca', 'lpa']);
-  // The same four questions in the same order everywhere — a user who has run one has learnt
+  // The same questions in the same order everywhere — a user who has run one has learnt
   // all three. Only the FIRST input's name differs, because a growth mixture's indicators are
-  // occasions of one measure rather than separate measures.
+  // occasions of one measure rather than separate measures. `plots` joined the set when all
+  // three gained their profile figure, and it joined ALL THREE for this reason.
   for (const [run, first] of [['lca', 'items'], ['lpa', 'items'], ['gmm', 'waves']]) {
     const names = byRun[run].inputs.map((i) => i.name);
-    assert.deepEqual(names, [first, 'classes', 'seed', 'save'], `${run} inputs`);
+    assert.deepEqual(names, [first, 'classes', 'seed', 'save', 'plots'], `${run} inputs`);
     assert.equal(byRun[run].inputs.find((i) => i.name === 'seed').default, 12345, 'a default seed');
     assert.ok(byRun[run].inputs.every((i) => i.hint), `${run} has an unhinted input`);
   }

@@ -33,7 +33,7 @@ const DESIGN_INPUTS = [
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, prettyTerm, levelLabel: lvl, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -92,7 +92,19 @@ export const manifest = {
       inputs: [
         { name: 'vars', kind: 'variables', label: 'Variables (numeric)', hint: 'The numeric measures whose weighted averages you want.', multiple: true, types: ['numeric'], unique: true },
         ...DESIGN_INPUTS,
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'means', label: 'Weighted means with 95% CI' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'survey-crosstab',
@@ -137,7 +149,7 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[], weight: string, strata: ?string, cluster: ?string}} inputs
  */
-export async function means(app, { vars, weight, strata, cluster }) {
+export async function means(app, { vars, weight, strata, cluster, plots }) {
   if (!vars || !vars.length || !weight) {
     await app.results.appendError('Weighted means: choose at least one numeric variable and a weight.');
     return;
@@ -169,6 +181,22 @@ export async function means(app, { vars, weight, strata, cluster }) {
     },
     { caption: `Weighted Means — ${designCaption(meta, weight, strata, cluster)} (N = ${r.num1('n')})` },
   );
+
+  if ([].concat(plots ?? []).includes('means')) {
+    // A survey estimate is never published without its interval — the design is the
+    // whole reason the interval is not the textbook one — so the figure carries it.
+    const model = coefficientForest({
+      terms: terms.map((v) => labelOf(meta.get(v), v)),
+      est: mean,
+      lo,
+      hi,
+      title: 'Weighted means (95% CI)',
+      xTitle: 'Weighted mean',
+      valueHeading: 'Mean [95% CI]',
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
   await app.results.appendText(
     'Estimates use the survey weights; standard errors and CIs account for the design (weights' +
       (strata ? ' + strata' : '') + (cluster ? ' + clusters' : '') + '). The unweighted mean is shown for comparison.',

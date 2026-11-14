@@ -14,7 +14,7 @@
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat } = globalThis.ctStd;
+const { fmtP, fixed: f, ci, labelOf, metaMap, rStr, unpackR: flat, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -60,12 +60,24 @@ export const manifest = {
           { value: 'linear', label: 'Linear (OLS)' },
           { value: 'logistic', label: 'Logistic (binary outcome)' },
         ] },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'coef', label: 'Pooled estimates with 95% CI' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
-export async function run(app, { y: yName, ivs: ivNames, m, model }) {
+export async function run(app, { y: yName, ivs: ivNames, m, model, plots }) {
   if (!yName || !ivNames || !ivNames.length) {
     await app.results.appendError('Multiple imputation: choose an outcome and at least one predictor.');
     return;
@@ -117,6 +129,21 @@ export async function run(app, { y: yName, ivs: ivNames, m, model }) {
     },
     { caption: `Multiple Imputation (${logistic ? 'logistic' : 'linear'}, m = ${M}) — outcome: ${labelOf(meta.get(yName), yName)}` },
   );
+
+  if ([].concat(plots ?? []).includes('coef')) {
+    // The pooled estimates, intervals included — Rubin's rules widen them for the
+    // uncertainty the imputation itself carries, and that widening is the point.
+    const model = coefficientForest({
+      terms: r.strs('terms'),
+      est: r.nums('est'),
+      lo: r.nums('lo'),
+      hi: r.nums('hi'),
+      title: 'Pooled estimates (95% CI)',
+      xTitle: logistic ? 'Log-odds' : 'B',
+      ratio: false,
+    });
+    if (model) await app.results.appendChart(model);
+  }
 
   const mv = r.strs('missVars'), mn = r.nums('missN');
   const nAll = r.num1('nrowAll');
