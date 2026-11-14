@@ -94,7 +94,7 @@ export const manifest = {
     // 'tornado' chart", advice nobody could act on, since the only renderer is the one in
     // this same file. Adding a kind means adding it in BOTH places; the harness now
     // asserts that rather than trusting it.
-    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'forest', 'heatmap', 'sced', 'tornado', 'wordcloud'],
+    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'density', 'forest', 'heatmap', 'sced', 'tornado', 'wordcloud'],
   },
 };
 
@@ -2364,6 +2364,116 @@ export function chartKinds(lib) {
   /** ColorBrewer Blues: for loadings, probabilities, counts — anything one-directional. */
   const RAMP_SEQUENTIAL = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6',
     '#4292c6', '#2171b5', '#08519c', '#08306b'];
+
+  // =============================================================================
+  // KIND: density (one or more distributions as curves)
+  // =============================================================================
+
+  /**
+   * Chart kind: density — a distribution as a curve rather than as bars.
+   *
+   * The figure Bayesian work is reported with. A posterior is a DISTRIBUTION, and the
+   * two numbers of a credible interval are a summary of it; the shape is what says
+   * whether it is skewed, whether it is bimodal, whether the mass sits where the
+   * interval's midpoint suggests. The forest of posterior means answers "how big"; this
+   * answers "how sure, and in what shape".
+   *
+   * It also does the job a histogram does badly: COMPARING two or three distributions.
+   * Overlaid bars occlude each other, so the usual fix is translucency, which makes a
+   * third colour that means nothing. Curves overlay cleanly.
+   *
+   * ## Why it is not the violin kind turned on its side
+   *
+   * The violin draws a density per GROUP along a categorical axis — the x position
+   * carries the group, not a value. Here x is the value axis and several densities share
+   * it, which is what makes the overlay readable and the interval shading possible.
+   * They share `kde` from the stdlib, which is the part worth sharing.
+   *
+   * ## The interval is shaded, not just lined
+   *
+   * A credible interval drawn as two vertical lines invites the reader to measure the
+   * gap; drawn as shaded mass under the curve it shows what the interval IS — the region
+   * holding that share of the probability. Guides still mark the ends, because a number
+   * on the axis is what gets quoted.
+   */
+  kinds['density'] = ({
+    altNoun: 'Density plot',
+    colorLabel: 'Distributions',
+    reorderCategories: false,
+    colorItems: (model) => (model.series || []).map((s) => ({ key: s.key, label: s.label || s.key })),
+    baseView: (model) => ({
+      fill: (model.series || []).length === 1,
+      lineWidth: 2,
+      legend: (model.series || []).length > 1 ? 'right' : 'none',
+      showInterval: (model.series || []).some((s) => Number.isFinite(s.lo)),
+    }),
+    controls: (model) => {
+      const multi = (model.series || []).length > 1;
+      const anyInterval = (model.series || []).some((s) => Number.isFinite(s.lo));
+      return [
+        { id: 'fill', label: 'Fill under the curve', type: 'check', group: 'Chart', default: !multi },
+        ...(anyInterval
+          ? [{ id: 'showInterval', label: 'Shade the interval', type: 'check', group: 'Chart', default: true }]
+          : []),
+        lineWidthControl(),
+        guidesControl(model),
+        plotSizeControl(),
+        gridlinesControl(),
+        paletteControl(multi),
+        legendControl(multi, 'right'),
+        ...legendFormatControls(multi),
+        ...titleControls(model),
+        ...axisControls('x', model),
+        ...axisControls('y', model),
+      ];
+    },
+    render: (model, view) => {
+      const series = (model.series || []).filter((s) => (s.values || []).length > 1 || (s.points || []).length > 1);
+      if (!series.length) return errorSvg('Density plot: needs at least two values.');
+
+      // A plugin may send raw observations and let the host estimate, or send a curve it
+      // computed itself — R's posterior draws are the first, a fitted density the second.
+      const curves = series.map((s) => (s.points?.length
+        ? s.points.map((p) => ({ v: p.x, w: p.y }))
+        : kde(s.values.filter(Number.isFinite))));
+      const peak = Math.max(...curves.flatMap((c) => c.map((p) => p.w))) || 1;
+      const xs = curves.flatMap((c) => c.map((p) => p.v));
+      const f = xyFrame(model, view, {
+        noun: 'Density plot',
+        xValues: xs,
+        yValues: [0, peak],
+        legendItems: series.length > 1
+          ? series.map((s, i) => ({ label: s.label || s.key, color: colorFor(view, s.key, i) }))
+          : [],
+        alt: plural(series.length, 'distribution') + '.',
+      });
+
+      series.forEach((s, i) => {
+        const col = colorFor(view, s.key, i);
+        const pts = curves[i];
+        const path = pts.map((p, j) => `${j ? 'L' : 'M'}${r(f.xScale(p.v))},${r(f.yScale(p.w))}`).join('');
+
+        // The interval first, so the curve draws over its own shading.
+        if (view.showInterval !== false && Number.isFinite(s.lo) && Number.isFinite(s.hi)) {
+          const inside = pts.filter((p) => p.v >= s.lo && p.v <= s.hi);
+          if (inside.length > 1) {
+            const area = `M${r(f.xScale(inside[0].v))},${r(f.yScale(0))}`
+              + inside.map((p) => `L${r(f.xScale(p.v))},${r(f.yScale(p.w))}`).join('')
+              + `L${r(f.xScale(inside[inside.length - 1].v))},${r(f.yScale(0))}Z`;
+            f.out.push(`<path d="${area}" fill="${col}" fill-opacity="0.22"/>`);
+          }
+        } else if (view.fill) {
+          const area = `M${r(f.xScale(pts[0].v))},${r(f.yScale(0))}`
+            + pts.map((p) => `L${r(f.xScale(p.v))},${r(f.yScale(p.w))}`).join('')
+            + `L${r(f.xScale(pts[pts.length - 1].v))},${r(f.yScale(0))}Z`;
+          f.out.push(`<path d="${area}" fill="${col}" fill-opacity="0.18"/>`);
+        }
+        f.out.push(`<path d="${path}" fill="none" stroke="${col}" stroke-width="${view.lineWidth || 2}" stroke-linejoin="round"/>`);
+      });
+
+      return f.close();
+    },
+  });
 
   // =============================================================================
   // KIND: heatmap (a matrix of values, shaded)

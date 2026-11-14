@@ -41,6 +41,10 @@ const MODELS = {
     series: [{ key: 's', label: 'S', points: [{ x: 0, y: 1, lo: 0.5, hi: 1.5 }, { x: 1, y: 2, lo: 1.6, hi: 2.4 }] }],
   },
   forest: { kind: 'forest', title: 'T', rows: [{ key: 'r', label: 'R', est: 1, lo: 0, hi: 2 }] },
+  density: {
+    kind: 'density', title: 'T',
+    series: [{ key: 'post', label: 'Posterior', values: [1, 1.2, 1.4, 1.1, 1.6, 1.3, 1.5], lo: 1.05, hi: 1.55 }],
+  },
   heatmap: {
     kind: 'heatmap', title: 'T',
     rows: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }],

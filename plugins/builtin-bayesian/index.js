@@ -105,6 +105,7 @@ export const manifest = {
           optional: true,
           options: [
             { value: 'coef', label: 'Posterior means with 95% credible intervals' },
+            { value: 'post', label: 'Posterior distributions' },
           ],
           default: [],
         },
@@ -153,6 +154,7 @@ export const manifest = {
  * @param {{dv: string, ivs: string[]}} inputs
  */
 export async function regression(app, { dv: dvName, ivs: ivNames, plots }) {
+  const wantPost = [].concat(plots ?? []).includes('post');
   if (!dvName || !ivNames || !ivNames.length) {
     await app.results.appendError('Bayesian regression: choose an outcome and at least one predictor.');
     return;
@@ -171,7 +173,18 @@ export async function regression(app, { dv: dvName, ivs: ivNames, plots }) {
     fit <- MCMCregress(as.formula(${rStr(formula)}), data = d, mcmc = 5000, burnin = 1000, verbose = 0)
     s <- summary(fit); st <- s$statistics; q <- s$quantiles
     keep <- rownames(st) != "sigma2"
-    list(terms = rownames(st)[keep], mean = unname(st[keep, "Mean"]), sd = unname(st[keep, "SD"]),
+    # The posterior itself, as a curve per parameter. R's own density() rather than the
+    # draws: 5000 draws per term is a lot to carry across for a picture 512 points wide,
+    # and the estimator is the one a reader of this model would use anyway.
+    dnX <- numeric(0); dnY <- numeric(0); dnTerm <- character(0)
+    if (${wantPost ? 'TRUE' : 'FALSE'}) {
+      for (nm in rownames(st)[keep]) {
+        dd <- stats::density(as.numeric(fit[, nm]), n = 256)
+        dnX <- c(dnX, dd$x); dnY <- c(dnY, dd$y); dnTerm <- c(dnTerm, rep(nm, length(dd$x)))
+      }
+    }
+    list(dnX = dnX, dnY = dnY, dnTerm = dnTerm,
+         terms = rownames(st)[keep], mean = unname(st[keep, "Mean"]), sd = unname(st[keep, "SD"]),
          lo = unname(q[keep, "2.5%"]), hi = unname(q[keep, "97.5%"]),
          sigma2 = unname(st["sigma2", "Mean"]), n = nrow(d), draws = nrow(fit))`;
 
@@ -212,6 +225,32 @@ export async function regression(app, { dv: dvName, ivs: ivNames, plots }) {
       valueHeading: 'Posterior mean [95% CrI]',
     });
     if (model) await app.results.appendChart(model);
+  }
+  if (wantPost) {
+    // One panel per parameter: a posterior is a distribution, and the credible interval
+    // in the table is a summary of it. The shape is what says whether the mass sits
+    // where the interval's midpoint suggests, and whether it is skewed — which is the
+    // reason to have run a Bayesian model rather than reported a standard error.
+    const dx = r.nums('dnX');
+    const dy = r.nums('dnY');
+    const dt = r.strs('dnTerm');
+    const terms = r.strs('terms');
+    const lo = r.nums('lo');
+    const hi = r.nums('hi');
+    for (const [i2, term] of terms.entries()) {
+      const points = dx
+        .map((x, k2) => ({ x, y: dy[k2], t: dt[k2] }))
+        .filter((pt) => pt.t === term)
+        .map(({ x, y }) => ({ x, y }));
+      if (points.length < 2) continue;
+      await app.results.appendChart({
+        kind: 'density',
+        title: `Posterior — ${term}`,
+        series: [{ key: `p${i2}`, label: term, points, lo: lo[i2], hi: hi[i2] }],
+        axes: { x: { title: term }, y: { title: 'Density' } },
+        guides: [{ axis: 'x', at: 0, label: 'No effect' }],
+      });
+    }
   }
   await app.results.appendText(
     `Coefficients are **posterior means**; the interval is a **95% credible interval** — given the data and the (weakly informative) default priors, there's a 95% probability the coefficient lies inside it. ` +

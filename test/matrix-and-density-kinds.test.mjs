@@ -1,6 +1,7 @@
 /**
- * @file heatmap-kind.test.mjs
- * The matrix kind, and the three matrices that wanted it.
+ * @file matrix-and-density-kinds.test.mjs
+ * Two kinds the survey said were missing and are regularly used: the matrix, and the
+ * distribution-as-a-curve.
  *
  * The most-wanted missing kind in the chart-coverage survey, by client count: a
  * correlation matrix, a loadings matrix, topic by term. All three were already printed
@@ -169,4 +170,81 @@ test('the scree plot is still drawn beside it', async () => {
   assert.ok(scree.guides.some((g) => g.at === 1), 'and keeps its Kaiser line');
   // ...and the heatmap stays away until it is asked for.
   assert.equal(app.out.charts.filter((c) => c.kind === 'heatmap').length, 0);
+});
+
+// =============================================================================
+// The density kind — the other figure a distribution is read as
+// =============================================================================
+
+test('a density draws its curve, and shades the interval under it', () => {
+  const m = {
+    kind: 'density',
+    title: 'Posterior',
+    series: [{ key: 'b', label: 'beta', values: [1, 1.2, 1.4, 1.1, 1.6, 1.3, 1.5, 1.35, 1.25], lo: 1.05, hi: 1.55 }],
+    guides: [{ axis: 'x', at: 0, label: 'No effect' }],
+  };
+  const svg = draw(m);
+  // Two paths: the shaded interval, then the curve over it.
+  assert.equal((svg.match(/<path/g) || []).length, 2);
+  assert.ok(svg.includes('fill-opacity="0.22"'), 'the interval is shaded, not just lined');
+  assert.ok(svg.includes('No effect'), 'and the guide layer still works here');
+  assert.ok(!draw(m, { showInterval: false }).includes('fill-opacity="0.22"'));
+});
+
+test('several distributions overlay as curves rather than occluding bars', () => {
+  const m = {
+    kind: 'density',
+    title: 'Two',
+    series: [
+      { key: 'a', label: 'A', values: [1, 2, 3, 2, 2.5, 1.5] },
+      { key: 'b', label: 'B', values: [3, 4, 5, 4, 4.5, 3.5] },
+    ],
+  };
+  // Fill defaults OFF with more than one, because overlapping fills make a third colour
+  // that means nothing; the legend comes on instead.
+  assert.equal(defaultView(m).fill, false);
+  assert.equal(defaultView(m).legend, 'right');
+  assert.equal((draw(m).match(/<path/g) || []).length, 2);
+});
+
+test('a plugin may send a curve it computed, or the observations', () => {
+  // R's own density() for a posterior, raw values for everything else — the kind takes
+  // either, which is what lets the Bayesian plugin send 256 points instead of 5000 draws.
+  const sent = {
+    kind: 'density', title: 'T',
+    series: [{ key: 's', label: 'S', points: [{ x: 0, y: 0.1 }, { x: 1, y: 0.8 }, { x: 2, y: 0.2 }] }],
+  };
+  assert.match(draw(sent), /<path/);
+  assert.match(draw({ kind: 'density', title: 'T', series: [{ key: 's', label: 'S', values: [1] }] }), /needs at least two values/);
+});
+
+test('the Bayesian regression draws a posterior per parameter', async () => {
+  const { regression } = await import('../plugins/builtin-bayesian/index.js');
+  const curve = (n) => Array.from({ length: n }, (_, i) => i / 10);
+  const app = fakeApp(rList({
+    dnX: [...curve(5), ...curve(5)],
+    dnY: [0.1, 0.4, 0.9, 0.4, 0.1, 0.2, 0.5, 0.8, 0.5, 0.2],
+    dnTerm: ['(Intercept)', '(Intercept)', '(Intercept)', '(Intercept)', '(Intercept)',
+      'age', 'age', 'age', 'age', 'age'],
+    terms: ['(Intercept)', 'age'], mean: [0.2, 0.2], sd: [0.1, 0.1],
+    lo: [0.05, 0.05], hi: [0.35, 0.35], sigma2: [1], n: [300], draws: [5000],
+  }), [{ name: 'y', label: 'Y' }, { name: 'age', label: 'Age' }]);
+  await regression(app, { dv: 'y', ivs: ['age'], plots: ['post'] });
+  const densities = app.out.charts.filter((c) => c.kind === 'density');
+  assert.equal(densities.length, 2, 'one per parameter, intercept included');
+  assert.equal(densities[1].series[0].points.length, 5);
+  assert.ok(densities[1].guides.some((g) => g.at === 0));
+  assert.match(draw(densities[1]), /<path/);
+});
+
+test('the posterior curves are only computed when asked for', async () => {
+  const { regression } = await import('../plugins/builtin-bayesian/index.js');
+  const app = fakeApp(rList({
+    dnX: [], dnY: [], dnTerm: [],
+    terms: ['age'], mean: [0.2], sd: [0.1], lo: [0.05], hi: [0.35],
+    sigma2: [1], n: [300], draws: [5000],
+  }), [{ name: 'y', label: 'Y' }, { name: 'age', label: 'Age' }]);
+  await regression(app, { dv: 'y', ivs: ['age'] });
+  assert.equal(app.out.charts.length, 0);
+  assert.match(app.out.rCode, /if \(FALSE\)/);
 });
