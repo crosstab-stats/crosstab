@@ -41,6 +41,15 @@ const MODELS = {
     series: [{ key: 's', label: 'S', points: [{ x: 0, y: 1, lo: 0.5, hi: 1.5 }, { x: 1, y: 2, lo: 1.6, hi: 2.4 }] }],
   },
   forest: { kind: 'forest', title: 'T', rows: [{ key: 'r', label: 'R', est: 1, lo: 0, hi: 2 }] },
+  path: {
+    kind: 'path', title: 'T', layout: 'mediation',
+    nodes: [
+      { key: 'x', label: 'X', role: 'x' },
+      { key: 'm', label: 'M', role: 'm' },
+      { key: 'y', label: 'Y', role: 'y' },
+    ],
+    paths: [{ from: 'x', to: 'm', label: 'a = .40' }, { from: 'm', to: 'y', label: 'b = .25' }],
+  },
   dendrogram: {
     kind: 'dendrogram', title: 'T',
     leaves: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }, { key: 'c', label: 'C' }],

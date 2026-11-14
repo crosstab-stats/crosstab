@@ -115,6 +115,7 @@ export const manifest = {
           optional: true,
           options: [
             { value: 'loadings', label: 'Standardized loadings' },
+            { value: 'diagram', label: 'Path diagram' },
           ],
           default: [],
         },
@@ -200,6 +201,26 @@ export async function cfa(app, { items, factorName, plots }) {
     },
     { caption: 'Standardized Loadings' },
   );
+
+  if ([].concat(plots ?? []).includes('diagram')) {
+    // The measurement model as the figure it is reported as: the latent above (rounded,
+    // by the convention every SEM figure uses), its indicators fanned beneath, each arm
+    // carrying its standardized loading. Only the one-factor shape is drawn — that is
+    // what this tool fits, and a layout guessed for an arbitrary model would be worse
+    // than the table.
+    const items = r.strs('items');
+    const std = r.nums('std');
+    await app.results.appendChart({
+      kind: 'path',
+      title: `${factorName || 'Factor'} — measurement model`,
+      layout: 'factor',
+      nodes: [
+        { key: 'F', label: factorName || 'Factor', role: 'factor' },
+        ...items.map((it, i) => ({ key: `i${i}`, label: labelOf(meta.get(it), it) })),
+      ],
+      paths: items.map((_it, i) => ({ from: 'F', to: `i${i}`, label: f(std[i], 2) })),
+    });
+  }
 
   if ([].concat(plots ?? []).includes('loadings')) {
     // Loadings with their intervals, sorted as the table lists them: the figure you scan

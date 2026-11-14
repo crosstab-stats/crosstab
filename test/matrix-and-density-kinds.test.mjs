@@ -338,3 +338,88 @@ test('the linkage is named in the caption, because it changes the tree', async (
   assert.match(app.out.tables[0].caption, /Single linkage, manhattan distance/);
   assert.equal(app.out.charts.length, 0, 'and nothing is drawn when nothing is ticked');
 });
+
+// =============================================================================
+// The path diagram — drawn only where the layout is fixed
+// =============================================================================
+
+const TRIANGLE = {
+  kind: 'path',
+  title: 'X → M → Y',
+  layout: 'mediation',
+  nodes: [
+    { key: 'x', label: 'Stress', role: 'x' },
+    { key: 'm', label: 'Sleep', role: 'm' },
+    { key: 'y', label: 'Mood', role: 'y' },
+  ],
+  paths: [
+    { from: 'x', to: 'm', label: 'a = .40*' },
+    { from: 'm', to: 'y', label: 'b = .25*' },
+    { from: 'x', to: 'y', label: "c′ = .12", dashed: true },
+  ],
+};
+
+test('the mediation triangle draws three directed arms and its boxes', () => {
+  const svg = draw(TRIANGLE);
+  assert.equal((svg.match(/marker-end/g) || []).length, 3, 'every path is directed');
+  assert.ok(svg.includes('Stress') && svg.includes('Sleep') && svg.includes('Mood'));
+  assert.ok(svg.includes('stroke-dasharray'), 'the direct effect is dashed');
+  assert.ok(!draw(TRIANGLE, { pathLabels: false }).includes('a = .40*'));
+});
+
+test('a latent variable is drawn as a rounded box, an observed one square', () => {
+  // The one convention a reader decodes without being told.
+  const fan = {
+    kind: 'path', title: 'F', layout: 'factor',
+    nodes: [
+      { key: 'F', label: 'Wellbeing', role: 'factor' },
+      { key: 'i0', label: 'Item 1' }, { key: 'i1', label: 'Item 2' },
+    ],
+    paths: [{ from: 'F', to: 'i0', label: '0.82' }, { from: 'F', to: 'i1', label: '0.74' }],
+  };
+  const svg = draw(fan);
+  // The latent's rx is half its height; the observed boxes use rx="3".
+  assert.match(svg, /rx="17"/);
+  assert.match(svg, /rx="3"/);
+  assert.equal((svg.match(/marker-end/g) || []).length, 2);
+});
+
+test('it declines rather than guessing when there is nothing to lay out', () => {
+  assert.match(draw({ kind: 'path', title: 'T', nodes: [], paths: [] }), /needs nodes and paths/);
+});
+
+test('mediation emits the diagram its table describes', async () => {
+  const { mediation } = await import('../plugins/builtin-mediation/index.js');
+  const app = fakeApp(rList({
+    label: ['a', 'b', 'cp', 'indirect', 'total', 'prop'],
+    est: [0.4, 0.25, 0.12, 0.1, 0.22, 0.45],
+    se: [0.08, 0.07, 0.09, 0.03, 0.09, 0.1],
+    z: [5, 3.6, 1.3, 3.3, 2.4, 4.5],
+    p: [0, 0.0003, 0.19, 0.001, 0.016, 0],
+    lo: [0.24, 0.11, -0.06, 0.04, 0.04, 0.25],
+    hi: [0.56, 0.39, 0.3, 0.16, 0.4, 0.65], n: [250],
+  }), [{ name: 'x', label: 'Stress' }, { name: 'm', label: 'Sleep' }, { name: 'y', label: 'Mood' }]);
+  await mediation(app, { x: 'x', m: 'm', y: 'y', plots: ['diagram'] });
+  const d = app.out.charts.find((c) => c.kind === 'path');
+  assert.ok(d, 'no diagram');
+  // Significant arms are starred; the direct effect here is not significant and is the
+  // dashed one, which is exactly the reading the figure exists to make quick.
+  assert.deepEqual(d.paths.map((p) => p.label), ['a = 0.400*', 'b = 0.250*', 'c′ = 0.120']);
+  assert.equal(d.paths[2].dashed, true);
+});
+
+test('the CFA draws its measurement model, loadings on the arms', async () => {
+  const { cfa } = await import('../plugins/builtin-sem/index.js');
+  const app = fakeApp(rList({
+    items: ['i1', 'i2', 'i3'], std: [0.82, 0.74, 0.61], se: [0.05, 0.06, 0.07],
+    z: [16, 12, 9], p: [0, 0, 0],
+    chisq: [12], df: [8], pval: [0.15], cfi: [0.98], tli: [0.97],
+    rmsea: [0.03], rlo: [0.01], rhi: [0.06], srmr: [0.04], n: [400],
+  }), [{ name: 'i1', label: 'Item 1' }, { name: 'i2', label: 'Item 2' }, { name: 'i3', label: 'Item 3' }]);
+  await cfa(app, { items: ['i1', 'i2', 'i3'], factorName: 'Wellbeing', plots: ['diagram'] });
+  const d = app.out.charts.find((c) => c.kind === 'path');
+  assert.ok(d);
+  assert.equal(d.layout, 'factor');
+  assert.equal(d.nodes.filter((n) => n.role === 'factor').length, 1);
+  assert.deepEqual(d.paths.map((p) => p.label), ['0.82', '0.74', '0.61']);
+});

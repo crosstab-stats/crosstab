@@ -102,6 +102,7 @@ export const manifest = {
           optional: true,
           options: [
             { value: 'effects', label: 'Effects with 95% CI' },
+            { value: 'diagram', label: 'Path diagram' },
           ],
           default: [],
         },
@@ -183,6 +184,38 @@ export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNa
     },
     { caption: `Mediation — ${shortLabel(meta, xName)} → ${shortLabel(meta, mName)} → ${shortLabel(meta, yName)} (N = ${r.num1('n')}${boot ? ', bootstrap' : ''})` },
   );
+
+  if ([].concat(plots ?? []).includes('diagram')) {
+    // The figure a mediation model is published as. The coefficients are in the table
+    // above; what the diagram adds is the structure — which path is which — that a
+    // column of labels like "a: X -> M" asks the reader to rebuild in their head.
+    const byLabel = new Map(lab.map((l, i) => [l, { est: est[i], p: p[i] }]));
+    const arm = (key) => {
+      const e = byLabel.get(key);
+      return e ? `${key} = ${f(e.est, 3)}${Number.isFinite(e.p) && e.p < 0.05 ? '*' : ''}` : key;
+    };
+    await app.results.appendChart({
+      kind: 'path',
+      title: `${shortLabel(meta, xName)} → ${shortLabel(meta, mName)} → ${shortLabel(meta, yName)}`,
+      layout: 'mediation',
+      nodes: [
+        { key: 'x', label: shortLabel(meta, xName), role: 'x' },
+        { key: 'm', label: shortLabel(meta, mName), role: 'm' },
+        { key: 'y', label: shortLabel(meta, yName), role: 'y' },
+      ],
+      paths: [
+        { from: 'x', to: 'm', label: arm('a') },
+        { from: 'm', to: 'y', label: arm('b') },
+        // The direct effect is dashed: it is what is LEFT of X on Y once M is in the
+        // model, and drawing it like the others invites reading it as the total.
+        { from: 'x', to: 'y', label: arm('cp').replace(/^cp/, 'c′'), dashed: true },
+      ],
+    });
+    await app.results.appendText(
+      '_A star marks a path significant at .05. The dashed arm is the **direct** effect — '
+      + 'what is left of X on Y once M is in the model — not the total._',
+    );
+  }
 
   if ([].concat(plots ?? []).includes('effects')) {
     // Direct, indirect and total on one axis against zero. The indirect effect is the

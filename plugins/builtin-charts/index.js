@@ -94,7 +94,7 @@ export const manifest = {
     // 'tornado' chart", advice nobody could act on, since the only renderer is the one in
     // this same file. Adding a kind means adding it in BOTH places; the harness now
     // asserts that rather than trusting it.
-    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'density', 'dendrogram', 'forest', 'heatmap', 'sced', 'tornado', 'wordcloud'],
+    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'density', 'dendrogram', 'forest', 'path', 'heatmap', 'sced', 'tornado', 'wordcloud'],
   },
 };
 
@@ -2364,6 +2364,137 @@ export function chartKinds(lib) {
   /** ColorBrewer Blues: for loadings, probabilities, counts — anything one-directional. */
   const RAMP_SEQUENTIAL = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6',
     '#4292c6', '#2171b5', '#08519c', '#08306b'];
+
+  // =============================================================================
+  // KIND: path (a path diagram, for models whose layout is fixed)
+  // =============================================================================
+
+  /**
+   * Chart kind: path diagram.
+   *
+   * A mediation model and a one-factor CFA are reported as diagrams in essentially every
+   * paper that fits one — the triangle with a, b and c′ on its arms; the factor with its
+   * indicators fanned beneath. The coefficients are already in the tables; what the
+   * diagram adds is the STRUCTURE, which is the part a column of labels like
+   * "a: X → M" asks the reader to rebuild in their head.
+   *
+   * ## Why this is ours to draw, against the baking rule
+   *
+   * The rule carves out geometry that is hard and not ours — force-directed layouts
+   * among them, and a general SEM diagram is exactly that: an arbitrary graph whose
+   * readable arrangement is a solved-by-search problem. These are not that. A mediation
+   * model has three nodes in a fixed triangle and a factor model is a fan, both
+   * positioned by the role each node plays, not by solving anything. So the two shapes
+   * this app actually fits are drawn here, and an arbitrary structural model is declined
+   * rather than attempted — a diagram whose layout is wrong is worse than a table.
+   *
+   * @param {object} model
+   * @param {'mediation'|'factor'} model.layout
+   * @param {{key: string, label: string, role?: string}[]} model.nodes
+   * @param {{from: string, to: string, label?: string, dashed?: boolean}[]} model.paths
+   */
+  kinds['path'] = ({
+    altNoun: 'Path diagram',
+    colorLabel: 'Diagram',
+    reorderCategories: false,
+    colorItems: () => [],
+    baseView: () => ({ pathLabels: true, gridlines: false }),
+    controls: (model) => [
+      { id: 'pathLabels', label: 'Label the paths', type: 'check', group: 'Labels', default: true },
+      plotSizeControl(),
+      ...titleControls(model),
+    ],
+    render: (model, view) => {
+      const nodes = model.nodes || [];
+      const paths = model.paths || [];
+      if (!nodes.length || !paths.length) return errorSvg('Path diagram: needs nodes and paths.');
+      const layout = model.layout === 'factor' ? 'factor' : 'mediation';
+
+      const box = scalePlot({ x0: 20, x1: W - 20, y0: H - 24, y1: 30 }, view);
+      const at = new Map();
+      if (layout === 'mediation') {
+        // X left, Y right, M above the midpoint: the arrangement every mediation figure
+        // uses, so a reader recognises the model before reading a single label.
+        const [x, m, y] = ['x', 'm', 'y'].map((role) => nodes.find((n) => n.role === role) || null);
+        const mid = (box.x0 + box.x1) / 2;
+        const low = box.y0 - 60;
+        if (x) at.set(x.key, { x: box.x0 + 70, y: low });
+        if (y) at.set(y.key, { x: box.x1 - 70, y: low });
+        if (m) at.set(m.key, { x: mid, y: box.y1 + 40 });
+      } else {
+        // The factor above, its indicators fanned along the bottom.
+        const ind = nodes.filter((n) => n.role !== 'factor');
+        const fac = nodes.find((n) => n.role === 'factor');
+        if (fac) at.set(fac.key, { x: (box.x0 + box.x1) / 2, y: box.y1 + 34 });
+        const gap = (box.x1 - box.x0 - 120) / Math.max(1, ind.length - 1 || 1);
+        ind.forEach((n, i) => {
+          at.set(n.key, {
+            x: ind.length === 1 ? (box.x0 + box.x1) / 2 : box.x0 + 60 + gap * i,
+            y: box.y0 - 40,
+          });
+        });
+      }
+
+      const out = [
+        svgOpen(chartAltText(model, view, `${plural(nodes.length, 'variable')}, ${plural(paths.length, 'path')}.`, 'Path diagram'), view),
+        layerOpen('plot', view),
+        '<defs><marker id="ct-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        + '<path d="M0,0 L10,5 L0,10 z" fill="#45596b"/></marker></defs>',
+      ];
+
+      const NODE_W = 112;
+      const NODE_H = 34;
+      // Arrows stop at the node's edge rather than its centre, or the head hides under
+      // the box and the diagram reads as undirected.
+      const edge = (from, to) => {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const hx = (NODE_W / 2 + 4) / len;
+        const hy = (NODE_H / 2 + 4) / len;
+        const t = Math.min(0.5, Math.max(Math.abs(hx), Math.abs(hy)));
+        return {
+          x1: from.x + dx * t, y1: from.y + dy * t, x2: to.x - dx * t, y2: to.y - dy * t,
+        };
+      };
+
+      for (const p of paths) {
+        const a = at.get(p.from);
+        const b = at.get(p.to);
+        if (!a || !b) continue;
+        const e = edge(a, b);
+        out.push(`<line x1="${r(e.x1)}" y1="${r(e.y1)}" x2="${r(e.x2)}" y2="${r(e.y2)}" stroke="#45596b" stroke-width="1.6"`
+          + `${p.dashed ? ' stroke-dasharray="5 4"' : ''} marker-end="url(#ct-arrow)"/>`);
+        if (view.pathLabels !== false && p.label) {
+          // Off the line rather than on it, on the side the line is leaning away from.
+          const mx = (e.x1 + e.x2) / 2;
+          const my = (e.y1 + e.y2) / 2;
+          const off = Math.abs(e.x2 - e.x1) > Math.abs(e.y2 - e.y1) ? { x: 0, y: -8 } : { x: 10, y: 0 };
+          out.push(text(mx + off.x, my + off.y, esc(p.label), {
+            size: 11, anchor: 'middle', fill: '#1a1a1a',
+          }));
+        }
+      }
+
+      for (const n of nodes) {
+        const pos = at.get(n.key);
+        if (!pos) continue;
+        // Squares for observed variables, a rounded box for a latent one — the
+        // convention every SEM figure uses, and the one thing a reader decodes without
+        // being told.
+        const latent = n.role === 'factor';
+        out.push(`<rect x="${r(pos.x - NODE_W / 2)}" y="${r(pos.y - NODE_H / 2)}" width="${NODE_W}" height="${NODE_H}" rx="${latent ? NODE_H / 2 : 3}" fill="#ffffff" stroke="#45596b" stroke-width="1.4"/>`);
+        out.push(text(pos.x, pos.y + 4, esc(clip(n.label || n.key, 16)), {
+          size: 11.5, anchor: 'middle', fill: '#1a1a1a',
+        }));
+      }
+
+      out.push(LAYER_CLOSE);
+      out.push(titleBlock(view.titleText ?? model.title, view, designBox(), box));
+      out.push(svgClose());
+      return out.join('');
+    },
+  });
 
   // =============================================================================
   // KIND: dendrogram (hierarchical clustering, as the tree it is)
