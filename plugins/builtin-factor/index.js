@@ -154,9 +154,12 @@ export async function run(app, { vars, nfactors, method, rotation }) {
   );
 
   // Scree plot — Layer-2 data model (line over components), host-rendered with live
-  // controls. `ev` is the eigenvalue array already parsed above. (The Kaiser
-  // eigenvalue>1 cutoff isn't drawn as a reference line — the categorical kind has
-  // none — but the variance table above shows which components clear it.)
+  // controls. `ev` is the eigenvalue array already parsed above.
+  //
+  // The Kaiser cutoff is a GUIDE on the chart now rather than a sentence under it. It
+  // used to say here that the categorical kind had no reference line, which was true and
+  // was the whole reason a scree plot — a chart whose entire job is "where does it cross
+  // one?" — made the reader find the crossing by eye. Guides are frame-level now.
   if (ev.length) {
     await app.results.appendChart({
       kind: 'categorical',
@@ -164,6 +167,7 @@ export async function run(app, { vars, nfactors, method, rotation }) {
       categories: ev.map((_, i) => ({ key: String(i + 1), label: String(i + 1) })),
       series: [{ key: 'ev', label: 'Eigenvalue', values: ev.map((e) => Math.round(e * 1000) / 1000) }],
       axes: { x: { title: 'Component' }, y: { title: 'Eigenvalue' } },
+      guides: [{ axis: 'y', at: 1, label: 'Kaiser (eigenvalue = 1)' }],
       view: { mark: 'line', legend: 'none' },
     });
   }

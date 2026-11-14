@@ -123,6 +123,7 @@ export function chartKinds(lib) {
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText, lineWidthControl, wrapToWidth,
     bandFrame, xyFrame, plural, fiveNumber, kde, jitterFor,
+    drawGuides, drawReferenceLine, guidesControl, referenceLineControl,
   } = lib;
 
   /** name -> kind definition, in the shape the kind bodies below assign into. */
@@ -205,6 +206,7 @@ export function chartKinds(lib) {
       }] : []),
       pointOverlayControl(model),
       errorBarsControl(model),
+      guidesControl(model),
       plotSizeControl(),
       gridlinesControl(),
       paletteControl(multi),
@@ -337,6 +339,10 @@ export function chartKinds(lib) {
     minorTicks(out, ticks, yScale, 'y', box.x0);
     out.push(`<line x1="${box.x0}" y1="${r(yScale(yMax))}" x2="${box.x0}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
     out.push(`<line x1="${box.x0}" y1="${r(yScale(yMin))}" x2="${box.x1}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
+
+    // A value line across a categorical chart: the Kaiser eigenvalue>1 cutoff on a scree
+    // plot, a target, a break-even. The x axis holds categories, so these are horizontal.
+    drawGuides({ out, box, yScale, yLo: yMin, yHi: yMax }, model, view);
 
     const band = plotW / Math.max(1, cats.length);
     const xCenter = (ci) => box.x0 + band * (ci + 0.5);
@@ -546,18 +552,8 @@ export function chartKinds(lib) {
         ? [markControl([['points', 'Points'], ['line', 'Lines'], ['both', 'Points + lines']],
           model.line ? 'line' : 'points')]
         : []),
-      ...((model.guides || []).length
-        ? [{ id: 'guides', group: 'Chart', label: 'Guide lines', type: 'check', default: true }]
-        : []),
-      ...(model.reference
-        ? [{
-          id: 'referenceLine',
-          group: 'Chart',
-          label: model.reference.label || 'Reference line',
-          type: 'check',
-          default: true,
-        }]
-        : []),
+      guidesControl(model),
+      referenceLineControl(model),
       pointSizeControl({
         default: 4,
         ...(hasMark ? { visibleWhen: { control: 'mark', notEquals: 'line' } } : {}),
@@ -649,39 +645,11 @@ export function chartKinds(lib) {
     out.push(`<line x1="${box.x0}" y1="${r(yScale(yMax))}" x2="${box.x0}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
     out.push(`<line x1="${box.x0}" y1="${r(yScale(yMin))}" x2="${r(xScale(xMax))}" y2="${r(yScale(yMin))}" stroke="${AXIS}" stroke-width="1"/>`);
 
-    // Behind the points and behind any trend line: a guide, not a finding.
-    if (view.referenceLine !== false && model.reference && Number.isFinite(model.reference.slope)) {
-      const { slope, intercept } = model.reference;
-      const y1 = slope * xMin + intercept;
-      const y2 = slope * xMax + intercept;
-      out.push(
-        `<line x1="${r(xScale(xMin))}" y1="${r(yScale(y1))}" x2="${r(xScale(xMax))}" y2="${r(yScale(y2))}" `
-          + 'stroke="#8c98a4" stroke-width="1.5" stroke-dasharray="5 4"/>',
-      );
-    }
-
-    // Axis-aligned GUIDES: a named value on one axis (break-even here, the willingness-to-pay
-    // line elsewhere), as opposed to `reference`, which is a relationship across both. Dashed
-    // grey like the reference, because they say the same thing about themselves — "I am not
-    // data" — and the meaning is carried by the label rather than by inventing a colour
-    // vocabulary a colourblind reader would have to decode.
-    if (view.guides !== false) {
-      for (const g of model.guides || []) {
-        if (!g || !Number.isFinite(g.at)) continue;
-        const vertical = g.axis !== 'y';
-        if (vertical) {
-          if (g.at < xMin || g.at > xMax) continue; // off-scale: a line on the frame is a lie
-          const x = xScale(g.at);
-          out.push(`<line x1="${r(x)}" y1="${r(box.y1)}" x2="${r(x)}" y2="${r(box.y0)}" stroke="#8c98a4" stroke-width="1.5" stroke-dasharray="4 3"/>`);
-          if (g.label) out.push(text(x + 4, box.y1 + 12, esc(g.label), { size: 10.5, fill: '#5d6b7a' }));
-        } else {
-          if (g.at < yMin || g.at > yMax) continue;
-          const y = yScale(g.at);
-          out.push(`<line x1="${r(box.x0)}" y1="${r(y)}" x2="${r(box.x1)}" y2="${r(y)}" stroke="#8c98a4" stroke-width="1.5" stroke-dasharray="4 3"/>`);
-          if (g.label) out.push(text(box.x1 - 3, y - 4, esc(g.label), { size: 10.5, anchor: 'end', fill: '#5d6b7a' }));
-        }
-      }
-    }
+    // Behind the points and behind any trend line: a guide, not a finding. Both of these
+    // used to be written out here, which is exactly why no other kind could draw one —
+    // they are frame geometry, and they now live in the stdlib beside the frames.
+    drawReferenceLine({ out, xScale, yScale, xLo: xMin, xHi: xMax }, model, view);
+    drawGuides({ out, box, yScale, xScale, yLo: yMin, yHi: yMax, xLo: xMin, xHi: xMax }, model, view);
 
     // The curve, when the points are a function rather than a cloud. Sorted by x, because a
     // polyline follows the order it is given and an unsorted sweep draws a zigzag.
@@ -963,6 +931,7 @@ export function chartKinds(lib) {
       ...(reps.length > 1
         ? [{ id: 'replicateMeans', label: 'Replicate means', type: 'check', group: 'Chart', default: true }]
         : []),
+      guidesControl(model),
       plotSizeControl(),
       gridlinesControl(),
       paletteControl(multi),
@@ -1155,6 +1124,7 @@ export function chartKinds(lib) {
       },
       showPointsControl({ default: true }),
       summaryControl([['mean', 'Mean per condition'], ['none', 'None']], 'mean'),
+      guidesControl(model),
       plotSizeControl(),
       gridlinesControl(),
       paletteControl(true),
@@ -1271,6 +1241,7 @@ export function chartKinds(lib) {
       { id: 'showMean', label: 'Mark the mean', type: 'check', group: 'Chart', default: false },
       { id: 'boxWidth', label: 'Box width', type: 'number', min: 0.2, max: 1, step: 0.1, group: 'Chart', default: 0.7 },
       pointSizeControl({ default: 3, visibleWhen: { control: 'showPoints', truthy: true } }),
+      guidesControl(model),
       plotSizeControl(),
       gridlinesControl(),
       paletteControl(multi),
@@ -1456,6 +1427,7 @@ export function chartKinds(lib) {
             ? [{ id: 'censorMarks', label: model.markLabel || 'Event marks', type: 'check', group: 'Chart', default: true }]
             : []),
           lineWidthControl(),
+          guidesControl(model),
           plotSizeControl(),
           gridlinesControl(),
           paletteControl(multi),
@@ -2768,6 +2740,7 @@ export function chartKinds(lib) {
         { id: 'normalCurve', label: 'Normal curve', type: 'check', group: 'Chart', default: false },
         { id: 'showStats', label: 'Show mean, SD and N', type: 'check', group: 'Chart', default: false },
         { id: 'barGap', label: 'Gap between bars', type: 'number', group: 'Chart', min: 0, max: 0.5, step: 0.05, default: 0 },
+        guidesControl(model),
         plotSizeControl(),
         gridlinesControl(),
         paletteControl(false),

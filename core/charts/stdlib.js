@@ -1229,6 +1229,101 @@ export function chartAltText(model, view, extra, noun) {
 }
 
 
+/** Guides and reference lines: grey, dashed — "I am not data". */
+export const GUIDE = '#8c98a4';
+const GUIDE_LABEL = '#5d6b7a';
+
+/**
+ * Axis-aligned GUIDE lines — a named value on one axis, as opposed to a `reference`,
+ * which is a relationship across both.
+ *
+ * This lived inside the scatter kind, and the cost of that was written in a comment on
+ * the scree plot: *"The Kaiser eigenvalue>1 cutoff isn't drawn as a reference line — the
+ * categorical kind has none."* Same for the bounds of a bootstrap interval on a
+ * histogram, the zero line of an event study on a band, and the chance diagonal of an
+ * ROC curve. One line of geometry, kept where only one kind could reach it.
+ *
+ * Drawn by the frame helpers, so it lands after the axes and before the kind draws
+ * anything — which is what "behind the data" means in SVG paint order.
+ *
+ * ## Contract
+ *
+ * `guides: [{ at, axis, label }]` on the model. `axis: 'y'` is a horizontal line at that
+ * y value; anything else is a vertical line at that x value, which is the default the
+ * scatter kind has always had and is kept so its callers do not move. On a frame whose x
+ * axis is CATEGORICAL there is no x value for a line to sit at, so every guide there is
+ * read as horizontal — the only reading that means anything, and better than silently
+ * dropping a guide whose author had no other option.
+ *
+ * Off-scale guides are dropped rather than clamped: a line pinned to the frame edge says
+ * "the threshold is here", and it is not.
+ *
+ * @param {{out: string[], box: object, yScale: Function, xScale?: Function,
+ *          yLo?: number, yHi?: number, xLo?: number, xHi?: number}} f frame geometry
+ * @param {object} model the chart model (reads `model.guides`)
+ * @param {object} [view] the view (`guides: false` turns them off)
+ */
+export function drawGuides(f, model, view = {}) {
+  if (view.guides === false) return;
+  const list = (model && model.guides) || [];
+  if (!list.length) return;
+  const { out, box, yScale, xScale } = f;
+  for (const g of list) {
+    if (!g || !Number.isFinite(g.at)) continue;
+    if (xScale && g.axis !== 'y') {
+      if (Number.isFinite(f.xLo) && (g.at < f.xLo || g.at > f.xHi)) continue;
+      const x = xScale(g.at);
+      out.push(`<line x1="${r(x)}" y1="${r(box.y1)}" x2="${r(x)}" y2="${r(box.y0)}" stroke="${GUIDE}" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+      if (g.label) out.push(text(x + 4, box.y1 + 12, esc(g.label), { size: 10.5, fill: GUIDE_LABEL }));
+    } else {
+      if (Number.isFinite(f.yLo) && (g.at < f.yLo || g.at > f.yHi)) continue;
+      const y = yScale(g.at);
+      out.push(`<line x1="${r(box.x0)}" y1="${r(y)}" x2="${r(box.x1)}" y2="${r(y)}" stroke="${GUIDE}" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+      if (g.label) out.push(text(box.x1 - 3, y - 4, esc(g.label), { size: 10.5, anchor: 'end', fill: GUIDE_LABEL }));
+    }
+  }
+}
+
+/**
+ * A sloped REFERENCE line — the normal line of a Q–Q plot, the chance diagonal of an ROC
+ * curve, the line of equality of a Bland–Altman or agreement plot.
+ *
+ * Not a trend line, and the difference is the point: a trend is a FINDING (red, with its
+ * equation and R²), a reference is what the plot MEANS, so it is grey, dashed and carries
+ * no equation — reading `Y = 0 + 1(X)` off a Q–Q plot would be reading a tautology.
+ *
+ * Needs a value scale on both axes, so it is drawn by `xyFrame` only.
+ *
+ * @param {{out: string[], xScale: Function, yScale: Function, xLo: number, xHi: number}} f
+ * @param {object} model reads `model.reference` as `{slope, intercept}`
+ * @param {object} [view] (`referenceLine: false` turns it off)
+ */
+export function drawReferenceLine(f, model, view = {}) {
+  if (view.referenceLine === false) return;
+  const ref = model && model.reference;
+  if (!ref || !Number.isFinite(ref.slope) || !Number.isFinite(ref.intercept)) return;
+  const { out, xScale, yScale, xLo, xHi } = f;
+  out.push(
+    `<line x1="${r(xScale(xLo))}" y1="${r(yScale(ref.slope * xLo + ref.intercept))}" `
+    + `x2="${r(xScale(xHi))}" y2="${r(yScale(ref.slope * xHi + ref.intercept))}" `
+    + `stroke="${GUIDE}" stroke-width="1.5" stroke-dasharray="5 4"/>`,
+  );
+}
+
+/** The guide-lines toggle — only when the model has guides to toggle. */
+export function guidesControl(model) {
+  return (model?.guides || []).length
+    ? { id: 'guides', group: 'Chart', label: 'Guide lines', type: 'check', default: true }
+    : null;
+}
+
+/** The reference-line toggle — only when the model supplies one. */
+export function referenceLineControl(model) {
+  return model?.reference && Number.isFinite(model.reference.slope)
+    ? { id: 'referenceLine', group: 'Chart', label: model.reference.label || 'Reference line', type: 'check', default: true }
+    : null;
+}
+
 /**
  * The scaffolding every "categories along x, numbers up y" chart needs: margins,
  * a nice y domain, gridlines, axes, titles. Extracted because violin, dots and
@@ -1278,6 +1373,10 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
   // Open L-shaped axes: the frame stops at the data, it does not box the plot in.
   out.push(`<line x1="${r(box.x0)}" y1="${r(box.y1)}" x2="${r(box.x0)}" y2="${r(box.y0)}" stroke="${AXIS}" stroke-width="1"/>`);
   out.push(`<line x1="${r(box.x0)}" y1="${r(box.y0)}" x2="${r(box.x1)}" y2="${r(box.y0)}" stroke="${AXIS}" stroke-width="1"/>`);
+
+  // Guides go on here: after the axes, before the kind draws a single mark. The x axis
+  // is categorical, so every guide on this frame is horizontal (see drawGuides).
+  drawGuides({ out, box, yScale, yLo, yHi }, model, view);
 
   const close = (labels) => {
     labels.forEach((lab, i) => {
@@ -1420,6 +1519,10 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
   // Open L-shaped axes, matching bandFrame and the Prism convention (#140).
   out.push(`<line x1="${r(box.x0)}" y1="${r(box.y1)}" x2="${r(box.x0)}" y2="${r(box.y0)}" stroke="${AXIS}" stroke-width="1"/>`);
   out.push(`<line x1="${r(box.x0)}" y1="${r(box.y0)}" x2="${r(box.x1)}" y2="${r(box.y0)}" stroke="${AXIS}" stroke-width="1"/>`);
+
+  // Both axes carry a value here, so this frame draws the sloped reference too.
+  drawReferenceLine({ out, xScale, yScale, xLo: xs.lo, xHi: xs.hi }, model, view);
+  drawGuides({ out, box, yScale, xScale, yLo: ys.lo, yHi: ys.hi, xLo: xs.lo, xHi: xs.hi }, model, view);
 
   const close = () => {
     for (const t of xs.ticks) {
