@@ -183,7 +183,19 @@ export const manifest = {
         { name: 'text', kind: 'variables', label: 'Text column', hint: 'The free-text responses to discover recurring themes across.', multiple: false, types: ['string'] },
         { name: 'k', kind: 'number', label: 'Number of topics', hint: 'How many themes to extract; try a few values and compare.', default: 4 },
         { name: 'topn', kind: 'number', label: 'Top terms per topic', hint: 'How many defining words to show for each topic.', default: 8 },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the table.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'beta', label: 'Topic x term heatmap' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'text-dictionary',
@@ -511,7 +523,7 @@ export async function kwic(app, { text, term, window }) {
 
 // --- Topic modeling (LDA) ----------------------------------------------------
 
-export async function topicModel(app, { text, k, topn }) {
+export async function topicModel(app, { text, k, topn, plots }) {
   if (!text) {
     await app.results.appendError('Topic modeling: choose a text column.');
     return;
@@ -574,6 +586,32 @@ export async function topicModel(app, { text, k, topn }) {
       { caption: 'Dominant Topic per Document' },
     );
   }
+  if ([].concat(plots ?? []).includes('beta')) {
+    // Topic by term, shaded by β. The table prints each topic as a comma-separated word
+    // list, which hides the two things a reader checks next: how sharply a topic is
+    // concentrated on its leading words, and which words are shared between topics —
+    // the usual sign that k is too high.
+    const beta = r.nums('beta');
+    const terms = [...new Set(term)];
+    const topics = [...new Set(topic)].sort((x, y) => x - y);
+    // A Map per topic rather than a composite key: a term is user text and any
+    // separator could appear inside one.
+    const byTopicTerm = new Map();
+    topic.forEach((t, i) => {
+      if (!byTopicTerm.has(t)) byTopicTerm.set(t, new Map());
+      byTopicTerm.get(t).set(term[i], beta[i]);
+    });
+    await app.results.appendChart({
+      kind: 'heatmap',
+      title: 'Topic × term (β)',
+      rows: topics.map((t) => ({ key: `t${t}`, label: `Topic ${t}` })),
+      columns: terms.map((tm) => ({ key: tm, label: tm })),
+      values: topics.flatMap((t) => terms.map((tm) => byTopicTerm.get(t)?.get(tm) ?? 0)),
+      // β is a probability: one-directional, so a sequential ramp from zero.
+      scale: { min: 0, label: 'β' },
+    });
+  }
+
   await app.results.appendText(
     '**Topic modeling (LDA)** groups co-occurring words into latent themes — each topic is a weighted word list you read and name. There is no single "right" number of topics; try a few values of *k* and compare which gives the most interpretable themes.',
   );

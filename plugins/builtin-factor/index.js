@@ -82,7 +82,19 @@ export const manifest = {
           ],
           default: 'varimax',
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. The scree plot is always drawn.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'loadings', label: 'Loadings heatmap' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -91,7 +103,7 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[], nfactors: number, method: string, rotation: string}} inputs
  */
-export async function run(app, { vars, nfactors, method, rotation }) {
+export async function run(app, { vars, nfactors, method, rotation, plots }) {
   if (!vars || vars.length < 2) {
     await app.results.appendError('Factor analysis needs at least 2 items.');
     return;
@@ -192,6 +204,23 @@ export async function run(app, { vars, nfactors, method, rotation }) {
     },
     { caption: `Factor Loadings (${rot === 'none' ? 'unrotated' : rot}) — loadings below |.30| hidden` },
   );
+
+  if ([].concat(plots ?? []).includes('loadings')) {
+    // The loadings matrix as a picture. Simple structure — each item loading on one
+    // factor and not the others — is a PATTERN, and the table hides it twice over: once
+    // in the arithmetic of reading down columns, and once by blanking everything below
+    // |.30|. The heatmap shows the small loadings too, which is how you notice an item
+    // that is nearly cross-loading rather than cleanly on one factor.
+    await app.results.appendChart({
+      kind: 'heatmap',
+      title: `Factor loadings (${rot === 'none' ? 'unrotated' : rot})`,
+      rows: items.map((it) => ({ key: it, label: label(meta, it) })),
+      columns: facCols.map((c, j2) => ({ key: `f${j2}`, label: c })),
+      // Column-major in R, row-major in the kind: item i, factor j.
+      values: items.flatMap((_it, i) => facCols.map((_c, j2) => load[j2 * nItems + i])),
+      scale: { min: -1, max: 1, diverging: true, label: 'Loading' },
+    });
+  }
 }
 
 // --- helpers -----------------------------------------------------------------

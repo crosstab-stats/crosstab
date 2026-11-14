@@ -94,7 +94,7 @@ export const manifest = {
     // 'tornado' chart", advice nobody could act on, since the only renderer is the one in
     // this same file. Adding a kind means adding it in BOTH places; the harness now
     // asserts that rather than trusting it.
-    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'forest', 'sced', 'tornado', 'wordcloud'],
+    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'forest', 'heatmap', 'sced', 'tornado', 'wordcloud'],
   },
 };
 
@@ -123,7 +123,7 @@ export function chartKinds(lib) {
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText, lineWidthControl, wrapToWidth,
     bandFrame, xyFrame, plural, fiveNumber, kde, jitterFor,
-    drawGuides, drawReferenceLine, guidesControl, referenceLineControl,
+    drawGuides, drawReferenceLine, guidesControl, referenceLineControl, scaleBlock,
   } = lib;
 
   /** name -> kind definition, in the shape the kind bodies below assign into. */
@@ -2356,6 +2356,192 @@ export function chartKinds(lib) {
    * Chart kind — was charts/kinds/wordcloud.js before the kinds moved into this plugin (#131 L3)
    * Chart kind: one field, or partitioned into labelled themes.
    */
+
+  /** ColorBrewer RdBu, reversed: blue for negative, red for positive, pale at zero.
+   *  Chosen for colourblind safety — the two ends differ in lightness as well as hue. */
+  const RAMP_DIVERGING = ['#2166ac', '#4393c3', '#92c5de', '#d1e5f0', '#f7f7f7',
+    '#fddbc7', '#f4a582', '#d6604d', '#b2182b'];
+  /** ColorBrewer Blues: for loadings, probabilities, counts — anything one-directional. */
+  const RAMP_SEQUENTIAL = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6',
+    '#4292c6', '#2171b5', '#08519c', '#08306b'];
+
+  // =============================================================================
+  // KIND: heatmap (a matrix of values, shaded)
+  // =============================================================================
+
+  /**
+   * Chart kind: heatmap — the figure a MATRIX is read as.
+   *
+   * The most-wanted missing kind in the chart-coverage survey, by client count: a
+   * correlation matrix, factor loadings, a confusion matrix, a missingness map, topic by
+   * term. All of them are already printed as tables here, and a table of forty numbers
+   * is a shape nobody can see — which is the whole argument for the kind.
+   *
+   * ## Classed, not smooth — and the cells and the key are classed TOGETHER
+   *
+   * `scaleBlock` makes the case for the choropleth: a key must not promise precision the
+   * picture does not have. The same rule applies in reverse here. If the cells were
+   * shaded continuously and the key drawn in blocks, a reader matching a cell to a block
+   * would be reading a bin that does not exist. So both are classed to the same steps,
+   * and the exact number goes IN the cell when there is room for it — which is what a
+   * reader wanting three decimals actually needs, rather than a finer ramp they cannot
+   * resolve by eye.
+   *
+   * ## Diverging by default when the data straddles zero
+   *
+   * A correlation of −0.4 and one of +0.4 are the same strength in opposite directions,
+   * and only a diverging ramp centred on zero draws them that way. The domain is made
+   * symmetric so the midpoint colour means zero rather than "the middle of this data".
+   * Loadings, probabilities and counts get the sequential ramp instead.
+   *
+   * Both ramps are ColorBrewer's, chosen for colourblind safety: RdBu diverging, Blues
+   * sequential.
+   */
+  kinds['heatmap'] = ({
+    altNoun: 'Heatmap',
+    colorLabel: 'Scale',
+    reorderCategories: false,
+    // The colours are the scale's, not a palette of categories: there is nothing here to
+    // assign a colour TO, so the picker has no items and the palette control stays away.
+    colorItems: () => [],
+    baseView: (model) => ({
+      ramp: model.scale?.diverging ?? straddlesZero(model) ? 'diverging' : 'sequential',
+      cellValues: cellCount(model) <= 144,
+      legend: 'right',
+      gridlines: false,
+    }),
+    controls: (model) => [
+      {
+        id: 'ramp',
+        label: 'Colour scale',
+        type: 'select',
+        group: 'Chart',
+        default: straddlesZero(model) ? 'diverging' : 'sequential',
+        options: [['diverging', 'Diverging (centred on zero)'], ['sequential', 'Sequential']],
+      },
+      {
+        id: 'cellValues',
+        label: 'Show values in cells',
+        type: 'check',
+        group: 'Labels',
+        default: cellCount(model) <= 144,
+      },
+      {
+        id: 'decimals',
+        label: 'Decimals',
+        type: 'number',
+        group: 'Labels',
+        min: 0,
+        max: 4,
+        step: 1,
+        default: 2,
+        visibleWhen: { control: 'cellValues', truthy: true },
+      },
+      plotSizeControl(),
+      legendControl(true, 'right'),
+      ...legendFormatControls(true),
+      ...titleControls(model),
+      ...axisControls('x', model),
+      ...axisControls('y', model),
+    ],
+    render: (model, view) => {
+      const rows = model.rows || [];
+      const cols = model.columns || [];
+      const vals = model.values || [];
+      if (!rows.length || !cols.length) return errorSvg('Heatmap: needs rows and columns.');
+
+      const finite = vals.filter((v) => Number.isFinite(v));
+      if (!finite.length) return errorSvg('Heatmap: no values to shade.');
+      const diverging = (view.ramp || (straddlesZero(model) ? 'diverging' : 'sequential')) === 'diverging';
+      const lo0 = model.scale?.min ?? Math.min(...finite);
+      const hi0 = model.scale?.max ?? Math.max(...finite);
+      // Symmetric for a diverging ramp, so the midpoint colour means zero.
+      const bound = Math.max(Math.abs(lo0), Math.abs(hi0));
+      const lo = diverging ? -bound : lo0;
+      const hi = diverging ? bound : hi0;
+      const steps = diverging ? RAMP_DIVERGING : RAMP_SEQUENTIAL;
+      const colorAt = (v) => {
+        if (!Number.isFinite(v)) return 'none';
+        const t = hi === lo ? 0.5 : (v - lo) / (hi - lo);
+        const i = Math.max(0, Math.min(steps.length - 1, Math.floor(t * steps.length)));
+        return steps[i];
+      };
+
+      // Row labels need width; column labels need height. Measured from the text rather
+      // than guessed, because a correlation matrix of variable LABELS is the common case
+      // and "Household income before tax" is not a short string.
+      const size = 11;
+      const rowLabelW = Math.min(220, 10 + Math.max(...rows.map((r) => (r.label || r.key).length)) * size * 0.56);
+      const colLabelH = Math.min(140, 10 + Math.max(...cols.map((c) => (c.label || c.key).length)) * size * 0.5);
+      const box = scalePlot({
+        x0: rowLabelW + 8, x1: W - 150, y0: H - 24, y1: colLabelH + 8,
+      }, view);
+      const cw = (box.x1 - box.x0) / cols.length;
+      const ch = (box.y0 - box.y1) / rows.length;
+
+      const scale = {
+        min: lo,
+        max: hi,
+        breaks: steps.map((_c, i) => lo + ((hi - lo) * i) / steps.length).concat(hi),
+        colors: steps,
+        label: model.scale?.label || '',
+      };
+      const out = [
+        svgOpen(chartAltText(model, view, `${plural(rows.length, 'row')} by ${plural(cols.length, 'column')}.`, 'Heatmap'), view),
+        layerOpen('plot', view),
+      ];
+
+      const dec = Number.isFinite(view.decimals) ? view.decimals : 2;
+      for (let i = 0; i < rows.length; i++) {
+        for (let j = 0; j < cols.length; j++) {
+          const v = vals[i * cols.length + j];
+          const x = box.x0 + cw * j;
+          const y = box.y1 + ch * i;
+          const fill = colorAt(v);
+          out.push(`<rect x="${r(x)}" y="${r(y)}" width="${r(cw)}" height="${r(ch)}" fill="${fill}" stroke="#ffffff" stroke-width="1"/>`);
+          if (view.cellValues !== false && Number.isFinite(v) && cw > 26 && ch > 14) {
+            // White text on the dark ends of the ramp, ink on the pale middle: a label
+            // the reader cannot make out is worse than none.
+            const t = hi === lo ? 0.5 : (v - lo) / (hi - lo);
+            const pale = diverging ? Math.abs(t - 0.5) < 0.3 : t < 0.55;
+            out.push(text(x + cw / 2, y + ch / 2 + 3.5, v.toFixed(dec), {
+              size: Math.min(11, ch * 0.5), anchor: 'middle', fill: pale ? '#1a1a1a' : '#ffffff',
+            }));
+          }
+        }
+      }
+
+      // Row labels, right-aligned against the grid.
+      rows.forEach((rw, i) => {
+        out.push(text(box.x0 - 6, box.y1 + ch * (i + 0.5) + 4, esc(clip(rw.label || rw.key, 34)), {
+          size, anchor: 'end', fill: AXIS,
+        }));
+      });
+      // Column labels, rotated: a matrix is usually square and its columns are the same
+      // long names as its rows.
+      cols.forEach((cl, j) => {
+        const cx = box.x0 + cw * (j + 0.5);
+        const cy = box.y1 - 6;
+        out.push(`<text x="${r(cx)}" y="${r(cy)}" font-size="${size}" fill="${AXIS}" text-anchor="start" transform="rotate(-60 ${r(cx)} ${r(cy)})">${esc(clip(cl.label || cl.key, 28))}</text>`);
+      });
+
+      out.push(LAYER_CLOSE);
+      out.push(scaleBlock(scale, view.legend || 'right', box, view));
+      out.push(titleBlock(view.titleText ?? model.title, view, designBox(), box));
+      out.push(svgClose());
+      return out.join('');
+    },
+  });
+
+  /** Does the matrix straddle zero? Then the ramp should be diverging and centred. */
+  function straddlesZero(model) {
+    const vals = (model?.values || []).filter((v) => Number.isFinite(v));
+    return vals.some((v) => v < 0) && vals.some((v) => v > 0);
+  }
+
+  function cellCount(model) {
+    return (model?.rows || []).length * (model?.columns || []).length;
+  }
 
   // =============================================================================
   // KIND: wordcloud (single field, or partitioned into labelled themes)

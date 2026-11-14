@@ -41,6 +41,14 @@ const MODELS = {
     series: [{ key: 's', label: 'S', points: [{ x: 0, y: 1, lo: 0.5, hi: 1.5 }, { x: 1, y: 2, lo: 1.6, hi: 2.4 }] }],
   },
   forest: { kind: 'forest', title: 'T', rows: [{ key: 'r', label: 'R', est: 1, lo: 0, hi: 2 }] },
+  heatmap: {
+    kind: 'heatmap', title: 'T',
+    rows: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }],
+    columns: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }],
+    // Straddling zero, so the diverging default is the one exercised here.
+    values: [1, -0.4, -0.4, 1],
+    scale: { label: 'r' },
+  },
   sced: { kind: 'sced', title: 'T', cases: [{ key: 'c', label: 'C', phases: [{ key: 'A', label: 'A', points: [{ t: 1, y: 2 }] }] }] },
   wordcloud: { kind: 'wordcloud', title: 'T', words: [{ text: 'a', weight: 3 }, { text: 'b', weight: 1 }] },
   tornado: {

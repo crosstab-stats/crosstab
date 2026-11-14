@@ -102,6 +102,7 @@ export const manifest = {
           multiple: true,
           optional: true,
           options: [
+            { value: 'matrix', label: 'Correlation heatmap' },
             { value: 'scatter', label: 'Scatterplot of the first two variables' },
           ],
           default: [],
@@ -223,6 +224,25 @@ export async function run(app, { vars, method, weight, plots }) {
   });
 
   await app.results.appendTable({ columns, rows, rowHeaders: true }, { caption: `Correlations (${methodLabel})` + (weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : '') });
+
+  if ([].concat(plots ?? []).includes('matrix')) {
+    // The figure a correlation matrix is read as. Sixteen variables is 256 numbers; the
+    // pattern in them — which blocks hang together, which pair is the outlier — is
+    // exactly what a table of 256 numbers cannot show and a shaded grid shows at once.
+    const labels = vars.map((v) => meta.get(v)?.label || v);
+    await app.results.appendChart({
+      kind: 'heatmap',
+      title: `Correlations (${methodLabel})`,
+      rows: vars.map((v, i) => ({ key: v, label: labels[i] })),
+      columns: vars.map((v, i) => ({ key: v, label: labels[i] })),
+      // The R hands back `as.vector(t(r))` — row-major, which is what the kind reads.
+      values: c.r,
+      // Correlations live in [-1, 1] and mean something at zero, so the scale is pinned
+      // rather than fitted: a matrix whose strongest pair is .3 must not be shaded as
+      // though .3 were the maximum possible.
+      scale: { min: -1, max: 1, diverging: true, label: methodLabel },
+    });
+  }
 
   if (wantScatter) {
     if (weight) {
