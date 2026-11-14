@@ -89,7 +89,19 @@ export const manifest = {
             'A survey weight (e.g. WTSSNR), so the correlation describes the population rather ' +
             'than the sample. Pearson only. Cancel this to count each case once.',
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the matrix.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'scatter', label: 'Scatterplot of the first two variables' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'correlation-partial',
@@ -119,7 +131,10 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[]}} inputs
  */
-export async function run(app, { vars, method, weight }) {
+export async function run(app, { vars, method, weight, plots }) {
+  // A scatter needs the observations, which cannot carry a case weight (the host
+  // computes the fit it draws), so it is offered unweighted or not at all.
+  const wantScatter = [].concat(plots ?? []).includes('scatter');
   if (!vars || vars.length < 2) {
     await app.results.appendError('Correlation needs at least two variables.');
     return;
@@ -172,7 +187,14 @@ export async function run(app, { vars, method, weight }) {
         if (!is.null(ct)) { r[i, j] <- unname(if (is.null(ct$estimate)) ct$r else ct$estimate); p[i, j] <- if (is.null(ct$p.value)) ct$p else ct$p.value }
       }
     }
-    list(k = k, r = as.vector(t(r)), p = as.vector(t(p)), n = as.vector(t(n)))`;
+    sx <- numeric(0); sy <- numeric(0)
+    if (${wantScatter ? 'TRUE' : 'FALSE'} && k >= 2) {
+      # The first pair, on the pairwise-complete cases the matrix cell above used — so
+      # the cloud and its r are computed from the same rows.
+      ok2 <- is.finite(d[[1]]) & is.finite(d[[2]]) & !is.na(W0)
+      sx <- as.numeric(d[[1]][ok2]); sy <- as.numeric(d[[2]][ok2])
+    }
+    list(k = k, r = as.vector(t(r)), p = as.vector(t(p)), n = as.vector(t(n)), sx = sx, sy = sy)`;
 
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
@@ -196,6 +218,27 @@ export async function run(app, { vars, method, weight }) {
   });
 
   await app.results.appendTable({ columns, rows, rowHeaders: true }, { caption: `Correlations (${methodLabel})` + (weight ? ` — weighted by ${meta.get(weight)?.label ?? weight}` : '') });
+
+  if (wantScatter) {
+    if (weight) {
+      await app.results.appendText(
+        '_Scatter skipped: it is drawn from the individual observations, which cannot carry '
+        + 'the case weight. Run without the weight to see the cloud._',
+      );
+    } else if (c.sx.length) {
+      // A correlation matrix is a table of shapes nobody can see. One number cannot tell
+      // a line from a curve, from two clusters, from one outlier doing all the work —
+      // which is Anscombe's whole point — so the first pair gets drawn.
+      const [xn, yn] = vars;
+      await app.results.appendChart({
+        kind: 'scatter',
+        title: `${meta.get(xn)?.label || xn} and ${meta.get(yn)?.label || yn}`,
+        points: c.sx.map((x, i) => ({ x, y: c.sy[i] })),
+        trend: true,
+        axes: { x: { title: meta.get(xn)?.label || xn }, y: { title: meta.get(yn)?.label || yn } },
+      });
+    }
+  }
   await app.results.appendText(
     'Significance (two-tailed): a single star = p < .05, a double star = p < .01. N is pairwise.',
   );
@@ -281,7 +324,7 @@ export async function partial(app, { vars, controls, type }) {
 function normalizeResult(rList) {
   const r = unpackR(rList);
   const kArr = r.nums('k');
-  return { k: kArr.length ? kArr[0] : 0, r: r.nums('r'), p: r.nums('p'), n: r.nums('n'), nScalar: r.num1('n'), df: r.num1('df') };
+  return { k: kArr.length ? kArr[0] : 0, r: r.nums('r'), p: r.nums('p'), n: r.nums('n'), nScalar: r.num1('n'), df: r.num1('df'), sx: r.nums('sx'), sy: r.nums('sy') };
 }
 
 /** Coefficient with significance stars. */

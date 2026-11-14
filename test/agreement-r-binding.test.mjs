@@ -64,14 +64,21 @@ test('the old two-call shape is gone, flag and all', () => {
 test('compute prepends its prelude so the binding is in the SAME evaluation', () => {
   const at = SRC.indexOf('async function compute(');
   const body = SRC.slice(at, SRC.indexOf('\n}', at));
-  assert.match(body, /\{ prelude = '' \} = \{\}/, 'it takes a prelude');
+  assert.match(body, /prelude = ''/, 'it takes a prelude, defaulted to none');
   assert.match(body, /app\.webr\.run\(prelude \+ rCode\)/, 'and puts it in the one call');
 });
 
 test('both callers still reach compute the way their data arrives', () => {
-  // The variables path passes nothing: its `vars` is injected by the host as a prelude
-  // into the same evaluation, which is exactly why it never hit this bug.
-  assert.match(SRC, /const stats = await compute\(app, metric, weight\);/, 'variables path');
+  // The variables path supplies NO prelude: its `vars` is injected by the host into the
+  // same evaluation, which is exactly why it never hit this bug.
+  //
+  // Asserted as "exactly one caller supplies a prelude" rather than by pinning a call's
+  // full argument list: the options object later grew a `raw` flag (the Bland-Altman
+  // plot needs the two raters' own scores back), and a guard that fails on an unrelated
+  // argument is reporting the spelling rather than the contract it exists to protect.
+  const calls = [...SRC.matchAll(/await compute\(app, [^;]*?\)/g)].map((m) => m[0]);
+  assert.equal(calls.length, 2, `two callers, found ${calls.length}`);
+  assert.equal(calls.filter((c) => c.includes('prelude')).length, 1, 'exactly one supplies a prelude');
   // The codings path passes the matrix it just built.
   assert.match(SRC, /prelude: matrixSource\(rows, coders\.length\)/, 'codings path');
 });

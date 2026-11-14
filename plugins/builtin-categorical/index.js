@@ -96,7 +96,19 @@ export const manifest = {
       inputs: [
         { name: 'variable', kind: 'variables', label: 'Variable', hint: 'The categorical variable whose distribution you want to test.', types: ['factor', 'string', 'numeric'] },
         { name: 'expected', kind: 'text', label: 'Expected proportions (comma-separated; blank = equal)', hint: 'The proportions you expect per category; blank assumes equal.', optional: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the table.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'obsexp', label: 'Observed vs expected counts' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'categorical-oneprop',
@@ -231,7 +243,7 @@ function prettyLLTerm(term, vars, meta) {
     .join(' × ');
 }
 
-export async function gof(app, { variable, expected }) {
+export async function gof(app, { variable, expected, plots }) {
   if (!variable) return void app.results.appendError('Pick a variable.');
   const meta = metaMap(await app.data.getVariableMeta());
   const exp = parseProps(expected);
@@ -271,6 +283,24 @@ export async function gof(app, { variable, expected }) {
     },
     { caption: 'Test Statistics' },
   );
+
+  if ([].concat(plots ?? []).includes('obsexp')) {
+    // The argument a goodness-of-fit test makes, side by side: what was counted against
+    // what the hypothesis expected. The chi-square is one number for "these differ"; the
+    // bars are WHERE they differ, which is what anyone reading the test wants next.
+    await app.results.appendChart({
+      kind: 'categorical',
+      title: `Observed vs expected — ${label(meta, variable)}`,
+      categories: levels.map((lvl) => ({ key: String(lvl), label: String(meta.get(variable)?.valueLabels?.[lvl] ?? lvl) })),
+      series: [
+        { key: 'obs', label: 'Observed', values: obs },
+        { key: 'exp', label: 'Expected', values: expd },
+      ],
+      counts: true,
+      axes: { x: { title: label(meta, variable) }, y: { title: 'Count' } },
+      view: { mark: 'bar', stack: 'none', legend: 'right' },
+    });
+  }
 }
 
 export async function oneProp(app, { variable, p0, category, weight }) {

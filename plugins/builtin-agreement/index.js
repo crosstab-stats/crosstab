@@ -114,7 +114,19 @@ export const manifest = {
           options: ['unweighted', 'equal', 'squared'],
           default: 'unweighted',
         },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want. Bland-Altman needs exactly two raters on a numeric scale.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'ba', label: 'Bland-Altman (agreement) plot' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'agreement-codings',
@@ -140,13 +152,14 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[], metric?: string, weight?: string}} inputs
  */
-export async function run(app, { vars, metric = 'nominal', weight = 'unweighted' }) {
+export async function run(app, { vars, metric = 'nominal', weight = 'unweighted', plots }) {
   if (!vars || vars.length < 2) {
     await app.results.appendError('Inter-rater agreement needs at least 2 rater columns — one per rater.');
     return;
   }
   const meta = new Map((await app.data.getVariableMeta()).map((m) => [m.name, m]));
-  const stats = await compute(app, metric, weight);
+  const wantBA = [].concat(plots ?? []).includes('ba');
+  const stats = await compute(app, metric, weight, { raw: wantBA });
   await render(app, stats, {
     caption: 'Inter-rater Agreement',
     units: 'rows',
@@ -154,6 +167,41 @@ export async function run(app, { vars, metric = 'nominal', weight = 'unweighted'
     metric,
     weight,
   });
+
+  if (wantBA) {
+    const a = stats.nums('baA');
+    const b = stats.nums('baB');
+    if (a.length !== b.length || !a.length) {
+      await app.results.appendText(
+        '_Bland–Altman needs exactly two raters scoring the same units on a numeric scale._',
+      );
+    } else {
+      // The agreement plot Bland and Altman argued for in 1986, and the reason they did:
+      // a correlation between two raters measures whether they RANK alike, not whether
+      // they AGREE. Two instruments one of which reads 5 points high correlate perfectly.
+      // So this plots the difference against the average, with the bias and the limits of
+      // agreement — mean ± 1.96 SD of the differences — as guides. 95% of differences
+      // should fall inside them; whether that width is acceptable is a judgement about
+      // the measure, which is exactly the judgement a kappa hides.
+      const diff = a.map((v, i) => v - b[i]);
+      const avg = a.map((v, i) => (v + b[i]) / 2);
+      const mean = diff.reduce((x, y) => x + y, 0) / diff.length;
+      const sd = Math.sqrt(diff.reduce((x, y) => x + (y - mean) ** 2, 0) / Math.max(1, diff.length - 1));
+      const names = vars.map((v) => meta.get(v)?.label || v);
+      await app.results.appendChart({
+        kind: 'scatter',
+        title: `Bland–Altman — ${names[0]} vs ${names[1]}`,
+        points: avg.map((x, i) => ({ x, y: diff[i] })),
+        axes: { x: { title: 'Mean of the two raters' }, y: { title: `Difference (${names[0]} − ${names[1]})` } },
+        guides: [
+          { axis: 'y', at: 0, label: 'No difference' },
+          { axis: 'y', at: mean, label: 'Bias' },
+          { axis: 'y', at: mean + 1.96 * sd, label: 'Upper limit' },
+          { axis: 'y', at: mean - 1.96 * sd, label: 'Lower limit' },
+        ],
+      });
+    }
+  }
 }
 
 // --- the CAQDAS path ----------------------------------------------------------
@@ -478,7 +526,7 @@ function matrixSource(rows, nRaters) {
  * path, by `matrixSource` for the
  * codings path — so both paths share one implementation and cannot drift.
  */
-async function compute(app, metric, weight, { prelude = '' } = {}) {
+async function compute(app, metric, weight, { prelude = '', raw = false } = {}) {
   const rCode = `
     d <- as.data.frame(lapply(vars, function(c) suppressWarnings(as.numeric(c))), check.names = FALSE)
     d <- d[stats::complete.cases(d), , drop = FALSE]   # listwise: a unit only counts if every rater scored it
@@ -492,8 +540,13 @@ async function compute(app, metric, weight, { prelude = '' } = {}) {
            tryCatch(irr::kappam.fleiss(d), error = function(e) NULL)
     # Krippendorff's alpha wants raters in ROWS.
     al <- tryCatch(irr::kripp.alpha(t(m), method = ${JSON.stringify(metric)}), error = function(e) NULL)
+    # The two raters' own scores, for a Bland-Altman plot. Only for k == 2: with more
+    # raters there is no single pair to difference, and drawing the first two would be a
+    # figure about a subset of the table beside it.
+    baA <- numeric(0); baB <- numeric(0)
+    if (${raw ? 'TRUE' : 'FALSE'} && k == 2 && n > 0) { baA <- as.numeric(m[, 1]); baB <- as.numeric(m[, 2]) }
     list(
-      n = n, k = k,
+      n = n, k = k, baA = baA, baB = baB,
       percentAgree = pa,
       kappa = if (is.null(kap)) NA_real_ else as.numeric(kap$value),
       kappaZ = if (is.null(kap) || is.null(kap$statistic)) NA_real_ else as.numeric(kap$statistic),

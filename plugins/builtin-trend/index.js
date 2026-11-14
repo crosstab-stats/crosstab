@@ -55,12 +55,25 @@ export const manifest = {
       order: 90,
       inputs: [
         { name: 'series', kind: 'variables', label: 'Series (in time order)', hint: 'The numeric measure to check for a trend, rows in time order.', multiple: false, types: ['numeric'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the table.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'series', label: "Series with Sen's slope" },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
-export async function run(app, { series: sName }) {
+export async function run(app, { series: sName, plots }) {
+  const wantSeries = [].concat(plots ?? []).includes('series');
   if (!sName) { await app.results.appendError('Mann-Kendall: choose a numeric series (in time order).'); return; }
   await app.webr.installPackages(['trend']);
   const meta = metaMap(await app.data.getVariableMeta());
@@ -70,7 +83,11 @@ export async function run(app, { series: sName }) {
     mk <- mk.test(x); ss <- sens.slope(x)
     list(z = as.numeric(mk$statistic), p = mk$p.value,
          S = as.numeric(mk$estimates["S"]), tau = as.numeric(mk$estimates["tau"]),
-         slope = as.numeric(ss$estimates), lo = ss$conf.int[1], hi = ss$conf.int[2], n = length(x))`;
+         slope = as.numeric(ss$estimates), lo = ss$conf.int[1], hi = ss$conf.int[2], n = length(x),
+         # Sen's slope is a median of pairwise slopes, so the line that goes with it is
+         # the one through the median point, not a least-squares fit.
+         med = stats::median(x), medT = stats::median(seq_along(x)),
+         raw = ${wantSeries ? 'x' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -90,6 +107,25 @@ export async function run(app, { series: sName }) {
     },
     { caption: `Mann-Kendall Trend — ${labelOf(meta.get(sName), sName)} (N = ${r.num1('n')})` },
   );
+
+  if (wantSeries) {
+    // A trend test is reported with the trend drawn. The line is Sen's own: a median of
+    // the pairwise slopes, anchored at the median point — not a least-squares fit, which
+    // would be a different estimator drawn over this one's p-value.
+    const x = r.nums('raw');
+    const slope = r.num1('slope');
+    const intercept = r.num1('med') - slope * r.num1('medT');
+    if (x.length) {
+      await app.results.appendChart({
+        kind: 'scatter',
+        title: `${labelOf(meta.get(sName), sName)} over time`,
+        points: x.map((y, i) => ({ x: i + 1, y })),
+        line: true,
+        reference: Number.isFinite(slope) ? { slope, intercept, label: "Sen's slope" } : undefined,
+        axes: { x: { title: 'Observation' }, y: { title: labelOf(meta.get(sName), sName) } },
+      });
+    }
+  }
   const tau = r.num1('tau'), p = r.num1('p');
   await app.results.appendText(
     `${p < 0.05 ? `A **significant ${tau > 0 ? 'upward' : 'downward'} monotonic trend** (${fmtPInline(p)}).` : 'No significant monotonic trend (p ≥ .05).'} ` +

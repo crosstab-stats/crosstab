@@ -52,7 +52,21 @@ export const manifest = {
       label: 'Reliability analysis…',
       run: 'run',
       order: 10,
-      inputs: [{ name: 'vars', kind: 'variables', label: 'Scale items', hint: 'The survey items expected to measure one construct.', multiple: true, types: ['numeric'] }],
+      inputs: [{ name: 'vars', kind: 'variables', label: 'Scale items', hint: 'The survey items expected to measure one construct.', multiple: true, types: ['numeric'] },
+        {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'items', label: 'Item-total correlations' },
+            { value: 'drop', label: 'Alpha if item deleted' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -61,7 +75,7 @@ export const manifest = {
  * @param {object} app
  * @param {{vars: string[]}} inputs
  */
-export async function run(app, { vars }) {
+export async function run(app, { vars, plots }) {
   if (!vars || vars.length < 2) {
     await app.results.appendError('Reliability needs at least 2 items.');
     return;
@@ -118,6 +132,40 @@ export async function run(app, { vars }) {
     },
     { caption: 'Item-Total Statistics' },
   );
+
+  const wantRel = new Set([].concat(plots ?? []));
+  if (wantRel.size) {
+    const itemNames = r.strs('items');
+    const itemLabels = itemNames.map((n) => meta.get(n)?.label || n);
+    if (wantRel.has('items')) {
+      // Scale development is iterative, and this is the figure you scan to decide what to
+      // drop: the items correlating least with the rest of the scale are the ones not
+      // measuring what the others are. The .30 line is the convention, drawn as a guide
+      // rather than left in a footnote.
+      await app.results.appendChart({
+        kind: 'categorical',
+        title: 'Corrected item-total correlation',
+        categories: itemLabels.map((lab, i) => ({ key: `i${i}`, label: lab })),
+        series: [{ key: 'r', label: 'r (item vs rest)', values: r.nums('itemR') }],
+        axes: { x: { title: 'Item' }, y: { title: 'Correlation' } },
+        guides: [{ axis: 'y', at: 0.3, label: 'Conventional floor (.30)' }],
+        view: { mark: 'bar', legend: 'none' },
+      });
+    }
+    if (wantRel.has('drop')) {
+      // The alpha the scale WOULD have without each item, against the alpha it has: a bar
+      // above the line is an item whose removal would improve the scale.
+      await app.results.appendChart({
+        kind: 'categorical',
+        title: 'Alpha if item deleted',
+        categories: itemLabels.map((lab, i) => ({ key: `i${i}`, label: lab })),
+        series: [{ key: 'a', label: 'Alpha without this item', values: r.nums('alphaDrop') }],
+        axes: { x: { title: 'Item' }, y: { title: 'Alpha' } },
+        guides: [{ axis: 'y', at: r.num1('alpha'), label: 'Alpha of the full scale' }],
+        view: { mark: 'bar', legend: 'none' },
+      });
+    }
+  }
 }
 
 // --- helpers -----------------------------------------------------------------
