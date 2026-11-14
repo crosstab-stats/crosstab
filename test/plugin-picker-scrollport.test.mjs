@@ -92,6 +92,18 @@ test('the buttons sit outside the scrollport, at every size', () => {
   assert.match(pickerCss, /\.ctp-dialog__body\s*\{[^}]*overflow:\s*hidden/);
 });
 
+test('the button row survives a scrollport it did not expect', () => {
+  // The belt and braces for the one engine that cannot be measured here. Verified by
+  // breaking the layout on purpose (body { flex: none }, so the form runs taller than the
+  // dialog and the dialog scrolls, which is the pre-fix geometry): with the sticky rule,
+  // Done stayed on screen and elementFromPoint at its centre still returned the button.
+  assert.match(pickerCss, /\.ctp-dialog\s+\.ct-dialog__buttons\s*\{[^}]*position:\s*sticky/);
+  // Opaque, or the rows scroll through it; and above .ctp__sectionhead's z-index: 1.
+  assert.match(pickerCss, /\.ctp-dialog\s+\.ct-dialog__buttons\s*\{[^}]*background:\s*\w/);
+  assert.match(pickerCss, /\.ctp-dialog\s+\.ct-dialog__buttons\s*\{[^}]*z-index:\s*2/);
+  assert.match(pickerCss, /\.ctp__sectionhead\s*\{[^}]*z-index:\s*1\b/);
+});
+
 test('display:flex on a dialog is qualified by [open]', () => {
   // A bare author `display` outranks the UA's `dialog:not([open]) { display: none }` and
   // pins the dialog open forever — the trap the shell and the launcher both carry notes

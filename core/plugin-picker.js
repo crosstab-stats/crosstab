@@ -929,6 +929,18 @@ function injectStyles() {
     .ctp-dialog .ct-dialog__title,
     .ctp-dialog .ct-dialog__hint,
     .ctp-dialog .ct-dialog__buttons { flex: none; }
+    /* Belt and braces, because the device that reported this is the one engine we cannot
+       measure here: IF anything ever makes the form taller than the dialog again, the
+       dialog scrolls, and a button row in normal flow slides under the list exactly as
+       before. Sticky pins it to the bottom of whatever scrollport it finds, and is inert
+       when there is none — which is the fixed case above, at every size measured. Canvas
+       is the dialog's own UA background, so it tracks light and dark; z-index 2 beats
+       .ctp__sectionhead's 1, the one positioned thing that could cover it. Verified by
+       breaking the layout on purpose: with .ctp-dialog__body { flex: none } forcing the
+       pre-fix geometry back, Done stayed on screen and hit-testable. */
+    .ctp-dialog .ct-dialog__buttons {
+      position: sticky; bottom: 0; z-index: 2; background: Canvas;
+    }
     .ctp-dialog .ctp__list { min-height: 0; }
     .ctp-dialog__body { display: flex; flex-direction: column; min-height: 0; max-height: 60vh;
       flex: 0 1 auto; overflow: hidden; }
@@ -953,6 +965,10 @@ function injectStyles() {
        or the list would be handed a short definite height again and spill out of it — the
        launcher does the same thing one level up, with .ctl__center { flex: none }. */
     [data-screen="small"] .ctp-dialog__body > .ctp { flex: none; }
+    /* Breathing room above the buttons, so a row scrolling under the sticky bar is not
+       touching it. Small screens only: on a desktop the dialog does not scroll, and the
+       padding would move the layout for no reason. */
+    [data-screen="small"] .ctp-dialog .ct-dialog__buttons { padding-top: 10px; }
   `;
   document.head.append(style);
 }
