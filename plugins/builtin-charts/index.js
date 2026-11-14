@@ -94,7 +94,7 @@ export const manifest = {
     // 'tornado' chart", advice nobody could act on, since the only renderer is the one in
     // this same file. Adding a kind means adding it in BOTH places; the harness now
     // asserts that rather than trusting it.
-    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'density', 'forest', 'heatmap', 'sced', 'tornado', 'wordcloud'],
+    kinds: ['categorical', 'scatter', 'pie', 'violin', 'dots', 'paired', 'box', 'histogram', 'steps', 'band', 'density', 'dendrogram', 'forest', 'heatmap', 'sced', 'tornado', 'wordcloud'],
   },
 };
 
@@ -123,7 +123,7 @@ export function chartKinds(lib) {
     computeStats, errorBounds, jitterOffsets, minorTicks, niceTicks, niceNum,
     legendBlock, ordered, svgOpen, svgOpenH, chartAltText, lineWidthControl, wrapToWidth,
     bandFrame, xyFrame, plural, fiveNumber, kde, jitterFor,
-    drawGuides, drawReferenceLine, guidesControl, referenceLineControl, scaleBlock,
+    drawGuides, drawReferenceLine, guidesControl, referenceLineControl, scaleBlock, GUIDE,
   } = lib;
 
   /** name -> kind definition, in the shape the kind bodies below assign into. */
@@ -2364,6 +2364,135 @@ export function chartKinds(lib) {
   /** ColorBrewer Blues: for loadings, probabilities, counts — anything one-directional. */
   const RAMP_SEQUENTIAL = ['#f7fbff', '#deebf7', '#c6dbef', '#9ecae1', '#6baed6',
     '#4292c6', '#2171b5', '#08519c', '#08306b'];
+
+  // =============================================================================
+  // KIND: dendrogram (hierarchical clustering, as the tree it is)
+  // =============================================================================
+
+  /**
+   * Chart kind: dendrogram.
+   *
+   * Hierarchical clustering has no other output. k-means hands you k groups and a table
+   * of centres; hierarchical clustering hands you a NESTING, and the whole method is
+   * read by looking at the tree and deciding where to cut it. A table of merge heights
+   * is not a second-best presentation of that, it is an unreadable one.
+   *
+   * ## Why this is ours to draw, not R's to bake
+   *
+   * The baking rule in `test/baked-plot-inventory.test.mjs` is "ask R for numbers, not
+   * pictures", with the carve-out for geometry that is genuinely hard and not ours —
+   * force-directed layouts, map projections, ordination configurations. A dendrogram is
+   * none of those: its layout is DETERMINED by the merge structure. Leaves sit in the
+   * order hclust returns, every internal node sits midway between its two children, and
+   * its height is the distance at which they merged. There is nothing to solve, so the
+   * numbers are enough and the figure stays live — which matters here more than usual,
+   * because the one interaction a dendrogram wants is "draw the cut line somewhere else".
+   *
+   * @param {object} model
+   * @param {{key: string, label: string}[]} model.leaves  in hclust's own order
+   * @param {number[]} model.merge  2 per step, hclust's convention: negative is a leaf
+   *   (1-based), positive is an earlier step (1-based)
+   * @param {number[]} model.height  the distance at which each step merged
+   */
+  kinds['dendrogram'] = ({
+    altNoun: 'Dendrogram',
+    colorLabel: 'Clusters',
+    reorderCategories: false,
+    colorItems: () => [],
+    baseView: () => ({ gridlines: false, cut: null, leafLabels: true }),
+    controls: (model) => [
+      // The one interaction this figure wants. Blank is honest: a cut nobody chose is a
+      // claim about the number of clusters that the data did not make.
+      {
+        id: 'cut',
+        label: 'Cut at height',
+        type: 'number',
+        group: 'Chart',
+        placeholder: '(none)',
+        step: 'any',
+      },
+      { id: 'leafLabels', label: 'Label the leaves', type: 'check', group: 'Labels', default: true },
+      guidesControl(model),
+      plotSizeControl(),
+      gridlinesControl(),
+      ...titleControls(model),
+      ...axisControls('y', model),
+    ],
+    render: (model, view) => {
+      const leaves = model.leaves || [];
+      const merge = model.merge || [];
+      const height = model.height || [];
+      const steps = height.length;
+      if (leaves.length < 2 || steps !== leaves.length - 1 || merge.length !== steps * 2) {
+        return errorSvg('Dendrogram: needs a merge structure from hierarchical clustering.');
+      }
+
+      const labelH = view.leafLabels === false
+        ? 18
+        : Math.min(160, 14 + Math.max(...leaves.map((l) => (l.label || l.key).length)) * 5.4);
+      const box = scalePlot({ x0: 54, x1: W - 18, y0: H - labelH, y1: 26 }, view);
+      const top = Math.max(...height, 1e-9);
+      const yScale = (h) => box.y0 - (h / top) * (box.y0 - box.y1);
+      const slot = (box.x1 - box.x0) / leaves.length;
+      const leafX = (i) => box.x0 + slot * (i + 0.5);
+
+      // Where each step's node sits: midway between its two children, at its own height.
+      // Resolved in order, so a step only ever refers to steps already placed.
+      const nodeX = [];
+      const childOf = (code) => (code < 0
+        ? { x: leafX(-code - 1), y: box.y0 }
+        : { x: nodeX[code - 1], y: yScale(height[code - 1]) });
+      const out = [
+        svgOpen(chartAltText(model, view, `${plural(leaves.length, 'case')} merged in ${plural(steps, 'step')}.`, 'Dendrogram'), view),
+        layerOpen('plot', view),
+      ];
+
+      // The y axis is a distance axis and the reader uses it to pick a cut, so it gets
+      // real ticks rather than just the two ends.
+      for (const t of niceTicks(0, top, view.yTickCount || 5)) {
+        if (t < 0 || t > top) continue;
+        const y = yScale(t);
+        if (view.gridlines) out.push(`<line x1="${r(box.x0)}" y1="${r(y)}" x2="${r(box.x1)}" y2="${r(y)}" stroke="${GRID}" stroke-width="1"/>`);
+        out.push(`<line x1="${r(box.x0 - 5)}" y1="${r(y)}" x2="${r(box.x0)}" y2="${r(y)}" stroke="${AXIS}" stroke-width="1"/>`);
+        out.push(text(box.x0 - 8, y + 4, fmtNum(t), { size: 11, anchor: 'end', fill: AXIS }));
+      }
+      out.push(`<line x1="${r(box.x0)}" y1="${r(box.y1)}" x2="${r(box.x0)}" y2="${r(box.y0)}" stroke="${AXIS}" stroke-width="1"/>`);
+
+      const cut = Number.isFinite(view.cut) ? view.cut : null;
+      for (let s = 0; s < steps; s++) {
+        const a = childOf(merge[s * 2]);
+        const b = childOf(merge[s * 2 + 1]);
+        const y = yScale(height[s]);
+        nodeX[s] = (a.x + b.x) / 2;
+        // Below the cut the branch belongs to one cluster; above it, it is the join the
+        // cut is rejecting. Grey rather than a second hue: the cut is the reader's line,
+        // not a finding in the data.
+        const stroke = cut != null && height[s] > cut ? '#9aa6b2' : '#2f6f9f';
+        out.push(`<path d="M${r(a.x)},${r(a.y)}L${r(a.x)},${r(y)}L${r(b.x)},${r(y)}L${r(b.x)},${r(b.y)}" fill="none" stroke="${stroke}" stroke-width="1.4"/>`);
+      }
+
+      if (cut != null && cut > 0 && cut < top) {
+        const y = yScale(cut);
+        out.push(`<line x1="${r(box.x0)}" y1="${r(y)}" x2="${r(box.x1)}" y2="${r(y)}" stroke="${GUIDE}" stroke-width="1.5" stroke-dasharray="4 3"/>`);
+        // How many clusters that cut implies — the number the reader is actually after.
+        const k = 1 + height.filter((h) => h > cut).length;
+        out.push(text(box.x1 - 3, y - 5, esc(`${k} clusters`), { size: 10.5, anchor: 'end', fill: '#5d6b7a' }));
+      }
+
+      if (view.leafLabels !== false) {
+        leaves.forEach((l, i) => {
+          const x = leafX(i);
+          out.push(`<text x="${r(x)}" y="${r(box.y0 + 12)}" font-size="10.5" fill="${AXIS}" text-anchor="end" transform="rotate(-60 ${r(x)} ${r(box.y0 + 12)})">${esc(clip(l.label || l.key, 24))}</text>`);
+        });
+      }
+
+      drawGuides({ out, box, yScale, yLo: 0, yHi: top }, model, view);
+      out.push(LAYER_CLOSE);
+      out.push(titleBlock(view.titleText ?? model.title, view, designBox(), box));
+      out.push(svgClose());
+      return out.join('');
+    },
+  });
 
   // =============================================================================
   // KIND: density (one or more distributions as curves)

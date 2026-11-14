@@ -248,3 +248,93 @@ test('the posterior curves are only computed when asked for', async () => {
   assert.equal(app.out.charts.length, 0);
   assert.match(app.out.rCode, /if \(FALSE\)/);
 });
+
+// =============================================================================
+// The dendrogram — a kind whose method had to be built with it
+// =============================================================================
+
+const { remapMerge } = await import('../plugins/builtin-cluster/index.js');
+
+/** Three cases: A and B join at 0.4, then C joins them at 1.2. */
+const TREE = {
+  kind: 'dendrogram',
+  title: 'Cluster dendrogram',
+  leaves: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }, { key: 'c', label: 'C' }],
+  merge: [-1, -2, -3, 1],
+  height: [0.4, 1.2],
+  axes: { y: { title: 'Distance' } },
+};
+
+test('it draws a connector per merge, and labels the leaves', () => {
+  const svg = draw(TREE);
+  assert.equal((svg.match(/<path/g) || []).length, 2, 'one per merge step');
+  assert.ok(svg.includes('>A<') && svg.includes('>C<'));
+  assert.ok(!draw(TREE, { leafLabels: false }).includes('>A<'));
+});
+
+test('the cut line reports the number of clusters it implies', () => {
+  // Cutting above 0.4 and below 1.2 leaves two clusters: {A,B} and {C}.
+  const svg = draw(TREE, { cut: 0.8 });
+  assert.ok(svg.includes('stroke-dasharray="4 3"'), 'the cut is drawn');
+  assert.ok(svg.includes('2 clusters'), 'and says what it means');
+  // Below every join, every case is its own cluster.
+  assert.ok(draw(TREE, { cut: 0.2 }).includes('3 clusters'));
+});
+
+test('a cut greys the joins it rejects', () => {
+  // The join above the cut is the one the cut is refusing; it goes grey rather than
+  // taking a second hue, because the cut is the reader's line and not a finding.
+  const greys = (svg) => (svg.match(/stroke="#9aa6b2"/g) || []).length;
+  assert.equal(greys(draw(TREE)), 0, 'no cut, no greying');
+  assert.equal(greys(draw(TREE, { cut: 0.8 })), 1);
+});
+
+test('a malformed tree says so rather than drawing nonsense', () => {
+  assert.match(draw({ ...TREE, height: [0.4] }), /needs a merge structure/);
+  assert.match(draw({ ...TREE, leaves: [{ key: 'a', label: 'A' }] }), /needs a merge structure/);
+});
+
+test('leaf references are remapped into drawing order once, on the plugin side', () => {
+  // hclust indexes leaves by ROW and draws them in `order`. Remapping here rather than
+  // in the kind means the model that crosses the bridge is already in drawing order —
+  // and getting it wrong would draw a tree whose branches cross for no reason.
+  // order = [3, 1, 2]: row 3 is drawn first, so -3 becomes -1.
+  assert.deepEqual(remapMerge([-1, -2, -3, 1], [3, 1, 2]), [-2, -3, -1, 1]);
+  // Positive references are step numbers, not leaves, and must pass through untouched.
+  assert.deepEqual(remapMerge([1, 2, -1, 3], [1, 2, 3]), [1, 2, -1, 3]);
+});
+
+test('hierarchical clustering emits the tree, the sizes and the centres', async () => {
+  const { hierarchical } = await import('../plugins/builtin-cluster/index.js');
+  const app = fakeApp(rList({
+    n: [6], k: [2], vars: ['x', 'y'], sizes: [4, 2],
+    centers: [10, 20, 30, 45],
+    merge: [-1, -2, -3, -4, 1, 2, -5, -6, 3, 4],
+    height: [0.2, 0.3, 0.9, 1.1, 2.4],
+    order: [1, 2, 3, 4, 5, 6],
+    labels: ['1', '2', '3', '4', '5', '6'],
+  }), [{ name: 'x', label: 'X' }, { name: 'y', label: 'Y' }]);
+  await hierarchical(app, { vars: ['x', 'y'], k: 2, linkage: 'ward.D2', plots: ['tree', 'profile'] });
+  assert.equal(app.out.errors.length, 0);
+  assert.equal(app.out.tables.length, 2, 'sizes and centres');
+  const tree = app.out.charts.find((c) => c.kind === 'dendrogram');
+  assert.ok(tree, 'no dendrogram');
+  assert.equal(tree.leaves.length, 6);
+  // The cut is pre-filled between the last merge kept and the first rejected, which is
+  // where anyone asking for 2 clusters would draw it by hand.
+  assert.ok(tree.view.cut > 1.1 && tree.view.cut < 2.4);
+  assert.match(draw(tree), /<path/);
+  assert.ok(app.out.charts.some((c) => c.kind === 'categorical'), 'and the profiles');
+});
+
+test('the linkage is named in the caption, because it changes the tree', async () => {
+  const { hierarchical } = await import('../plugins/builtin-cluster/index.js');
+  const app = fakeApp(rList({
+    n: [4], k: [2], vars: ['x'], sizes: [2, 2], centers: [1, 9],
+    merge: [-1, -2, -3, -4, 1, 2], height: [0.1, 0.2, 1.5],
+    order: [1, 2, 3, 4], labels: ['1', '2', '3', '4'],
+  }), [{ name: 'x', label: 'X' }]);
+  await hierarchical(app, { vars: ['x'], k: 2, linkage: 'single', distance: 'manhattan', plots: [] });
+  assert.match(app.out.tables[0].caption, /Single linkage, manhattan distance/);
+  assert.equal(app.out.charts.length, 0, 'and nothing is drawn when nothing is ticked');
+});

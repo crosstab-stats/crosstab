@@ -66,5 +66,5 @@ test('the manifest names each kind once', () => {
 test('the count is stated out loud, so a silent drop is visible in the diff', () => {
   // Deliberately a hard number rather than a comparison: removing a kind from both lists
   // at once would satisfy every assertion above without anyone noticing.
-  assert.equal(MANIFEST_KINDS.length, 16, 'builtin-charts declares 16 kinds; update this if that is intended');
+  assert.equal(MANIFEST_KINDS.length, 17, 'builtin-charts declares 17 kinds; update this if that is intended');
 });
