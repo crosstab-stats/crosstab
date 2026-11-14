@@ -981,3 +981,148 @@ export function injectStdlibStyles(doc = globalThis.document, css = BASE_CSS) {
 export function screenMode(doc = globalThis.document) {
   return doc?.documentElement?.getAttribute('data-screen') === 'small' ? 'small' : 'full';
 }
+
+
+// =============================================================================
+// Chart models an ANALYSIS builds — the two figures the whole comparison family wants
+// =============================================================================
+//
+// A chart MODEL is the plugin's half of the bargain (#131): the plugin says what the
+// figure is OF, the host renders it and hangs the live controls off it. These two
+// builders are here rather than in one plugin because the ANOVA, the t-tests, the
+// nonparametric tests, ANCOVA and the survey means all want the same two pictures —
+// "the group means, with their uncertainty" and "each pair of groups, as a difference
+// against zero". Written per plugin they would be the same figure five times, drifting.
+
+/** Above this many subjects, a line each is a smear rather than a figure. */
+export const SUBJECT_LINE_LIMIT = 300;
+
+/**
+ * Raw observations, bucketed by the cell they belong to.
+ *
+ * R hands back two flat vectors — every value, and the cell index of every value —
+ * rather than a ragged list, because a list of numeric vectors is the one shape that
+ * does not survive the bridge cleanly.
+ *
+ * @param {number[]} values
+ * @param {number[]} cellIdx 1-based index into the cell list, as R counts
+ * @param {number} nCells
+ * @returns {number[][]} one array per cell, aligned to the cell list
+ */
+export function bucketRaw(values, cellIdx, nCells) {
+  const out = Array.from({ length: nCells }, () => []);
+  for (let i = 0; i < values.length; i++) {
+    const c = cellIdx[i] - 1;
+    if (c >= 0 && c < nCells && Number.isFinite(values[i])) out[c].push(values[i]);
+  }
+  return out;
+}
+
+/**
+ * The means / profile chart, as a MODEL for the host to render.
+ *
+ * Categories are the levels of the FIRST factor and each remaining crossing is a series,
+ * which is the layout both figures want: as bars it reads as "the means, with their
+ * uncertainty"; as lines it reads as the interaction, because non-parallel lines ARE the
+ * interaction term in the table above. One model serves both, and the mark is a control
+ * on the chart, so a reader who wants the other one does not have to re-run anything.
+ *
+ * `rawValues` is what makes it adjustable rather than a picture: the host computes SD,
+ * SEM or 95% CI from the observations itself, and offers the data-point overlay, so the
+ * choice of error bar stays the reader's. The default is the 95% CI, because the question
+ * an ANOVA answers is about means, and the SD of individuals is a different question.
+ *
+ * @param {object} a
+ * @param {string[]} a.cells interaction level names, e.g. `['1.1', '2.1']`
+ * @param {number[]} a.means cell means, aligned to `cells`
+ * @param {?number[][]} a.raw raw observations per cell, aligned to `cells`
+ * @param {(factorIndex: number, level: string) => string} a.labelFor display label resolver
+ * @param {string} a.title
+ * @param {string} a.xTitle
+ * @param {string} a.yTitle
+ * @param {'bar'|'line'} [a.mark]
+ * @returns {object} a chart model for `app.results.appendChart`
+ */
+export function cellChartModel({
+  cells, means, raw = null, labelFor, title, xTitle, yTitle, mark = 'bar',
+}) {
+  const parts = cells.map((c) => String(c).split('.'));
+  const catKeys = [];
+  const serKeys = [];
+  for (const p of parts) {
+    const cat = p[0];
+    const ser = p.slice(1).join('.');
+    if (!catKeys.includes(cat)) catKeys.push(cat);
+    if (!serKeys.includes(ser)) serKeys.push(ser);
+  }
+  const at = (cat, ser) => parts.findIndex((p) => p[0] === cat && p.slice(1).join('.') === ser);
+  const series = serKeys.map((ser) => {
+    const idx = catKeys.map((cat) => at(cat, ser));
+    return {
+      key: ser || 'all',
+      // A one-factor call has no series to name, so the measure names itself.
+      label: ser ? ser.split('.').map((lvl, j) => labelFor(j + 1, lvl)).join(' × ') : yTitle,
+      values: idx.map((i) => (i < 0 ? null : means[i] ?? null)),
+      ...(raw ? { rawValues: idx.map((i) => (i < 0 ? [] : raw[i] || [])) } : {}),
+    };
+  });
+  return {
+    kind: 'categorical',
+    title,
+    categories: catKeys.map((k) => ({ key: k, label: labelFor(0, k) })),
+    series,
+    axes: { x: { title: xTitle }, y: { title: yTitle } },
+    view: {
+      mark,
+      legend: serKeys.length > 1 ? 'right' : 'none',
+      ...(raw ? { errorBars: 'ci95' } : {}),
+    },
+  };
+}
+
+/**
+ * Pairwise differences as a forest plot — the chart that actually answers "how much
+ * more?", which a plot of group means only invites the reader to estimate by eye.
+ *
+ * The forest kind already draws exactly this (an estimate, its interval, a reference
+ * line), so it is reused rather than reinvented; it is given no pooled summary, because
+ * these contrasts are not studies to pool.
+ *
+ * @param {object} a
+ * @param {{label: string, diff: number, lo: number, hi: number}[]} a.pairs
+ * @param {string} a.title
+ * @param {string} a.xTitle
+ * @param {string} a.valueHeading
+ * @returns {object} a chart model for `app.results.appendChart`
+ */
+export function pairsForestModel({ pairs, title, xTitle, valueHeading }) {
+  return {
+    kind: 'forest',
+    title,
+    refLine: 0, // no difference
+    valueHeading,
+    axes: { x: { title: xTitle } },
+    studies: pairs.map((p, i) => ({
+      key: `p${i}`, label: p.label, est: p.diff, lo: p.lo, hi: p.hi,
+    })),
+  };
+}
+
+/**
+ * A column-major flat vector (R's `unlist` of a k-column frame) back into k columns.
+ *
+ * @param {number[]} flat
+ * @param {number} n rows
+ * @param {number} k columns
+ * @returns {number[][]} k arrays of n
+ */
+export function unflattenColumns(flat, n, k) {
+  if (!(n > 0) || !(k > 0) || flat.length < n * k) return [];
+  return Array.from({ length: k }, (_, c) => flat.slice(c * n, c * n + n));
+}
+
+/** k condition-columns → one row per subject, in condition order. */
+export function subjectRows(cols) {
+  const n = cols[0]?.length ?? 0;
+  return Array.from({ length: n }, (_, i) => cols.map((c) => c[i]));
+}

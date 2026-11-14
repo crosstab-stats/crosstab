@@ -21,8 +21,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { factorial, repeated, cellChartModel, pairsForestModel, unflattenColumns, subjectRows, bucketRaw } =
-  await import('../plugins/builtin-anova/index.js');
+const { factorial, repeated } = await import('../plugins/builtin-anova/index.js');
+// The model builders moved to the plugin stdlib once the t-tests turned out to want the
+// same two figures — so they are tested where they live, through the same surface a
+// plugin sees.
+const { cellChartModel, pairsForestModel, unflattenColumns, subjectRows, bucketRaw } = globalThis.ctStd;
 
 /** An R list as the bridge delivers it: parallel names/values, vectors as bare arrays. */
 const rList = (obj) => ({ names: Object.keys(obj), values: Object.values(obj) });

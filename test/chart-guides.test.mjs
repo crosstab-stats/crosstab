@@ -132,3 +132,45 @@ test('the scree plot draws the Kaiser line its comment used to apologise for', a
   assert.ok(svg.includes(DASH));
   assert.ok(svg.includes('Kaiser'));
 });
+
+test('an axis reaches its guide: zero stays on a chart of all-negative differences', () => {
+  // The flaw this closes, found the moment the paired t-test drew one: every difference
+  // was negative, so the histogram's domain stopped short of zero and the guide was
+  // correctly dropped as off-scale — leaving a chart about "is it different from zero?"
+  // with no zero on it. A guide is part of what the figure is ABOUT, so the axis has to
+  // reach it; this is the "axis that starts at 47" mistake in a different costume.
+  const m = {
+    kind: 'histogram',
+    title: 'Differences',
+    values: [-3, -3, -4, -2],
+    guides: [{ axis: 'x', at: 0, label: 'No change' }],
+  };
+  const svg = draw(m);
+  assert.ok(svg.includes(DASH), 'the zero line is drawn');
+  assert.ok(svg.includes('No change'));
+});
+
+test('switching guides off hands the axis back to the data', () => {
+  const m = {
+    kind: 'histogram', title: 'Differences', values: [-3, -3, -4, -2],
+    guides: [{ axis: 'x', at: 0, label: 'No change' }],
+  };
+  // With the guide off, nothing is drawn at zero AND nothing reserves room for it: the
+  // axis describes what is on the chart, which is the honest pairing of the two.
+  const off = draw(m, { guides: false });
+  assert.ok(!off.includes(DASH));
+  assert.ok(!off.includes('No change'));
+});
+
+test('a banded frame reaches a horizontal guide too', () => {
+  const m = {
+    kind: 'categorical',
+    title: 'Scree',
+    categories: [1, 2, 3].map((i) => ({ key: String(i), label: String(i) })),
+    series: [{ key: 'ev', label: 'Eigenvalue', values: [4.2, 3.1, 2.6] }],
+    guides: [{ axis: 'y', at: 1, label: 'Kaiser' }],
+    view: { mark: 'line' },
+  };
+  // Every eigenvalue is above 1, so without this the cutoff would fall off the bottom.
+  assert.ok(draw(m).includes('Kaiser'));
+});

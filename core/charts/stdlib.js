@@ -1229,6 +1229,30 @@ export function chartAltText(model, view, extra, noun) {
 }
 
 
+/**
+ * The guide positions an axis has to reach.
+ *
+ * A guide is not an annotation on top of the data, it is part of what the figure is
+ * about: a histogram of paired differences whose values all happen to be negative must
+ * still show the zero line, or the one comparison the chart exists to make is off the
+ * page. Excluding it is the "axis that starts at 47" mistake in a different costume.
+ *
+ * So the frames fold these into their domain. They are dropped again when the guides are
+ * switched off, which keeps the axis honest about what is actually drawn on it.
+ *
+ * @param {object} model
+ * @param {object} view
+ * @param {'x'|'y'} axis which axis is asking
+ * @param {boolean} hasXScale false on a categorical frame, where every guide is horizontal
+ */
+export function guideValues(model, view, axis, hasXScale = true) {
+  if (view?.guides === false) return [];
+  return (model?.guides || [])
+    .filter((g) => g && Number.isFinite(g.at))
+    .filter((g) => (hasXScale ? (g.axis === 'y' ? axis === 'y' : axis === 'x') : axis === 'y'))
+    .map((g) => g.at);
+}
+
 /** Guides and reference lines: grey, dashed — "I am not data". */
 export const GUIDE = '#8c98a4';
 const GUIDE_LABEL = '#5d6b7a';
@@ -1339,8 +1363,10 @@ export function bandFrame(model, view, { allValues, bands, legendItems = [], alt
 
   const yMinUser = Number.isFinite(view.yAxisMin);
   const yMaxUser = Number.isFinite(view.yAxisMax);
-  const lo = yMinUser ? view.yAxisMin : Math.min(...allValues);
-  const hi = yMaxUser ? view.yAxisMax : Math.max(...allValues);
+  // Every guide on a banded frame is horizontal, so they all belong to the y domain.
+  const yPool = [...allValues, ...guideValues(model, view, 'y', false)];
+  const lo = yMinUser ? view.yAxisMin : Math.min(...yPool);
+  const hi = yMaxUser ? view.yAxisMax : Math.max(...yPool);
   const yticks = niceTicks(lo, hi, view.yTickCount || 6);
   const yLo = yMinUser ? view.yAxisMin : yticks[0];
   const yHi = yMaxUser ? view.yAxisMax : yticks[yticks.length - 1];
@@ -1491,8 +1517,8 @@ export function xyFrame(model, view, { xValues, yValues, legendItems = [], alt, 
       ticks,
     };
   };
-  const xs = span(xValues, 'xAxisMin', 'xAxisMax', xTickCount);
-  const ys = span(yValues, 'yAxisMin', 'yAxisMax', yTickCount);
+  const xs = span([...xValues, ...guideValues(model, view, 'x')], 'xAxisMin', 'xAxisMax', xTickCount);
+  const ys = span([...yValues, ...guideValues(model, view, 'y')], 'yAxisMin', 'yAxisMax', yTickCount);
 
   const showLegend = view.legend !== 'none' && legendItems.length > 1;
   const mRight = plotRightInset(showLegend ? view : {});

@@ -71,7 +71,10 @@ const WEIGHTED_R = `
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fixed: f, rounded: int, ci, metaMap: metaMapOf, unpackR: flat } = globalThis.ctStd;
+// The chart-model builders come from the same place as the formatters: one builder for
+// "the means, with their uncertainty" and one for "each pair, as a difference against
+// zero", shared with the ANOVA plugin so the two cannot drift into two different charts.
+const { fmtP, fixed: f, rounded: int, ci, metaMap: metaMapOf, unpackR: flat, bucketRaw, cellChartModel, pairsForestModel, SUBJECT_LINE_LIMIT } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -84,15 +87,22 @@ export const manifest = {
   disciplines: ['Psychology', 'Public Health', 'Nutrition, Food & Dietetics', 'Education', 'Gerontology'],
   howto:
     'GUI: Comparison ▸ pick a test (One-sample / Independent-samples / Paired-samples t-test, or One-way ANOVA), then choose the variables. You get SPSS-style group/test tables with effect sizes.\n' +
-    'Syntax: run builtin-compare.oneSample {"x": "score", "mu": 0}\n' +
+    'Syntax: run builtin-compare.oneSample {"x": "score", "mu": 0, "plots": ["dist"]}\n' +
     '  • x — numeric test variable; mu — reference value (default 0).\n' +
-    'Syntax: run builtin-compare.independent {"y": "score", "g": "group", "g1": "A", "g2": "B"}\n' +
+    'Syntax: run builtin-compare.independent {"y": "score", "g": "group", "g1": "A", "g2": "B", "plots": ["means", "dist"]}\n' +
     '  • y — numeric outcome; g — grouping variable; g1 / g2 — the two groups to compare (the difference is g1 − g2). Omit g1/g2 and it uses the first two groups.\n' +
-    'Syntax: run builtin-compare.paired {"x1": "pre", "x2": "post"}\n' +
+    'Syntax: run builtin-compare.paired {"x1": "pre", "x2": "post", "plots": ["subjects", "diff"]}\n' +
     '  • x1 / x2 — two numeric measures on the same cases. Output follows SPSS: Paired\n' +
     "    Statistics, Paired Samples Correlations, then the test with Cohen's d.\n" +
-    'Syntax: run builtin-compare.oneway {"y": "score", "g": "group", "groups": ["A", "B", "C"]}\n' +
+    'Syntax: run builtin-compare.oneway {"y": "score", "g": "group", "groups": ["A", "B", "C"], "plots": ["means", "tukey"]}\n' +
     '  • y — numeric outcome; g — factor; groups — optional subset of groups to include (default all).\n' +
+    '  • plots — optional, and nothing is drawn unless you ask: "means" (group means with 95%\n' +
+    '    CI error bars), "dist" (a box plot of the same groups, which shows the overlap a bar\n' +
+    '    of means hides), "tukey" (every pair as a difference against a zero line — the honest\n' +
+    '    answer to "how much?", since two means whose error bars overlap can still differ),\n' +
+    '    "subjects" (a line per case, paired test), "diff" (the differences, with zero marked).\n' +
+    '    The charts are drawn from the individual observations, so a WEIGHTED run skips them\n' +
+    '    and says so rather than putting an unweighted picture beside a weighted table.\n' +
     '  • One-way output follows SPSS block for block: Descriptives, Test of Homogeneity of Variances\n' +
     '    (Levene, mean-centred), ANOVA, ANOVA Effect Sizes (η², ε², ω²), Robust Tests (Welch and\n' +
     '    Brown-Forsythe), Tukey post-hoc. SPSS adds 95% CIs on the effect sizes and a random-effects\n' +
@@ -146,6 +156,18 @@ export const manifest = {
         { name: 'x', kind: 'variables', label: 'Test variable', hint: 'The numeric measure whose mean you want to test.', multiple: false, types: ['numeric'] },
         { name: 'mu', kind: 'number', label: 'Test value', hint: 'The reference value to compare the mean against.', default: 0 },
         { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
+        {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the table. Each one arrives as a live chart — the error bars, the data points and the mark are controls on the chart itself.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'dist', label: 'Distribution, with the test value marked' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -159,6 +181,19 @@ export const manifest = {
         { name: 'g1', kind: 'level', of: 'g', label: 'Group 1', hint: 'The first group. The mean difference is reported as Group 1 minus Group 2.' },
         { name: 'g2', kind: 'level', of: 'g', exclude: 'g1', label: 'Group 2', hint: 'The second group, compared against Group 1.' },
         { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
+        {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the table. Each one arrives as a live chart — the error bars, the data points and the mark are controls on the chart itself.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'means', label: 'Group means with error bars' },
+            { value: 'dist', label: 'Distribution by group' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -170,6 +205,19 @@ export const manifest = {
         { name: 'x1', kind: 'variables', label: 'Variable 1', hint: 'The first of two measures on the same cases.', multiple: false, types: ['numeric'], unique: true },
         { name: 'x2', kind: 'variables', label: 'Variable 2', hint: 'The second measure, compared against the first.', multiple: false, types: ['numeric'], unique: true },
         { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
+        {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the table. Each one arrives as a live chart — the error bars, the data points and the mark are controls on the chart itself.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'subjects', label: 'One line per case (before-after)' },
+            { value: 'diff', label: 'Distribution of the differences' },
+          ],
+          default: [],
+        },
       ],
     },
     {
@@ -182,6 +230,20 @@ export const manifest = {
         { name: 'g', kind: 'variables', label: 'Factor', hint: 'The variable that splits cases into three or more groups.', multiple: false, types: ['factor', 'string'], unique: true },
         { name: 'groups', kind: 'level', of: 'g', multiple: true, optional: true, label: 'Groups to include (optional)', hint: 'Leave empty to use every group, or pick which groups to compare (e.g. 3 of 5 categories).' },
         { name: 'weight', kind: 'variables', label: 'Weight cases by (optional)', optional: true, multiple: false, types: ['numeric'], hint: 'A survey weight (e.g. WTSSNR), so the test describes the population rather than the sample. Cancel this to count each case once; the caption names the weight used.' },
+        {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the charts you want beside the table. Each one arrives as a live chart — the error bars, the data points and the mark are controls on the chart itself.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'means', label: 'Group means with error bars' },
+            { value: 'dist', label: 'Distribution by group' },
+            { value: 'tukey', label: 'Pairwise differences (Tukey 95% CI)' },
+          ],
+          default: [],
+        },
       ],
     },
   ],
@@ -189,9 +251,14 @@ export const manifest = {
 
 // --- One-sample t-test -------------------------------------------------------
 
-export async function oneSample(app, { x: name, mu, weight }) {
+export async function oneSample(app, { x: name, mu, weight, plots }) {
   if (!name) return;
   const meta = await metaMap(app);
+  const want = new Set([].concat(plots ?? []));
+  // A chart drawn from the raw observations cannot honour a case weight — the host
+  // computes its own summary from the values it is given. Rather than put an unweighted
+  // picture beside a weighted table, the chart is skipped and says so.
+  const rawOK = want.size > 0 && !weight;
   const rCode = `
     ${WEIGHTED_R}
     w <- wclean(${weight ? 'weight' : 'NULL'}, length(x))
@@ -205,7 +272,8 @@ export async function oneSample(app, { x: name, mu, weight }) {
     list(n = n, mean = m, sd = s, mu = mu,
          diff = m - mu, t = t, df = df,
          p = 2 * pt(-abs(t), df), d = (m - mu) / s,
-         lo = (m - mu) - tq * se, hi = (m - mu) + tq * se)`;
+         lo = (m - mu) - tq * se, hi = (m - mu) + tq * se,
+         rawX = ${rawOK && want.has('dist') ? 'x' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -220,6 +288,26 @@ export async function oneSample(app, { x: name, mu, weight }) {
     { caption: `One-Sample t-Test — ${label(meta, name)}${wSuffix(meta, weight)}` },
   );
   await weightNote(app, weight);
+
+  if (want.has('dist')) {
+    const raw = r.nums('rawX');
+    if (!rawOK) await rawChartSkipped(app);
+    else if (raw.length) {
+      // The test asks whether the mean sits away from a value; the figure that answers it
+      // is the distribution with BOTH marked, so the reader sees the gap in the units
+      // they came for rather than as a t.
+      await app.results.appendChart({
+        kind: 'histogram',
+        title: `${label(meta, name)} — distribution`,
+        values: raw,
+        axes: { x: { title: label(meta, name) }, y: { title: 'Count' } },
+        guides: [
+          { axis: 'x', at: r.num1('mu'), label: 'Test value' },
+          { axis: 'x', at: r.num1('mean'), label: 'Mean' },
+        ],
+      });
+    }
+  }
 }
 
 // --- Independent-samples t-test (Levene + pooled + Welch) --------------------
@@ -244,13 +332,16 @@ export async function oneSample(app, { x: name, mu, weight }) {
  * @param {object} app
  * @param {{y: string, g: string, weight?: string|null}} inputs
  */
-export async function independent(app, { y: yName, g: gName, g1, g2, weight }) {
+export async function independent(app, { y: yName, g: gName, g1, g2, weight, plots }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   // The two groups are chosen in the dialog (SPSS's "Define Groups"), so a variable
   // with 3+ categories can be compared two-at-a-time. Inlined as R string literals;
   // when absent (an older script) fall back to the first two levels — the pre-picker
   // behaviour — so old logs replay unchanged.
+  const want = new Set([].concat(plots ?? []));
+  const rawOK = want.size > 0 && !weight;
+
   const g1want = g1 != null ? JSON.stringify(String(g1)) : 'NULL';
   const g2want = g2 != null ? JSON.stringify(String(g2)) : 'NULL';
   const rCode = `
@@ -292,7 +383,9 @@ export async function independent(app, { y: yName, g: gName, g1, g2, weight }) {
          levF = levF, levP = levP,
          tp = tp$t, dfp = tp$df, pp = tp$p, plo = tp$lo, phi = tp$hi, sep = tp$se,
          tw = tw$t, dfw = tw$df, pw = tw$p, wlo = tw$lo, whi = tw$hi, sew = tw$se,
-         diff = tp$diff, d = tp$diff / .sp)`;
+         diff = tp$diff, d = tp$diff / .sp,
+         rawY = ${rawOK ? 'y' : 'numeric(0)'},
+         rawG = ${rawOK ? 'as.integer(g == lv[2]) + 1L' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -359,13 +452,48 @@ export async function independent(app, { y: yName, g: gName, g1, g2, weight }) {
       'variant, which is more robust and will give a slightly different F._',
   );
   await weightNote(app, weight);
+
+  if (want.has('means') || want.has('dist')) {
+    if (!rawOK) {
+      await rawChartSkipped(app);
+    } else {
+      const lv = r.strs('levels');
+      const byGroup = bucketRaw(r.nums('rawY'), r.nums('rawG'), 2);
+      const labels = lv.map((l) => valueLabel(meta, gName, l));
+      if (want.has('means')) {
+        await app.results.appendChart(cellChartModel({
+          cells: ['1', '2'],
+          means: r.nums('mean'),
+          raw: byGroup,
+          labelFor: (_fi, lvl) => labels[Number(lvl) - 1] ?? lvl,
+          title: `Mean ${label(meta, yName)} by ${label(meta, gName)}`,
+          xTitle: label(meta, gName),
+          yTitle: `Mean ${label(meta, yName)}`,
+        }));
+      }
+      if (want.has('dist')) {
+        // The means plot answers "how far apart?"; this one answers "could I have told
+        // by looking?" — two groups that differ on average can overlap almost entirely,
+        // and a bar chart of means is exactly the figure that hides it.
+        await app.results.appendChart({
+          kind: 'box',
+          title: `${label(meta, yName)} by ${label(meta, gName)}`,
+          groups: labels.map((lab, i) => ({ key: `g${i}`, label: lab, values: byGroup[i] })),
+          axes: { x: { title: label(meta, gName) }, y: { title: label(meta, yName) } },
+          view: { showPoints: true },
+        });
+      }
+    }
+  }
 }
 
 // --- Paired-samples t-test ---------------------------------------------------
 
-export async function paired(app, { x1: n1, x2: n2, weight }) {
+export async function paired(app, { x1: n1, x2: n2, weight, plots }) {
   if (!n1 || !n2) return;
   const meta = await metaMap(app);
+  const want = new Set([].concat(plots ?? []));
+  const rawOK = want.size > 0 && !weight;
   const rCode = `
     ${WEIGHTED_R}
     w <- wclean(${weight ? 'weight' : 'NULL'}, length(x1))
@@ -392,7 +520,10 @@ export async function paired(app, { x1: n1, x2: n2, weight }) {
 
     list(n = n, m1 = wmean(x1, w), m2 = wmean(x2, w), sd1 = wsd(x1, w), sd2 = wsd(x2, w),
          diff = md, sddiff = sdd, t = t, df = df, rPair = rPair, rP = rP,
-         p = 2 * pt(-abs(t), df), lo = md - tq * se, hi = md + tq * se)`;
+         p = 2 * pt(-abs(t), df), lo = md - tq * se, hi = md + tq * se,
+         rawX1 = ${rawOK && want.has('subjects') ? 'x1' : 'numeric(0)'},
+         rawX2 = ${rawOK && want.has('subjects') ? 'x2' : 'numeric(0)'},
+         rawD = ${rawOK && want.has('diff') ? 'd' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -432,11 +563,58 @@ export async function paired(app, { x1: n1, x2: n2, weight }) {
     { caption: `Paired-Samples t-Test — ${label(meta, n1)} vs ${label(meta, n2)}${ws}` },
   );
   await weightNote(app, weight);
+
+  if (want.has('subjects') || want.has('diff')) {
+    if (!rawOK) {
+      await rawChartSkipped(app);
+      return;
+    }
+  }
+  if (want.has('subjects')) {
+    const a = r.nums('rawX1');
+    const b = r.nums('rawX2');
+    if (a.length && a.length === b.length) {
+      // The figure a paired design exists for: whether the cases moved TOGETHER. Two
+      // means and a p-value cannot show that a third of the sample went the other way.
+      if (a.length > SUBJECT_LINE_LIMIT) {
+        await app.results.appendText(
+          `_Per-case lines skipped: ${int(a.length)} pairs would be an unreadable thicket `
+          + `(the limit is ${SUBJECT_LINE_LIMIT}). The distribution of the differences shows `
+          + 'the same thing at this size._',
+        );
+      } else {
+        await app.results.appendChart({
+          kind: 'paired',
+          title: `${label(meta, n1)} → ${label(meta, n2)}`,
+          conditions: [{ key: 'c1', label: label(meta, n1) }, { key: 'c2', label: label(meta, n2) }],
+          subjects: a.map((v, i) => ({ key: `s${i}`, label: `Case ${i + 1}`, values: [v, b[i]] })),
+          axes: { x: { title: '' }, y: { title: label(meta, n1) } },
+        });
+      }
+    }
+  }
+  if (want.has('diff')) {
+    const d = r.nums('rawD');
+    if (d.length) {
+      // The quantity the test is actually about, with zero marked: a paired t asks
+      // whether THIS distribution sits off zero, and this is that distribution.
+      await app.results.appendChart({
+        kind: 'histogram',
+        title: `Differences (${label(meta, n1)} − ${label(meta, n2)})`,
+        values: d,
+        axes: { x: { title: 'Difference' }, y: { title: 'Count' } },
+        guides: [
+          { axis: 'x', at: 0, label: 'No change' },
+          { axis: 'x', at: r.num1('diff'), label: 'Mean difference' },
+        ],
+      });
+    }
+  }
 }
 
 // --- One-way ANOVA -----------------------------------------------------------
 
-export async function oneway(app, { y: yName, g: gName, groups, weight }) {
+export async function oneway(app, { y: yName, g: gName, groups, weight, plots }) {
   if (!yName || !gName) return;
   const meta = await metaMap(app);
   // Optional group subset (empty = all groups). Inlined as an R character vector so a
@@ -444,6 +622,9 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
   const sel = Array.isArray(groups) && groups.length
     ? `c(${groups.map((v) => JSON.stringify(String(v))).join(', ')})`
     : 'character(0)';
+  const want = new Set([].concat(plots ?? []));
+  const rawOK = (want.has('means') || want.has('dist')) && !weight;
+
   const rCode = `
     ${WEIGHTED_R}
     w <- wclean(${weight ? 'weight' : 'NULL'}, length(y))
@@ -544,7 +725,9 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
          welF = welF, welDf2 = welDf2, welP = welP,
          bfF = bfF, bfDf2 = bfDf2, bfP = bfP,
          tukI = tukI, tukJ = tukJ, tukSE = tse,
-         tukDiff = tdiff, tukLo = tlo, tukUp = tup, tukP = tp)`;
+         tukDiff = tdiff, tukLo = tlo, tukUp = tup, tukP = tp,
+         rawY = ${rawOK ? 'y' : 'numeric(0)'},
+         rawG = ${rawOK ? 'match(as.character(g), lvs)' : 'numeric(0)'})`;
   const { result } = await app.webr.run(rCode);
   if (!result) throw new Error('R returned no result');
   const r = flat(result);
@@ -659,6 +842,63 @@ export async function oneway(app, { y: yName, g: gName, groups, weight }) {
     + 'these are the point estimates only.',
   );
   await weightNote(app, weight);
+
+  // --- charts ---------------------------------------------------------------
+  const lvs = r.strs('levels');
+  const gLabels = lvs.map((l) => valueLabel(meta, gName, l));
+  if (want.has('means') || want.has('dist')) {
+    if (!rawOK) {
+      await rawChartSkipped(app);
+    } else {
+      const byGroup = bucketRaw(r.nums('rawY'), r.nums('rawG'), lvs.length);
+      if (want.has('means')) {
+        await app.results.appendChart(cellChartModel({
+          cells: lvs.map((_, i) => String(i + 1)),
+          means: r.nums('gmean'),
+          raw: byGroup,
+          labelFor: (_fi, lvl) => gLabels[Number(lvl) - 1] ?? lvl,
+          title: `Mean ${label(meta, yName)} by ${label(meta, gName)}`,
+          xTitle: label(meta, gName),
+          yTitle: `Mean ${label(meta, yName)}`,
+        }));
+      }
+      if (want.has('dist')) {
+        await app.results.appendChart({
+          kind: 'box',
+          title: `${label(meta, yName)} by ${label(meta, gName)}`,
+          groups: gLabels.map((lab, i) => ({ key: `g${i}`, label: lab, values: byGroup[i] })),
+          axes: { x: { title: label(meta, gName) }, y: { title: label(meta, yName) } },
+          view: { showPoints: true },
+        });
+      }
+    }
+  }
+  if (want.has('tukey')) {
+    // The post-hoc table, as the figure it always wanted to be. Nothing new is computed:
+    // these are the same studentised-range intervals printed above, which is the point —
+    // "which groups differ, and by how much" is a question about differences, and a plot
+    // of group MEANS makes the reader estimate them by eye. Two means whose error bars
+    // overlap can still differ significantly.
+    const diff = r.nums('tukDiff');
+    const lo = r.nums('tukLo');
+    const hi = r.nums('tukUp');
+    const tI = r.strs('tukI');
+    const tJ = r.strs('tukJ');
+    const pairs = diff.map((d, i) => ({
+      label: `${valueLabel(meta, gName, tI[i])} − ${valueLabel(meta, gName, tJ[i])}`,
+      diff: d,
+      lo: lo[i],
+      hi: hi[i],
+    }));
+    if (pairs.length) {
+      await app.results.appendChart(pairsForestModel({
+        pairs,
+        title: `Pairwise differences in ${label(meta, yName)} (Tukey HSD)`,
+        xTitle: `Difference in mean ${label(meta, yName)}`,
+        valueHeading: 'Difference [95% CI]',
+      }));
+    }
+  }
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -686,6 +926,23 @@ const metaMap = async (app) => metaMapOf(await app.data.getVariableMeta());
 
 function label(meta, name) {
   return meta.get(name)?.label || name;
+}
+
+/**
+ * Why a chart is missing when a weight is on.
+ *
+ * The raw-observation charts hand the host the values and let it compute the summary —
+ * that is what makes the error bars a control rather than a baked decision. The host has
+ * no weights, so under a case weight those charts would describe the SAMPLE while the
+ * table beside them describes the population. Saying so is better than drawing it, and
+ * far better than drawing it silently.
+ */
+async function rawChartSkipped(app) {
+  await app.results.appendText(
+    '_Charts skipped: they are drawn from the individual observations, which cannot carry '
+    + 'the case weight — an unweighted picture beside a weighted table would contradict it. '
+    + 'Run without the weight to see the distributions._',
+  );
 }
 
 function valueLabel(meta, name, code) {
