@@ -33,7 +33,7 @@ if (!isTRUE(getOption("ct.lavaan.patched"))) {
  * helpers and `app` exists only inside an invoked function. One implementation, because
  * the local copies had drifted: 32 of `fmtP` in three different spellings of "p < .001".
  */
-const { fmtP, fmtPInline, fixed: f, ci, metaMap, rStr, unpackR: flat, prettyTerm } = globalThis.ctStd;
+const { fmtP, fmtPInline, fixed: f, ci, metaMap, rStr, unpackR: flat, prettyTerm, coefficientForest } = globalThis.ctStd;
 
 /** @type {import('../../core/loader.js').PluginManifest} */
 export const manifest = {
@@ -88,7 +88,19 @@ export const manifest = {
           { value: 'delta', label: 'Delta method (fast)' },
           { value: 'bootstrap', label: 'Bootstrap (1000 resamples, slower)' },
         ] },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'effects', label: 'Effects with 95% CI' },
+          ],
+          default: [],
+      },
+],
     },
     {
       howto: 'mediation-moderation',
@@ -100,14 +112,26 @@ export const manifest = {
         { name: 'x', kind: 'variables', label: 'Focal predictor (X)', hint: 'The predictor whose effect you think depends on the moderator.', multiple: false, types: ['numeric'], unique: true },
         { name: 'w', kind: 'variables', label: 'Moderator (W)', hint: 'The variable that may strengthen or weaken X\'s effect.', multiple: false, types: ['numeric'], unique: true },
         { name: 'covs', kind: 'variables', label: 'Covariates (optional)', hint: 'Extra controls to adjust for, if any.', multiple: true, optional: true, unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'slopes', label: 'Simple slopes' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
 // --- Mediation (lavaan) ------------------------------------------------------
 
-export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNames, se }) {
+export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNames, se, plots }) {
   if (!xName || !mName || !yName) {
     await app.results.appendError('Mediation: choose a predictor (X), a mediator (M), and an outcome (Y).');
     return;
@@ -154,6 +178,23 @@ export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNa
     },
     { caption: `Mediation — ${shortLabel(meta, xName)} → ${shortLabel(meta, mName)} → ${shortLabel(meta, yName)} (N = ${r.num1('n')}${boot ? ', bootstrap' : ''})` },
   );
+
+  if ([].concat(plots ?? []).includes('effects')) {
+    // Direct, indirect and total on one axis against zero. The indirect effect is the
+    // whole claim of a mediation model and it is the one whose interval is asymmetric
+    // when bootstrapped — which a table of three rows makes you notice and a figure
+    // makes obvious.
+    const model = coefficientForest({
+      terms: lab.map((l) => nameMap[l] || l),
+      est,
+      lo,
+      hi,
+      title: `Effects (95% CI${boot ? ', bootstrap' : ''})`,
+      xTitle: `Effect on ${shortLabel(meta, yName)}`,
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
   await app.results.appendText(
     `The **indirect effect (a × b)** is the part of X's effect that runs through the mediator; a significant indirect effect is the evidence for mediation. **c′** is the remaining direct effect. ` +
       (boot ? 'Bootstrap percentile CIs are used (recommended — the indirect effect is not normally distributed).' : 'Standard errors are delta-method (Sobel-type); for the indirect effect, **bootstrap** CIs are generally preferred — re-run with that option if needed.'),
@@ -162,7 +203,7 @@ export async function mediation(app, { x: xName, m: mName, y: yName, covs: covNa
 
 // --- Moderation (OLS + simple slopes) ---------------------------------------
 
-export async function moderation(app, { y: yName, x: xName, w: wName, covs: covNames }) {
+export async function moderation(app, { y: yName, x: xName, w: wName, covs: covNames, plots }) {
   if (!yName || !xName || !wName) {
     await app.results.appendError('Moderation: choose an outcome (Y), a focal predictor (X), and a moderator (W).');
     return;
@@ -210,6 +251,23 @@ export async function moderation(app, { y: yName, x: xName, w: wName, covs: covN
     },
     { caption: 'Simple Slopes of X at Levels of W' },
   );
+
+  if ([].concat(plots ?? []).includes('slopes')) {
+    // The figure moderation is reported with: X's effect at low, average and high W,
+    // each with its own interval. A slope whose interval clears zero at high W and not
+    // at low W IS the moderation, stated in the units people asked about.
+    const model = coefficientForest({
+      terms: wl,
+      est: sl,
+      lo: sl.map((v, i) => v - 1.96 * sse[i]),
+      hi: sl.map((v, i) => v + 1.96 * sse[i]),
+      title: `Effect of ${shortLabel(meta, xName)} at levels of ${shortLabel(meta, wName)}`,
+      xTitle: `Slope of ${shortLabel(meta, xName)} on ${shortLabel(meta, yName)}`,
+      valueHeading: 'Simple slope [95% CI]',
+      keepIntercept: true,
+    });
+    if (model) await app.results.appendChart(model);
+  }
   const interP = (() => { const idx = terms.indexOf('X:W'); return idx >= 0 ? p[idx] : NaN; })();
   await app.results.appendText(
     `The **X × W interaction** ${Number.isFinite(interP) ? `(${fmtPInline(interP)}) ` : ''}is the moderation effect: a significant interaction means X's effect on Y changes with W. The simple slopes show X's effect at low, average, and high W (mean ± 1 SD) — read them to describe *how* the effect changes.`,

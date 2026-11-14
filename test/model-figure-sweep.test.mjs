@@ -187,3 +187,62 @@ test('every one of them stays silent when nothing is ticked', async () => {
   await kmeans(app, { vars: ['score'], k: 2 });
   assert.equal(app.out.charts.length, 0);
 });
+
+test('moderation draws the simple slopes it tabulates', async () => {
+  const { moderation } = await import('../plugins/builtin-mediation/index.js');
+  const app = fakeApp(rList({
+    terms: ['(Intercept)', 'x', 'w', 'x:w'], est: [10, 0.5, 0.2, 0.3],
+    se: [1, 0.1, 0.1, 0.08], t: [10, 5, 2, 3.75], p: [0, 0, 0.05, 0.001],
+    levels: [-1, 0, 1], wlabels: ['Low (−1 SD)', 'Mean', 'High (+1 SD)'],
+    slope: [0.2, 0.5, 0.8], sslope: [0.12, 0.1, 0.13], st: [1.7, 5, 6.2],
+    sp: [0.09, 0, 0], df: [96], n: [100],
+  }), [{ name: 'y', label: 'Outcome' }, { name: 'x', label: 'X' }, { name: 'w', label: 'W' }]);
+  await moderation(app, { y: 'y', x: 'x', w: 'w', plots: ['slopes'] });
+  const forest = app.out.charts.find((c) => c.kind === 'forest');
+  assert.ok(forest, 'no simple-slopes figure');
+  assert.deepEqual(forest.studies.map((s) => s.est), [0.2, 0.5, 0.8]);
+  // Low W's interval straddles zero while high W's does not — which IS the moderation,
+  // and is the thing a reader is meant to see at a glance.
+  assert.ok(forest.studies[0].lo < 0 && forest.studies[2].lo > 0);
+});
+
+test('matching draws the love plot a referee looks for first', async () => {
+  const { matching } = await import('../plugins/builtin-causal/index.js');
+  const app = fakeApp(rList({
+    att: [2.4], se: [0.8], t: [3], p: [0.003],
+    nTreatAll: [120], nCtrlAll: [400], nMatched: [240], tpos: ['1'],
+    covNames: ['age', 'income', 'distance'],
+    smdBefore: [0.42, -0.31, 0.6], smdAfter: [0.04, -0.06, 0.03],
+  }), [{ name: 'y', label: 'Outcome' }, { name: 't', label: 'Treated' }]);
+  await matching(app, { y: 'y', treat: 't', covs: ['age', 'income'], plots: ['love'] });
+  const love = app.out.charts.find((c) => c.kind === 'categorical');
+  assert.ok(love, 'no love plot');
+  // Sorted by imbalance BEFORE matching, so the worst offenders lead; the propensity
+  // score is named rather than left as "distance".
+  assert.deepEqual(love.categories.map((c) => c.label), ['Propensity score', 'age', 'income']);
+  assert.deepEqual(love.series.map((s) => s.label), ['Before', 'After']);
+  assert.ok(love.series[1].values.every((v) => v < 0.1), 'after-matching values are the small ones');
+  assert.ok(love.guides.some((g) => g.at === 0.1));
+});
+
+test('MANOVA profiles the groups across outcomes, standardized', async () => {
+  const { run } = await import('../plugins/builtin-manova/index.js');
+  const app = fakeApp(rList({
+    muLevels: ['1', '2'], muVals: [1, 2, 3, 4], muZVals: [-0.5, 0.5, -0.8, 0.8],
+    stat: [0.3, 0.7, 0.4, 0.3], approxF: [4, 4, 4, 4], df1: [2, 2, 2, 2],
+    df2: [50, 50, 50, 50], p: [0.02, 0.02, 0.02, 0.02],
+    uF: [5, 6], uP: [0.03, 0.02], n: [52], k: [2],
+  }), [
+    { name: 'a', label: 'A' }, { name: 'b', label: 'B' },
+    { name: 'g', label: 'Group', valueLabels: { 1: 'Control', 2: 'Treated' } },
+  ]);
+  await run(app, { dvs: ['a', 'b'], group: 'g', plots: ['profile'] });
+  const profile = app.out.charts.find((c) => c.kind === 'categorical');
+  assert.ok(profile);
+  assert.deepEqual(profile.series.map((s) => s.label), ['Control', 'Treated']);
+  // muZ arrives as a k-by-p matrix flattened column-major; getting this backwards would
+  // transpose groups and outcomes and draw a confident, wrong picture.
+  assert.deepEqual(profile.series[0].values, [-0.5, -0.8]);
+  assert.deepEqual(profile.series[1].values, [0.5, 0.8]);
+  assert.ok(profile.guides.some((g) => g.at === 0));
+});

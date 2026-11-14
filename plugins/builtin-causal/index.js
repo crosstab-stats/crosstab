@@ -113,7 +113,19 @@ export const manifest = {
           { value: 'glm', label: 'Propensity score (logistic)' },
           { value: 'mahalanobis', label: 'Mahalanobis distance' },
         ] },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'love', label: 'Covariate balance (love plot)' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
@@ -217,7 +229,7 @@ export async function rdd(app, { y: yName, run: runName, cutoff, bw }) {
 
 // --- Matching (MatchIt) ------------------------------------------------------
 
-export async function matching(app, { y: yName, treat: treatName, treated, covs: covNames, distance }) {
+export async function matching(app, { y: yName, treat: treatName, treated, covs: covNames, distance, plots }) {
   const want = (v) => (v != null && v !== '' ? JSON.stringify(String(v)) : 'NULL');
   if (!yName || !treatName || !covNames || !covNames.length) {
     await app.results.appendError('Matching: choose an outcome, a treatment indicator, and at least one covariate.');
@@ -269,6 +281,29 @@ export async function matching(app, { y: yName, treat: treatName, treated, covs:
     },
     { caption: 'Covariate Balance (|standardized mean difference|)' },
   );
+
+  if ([].concat(plots ?? []).includes('love')) {
+    // A love plot: every covariate's imbalance before and after matching, against the 0.1
+    // line the literature treats as acceptable. This is the figure a referee looks for
+    // first, because matching's whole claim is "these groups are now comparable" — and
+    // the table version makes you compare twenty pairs of numbers by eye.
+    const order = cn.map((_c, i) => i).sort((x, y) => Math.abs(sb[y]) - Math.abs(sb[x]));
+    await app.results.appendChart({
+      kind: 'categorical',
+      title: 'Covariate balance, before and after matching',
+      categories: order.map((i) => ({
+        key: `c${i}`,
+        label: cn[i] === 'distance' ? 'Propensity score' : prettyTerm(cn[i]),
+      })),
+      series: [
+        { key: 'before', label: 'Before', values: order.map((i) => Math.abs(sb[i])) },
+        { key: 'after', label: 'After', values: order.map((i) => Math.abs(sa[i])) },
+      ],
+      axes: { x: { title: 'Covariate' }, y: { title: '|Standardized mean difference|' } },
+      guides: [{ axis: 'y', at: 0.1, label: 'Conventional threshold (0.1)' }],
+      view: { mark: 'bar', stack: 'none', legend: 'right' },
+    });
+  }
   await app.results.appendText(
     'Matching estimates the **ATT** by pairing each treated case with a similar control. Good balance = standardized mean differences **after** matching well below 0.1; if some remain large, the estimate may still be confounded. Matching only adjusts for the covariates you supply (no hidden confounders).',
   );

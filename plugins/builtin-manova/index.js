@@ -55,12 +55,24 @@ export const manifest = {
       inputs: [
         { name: 'dvs', kind: 'variables', label: 'Outcomes (2+ numeric)', hint: 'The numeric measures to compare across groups all at once.', multiple: true, types: ['numeric'], unique: true },
         { name: 'group', kind: 'variables', label: 'Factor', hint: 'The variable that sorts cases into the groups being compared.', types: ['factor', 'string', 'numeric'], unique: true },
-      ],
+              {
+          name: 'plots',
+          kind: 'choice',
+          label: 'Plots',
+          hint: 'Tick the chart you want beside the tables.',
+          multiple: true,
+          optional: true,
+          options: [
+            { value: 'profile', label: 'Profile of group means across the outcomes' },
+          ],
+          default: [],
+      },
+],
     },
   ],
 };
 
-export async function run(app, { dvs, group }) {
+export async function run(app, { dvs, group, plots }) {
   const dvNames = Array.isArray(dvs) ? dvs : dvs ? [dvs] : [];
   if (dvNames.length < 2 || !group) {
     await app.results.appendError('MANOVA needs at least 2 numeric outcomes and a factor.');
@@ -81,7 +93,14 @@ export async function run(app, { dvs, group }) {
     .tab <- function(z) if (is.data.frame(z)) z else z[[1]]
     uF <- sapply(ua, function(z) .tab(z)["g", "F value"])
     uP <- sapply(ua, function(z) .tab(z)["g", "Pr(>F)"])
+    # Group means per outcome, for the profile plot. Standardised as well as raw: the
+    # outcomes of a MANOVA are usually on different scales, and a raw profile is then a
+    # chart about which variable has the biggest units.
+    mu <- sapply(seq_len(ncol(Y)), function(j) tapply(Y[, j], g, mean))
+    zz <- scale(Y)
+    muZ <- sapply(seq_len(ncol(zz)), function(j) tapply(zz[, j], g, mean))
     list(
+      muLevels = levels(g), muVals = as.numeric(mu), muZVals = as.numeric(muZ),
       stat = c(pil[2], wil[2], hl[2], roy[2]),
       approxF = c(pil[3], wil[3], hl[3], roy[3]),
       df1 = c(pil[4], wil[4], hl[4], roy[4]),
@@ -116,6 +135,35 @@ export async function run(app, { dvs, group }) {
     },
     { caption: 'Univariate ANOVAs (follow-up, per outcome)' },
   );
+
+  if ([].concat(plots ?? []).includes('profile')) {
+    // The multivariate profile: each group's means across the outcomes, one line per
+    // group. The univariate F table above tests each outcome separately; the profile is
+    // what a MANOVA is actually about — whether the groups differ in SHAPE across them.
+    //
+    // Standardised, because the outcomes are usually on different scales and a raw
+    // profile would be a chart about which variable has the biggest units. The caption
+    // says so rather than leaving the reader to infer it from the axis.
+    const levels = r.strs('muLevels');
+    const z = r.nums('muZVals');
+    const k = levels.length;
+    if (k && z.length === k * dvNames.length) {
+      await app.results.appendChart({
+        kind: 'categorical',
+        title: `Profile of ${label(meta, group)} across the outcomes (standardized)`,
+        categories: dvNames.map((d) => ({ key: d, label: label(meta, d) })),
+        series: levels.map((lv, gi) => ({
+          key: `g${gi}`,
+          label: String(meta.get(group)?.valueLabels?.[lv] ?? lv),
+          // muZ is a k-by-p matrix flattened column-major: group gi, outcome j -> j*k + gi
+          values: dvNames.map((_d, j) => z[j * k + gi]),
+        })),
+        axes: { x: { title: 'Outcome' }, y: { title: 'Mean (z-scored)' } },
+        guides: [{ axis: 'y', at: 0, label: 'Overall mean' }],
+        view: { mark: 'line', legend: 'right' },
+      });
+    }
+  }
   await app.results.appendText('A significant multivariate test means the groups differ on the outcomes jointly; the univariate ANOVAs show which outcomes drive it (consider a multiple-comparison correction).');
 }
 
