@@ -170,11 +170,11 @@ export function timeline(applied, analyses = [], order = null) {
 function opToLines(op) {
   switch (op.type) {
     case 'load':
-      return [`# use ${str(srcLabel(op))}`];
+      return [`# use ${str(srcLabel(op))}${srcVia(op)}`];
     case 'append':
-      return [`# append ${str(srcLabel(op))}`];
+      return [`# append ${str(srcLabel(op))}${srcVia(op)}`];
     case 'join':
-      return [`# join ${str(srcLabel(op))}${op.joinKey ? ` on ${ident(String(op.joinKey))}` : ''}`];
+      return [`# join ${str(srcLabel(op))}${op.joinKey ? ` on ${ident(String(op.joinKey))}` : ''}${srcVia(op)}`];
     case 'setCell':
       return [`set cell row ${op.row != null ? op.row + 1 : 1} ${ident(op.column)} = ${val(op.value)}`];
     case 'computeVar':
@@ -201,7 +201,7 @@ function opToLines(op) {
 }
 
 /**
- * What a source line calls its data.
+ * What a source line calls its data, and what read it.
  *
  * `origin` — the file it was imported from — leads, because this line exists to tell a
  * reader what to open. It used to fall through to `src.table`, the internal DuckDB name
@@ -216,6 +216,23 @@ function opToLines(op) {
  */
 function srcLabel(op) {
   return op.src?.origin || op.src?.label || op.src?.table || 'data';
+}
+
+/**
+ * ` via <importer>`, when we know which reader parsed the file.
+ *
+ * It rides in the line rather than beside it for three reasons. It is the answer to
+ * "how was this read?", which a reader of the syntax wants as much as the filename. The
+ * script exporter re-parses this text with the real parser and has no second channel,
+ * so a fact that is not in the line cannot reach it. And a comment cannot affect Run,
+ * so the line stays as safe to extend as it was.
+ *
+ * The id is written bare — it is an identifier, not prose, and quoting it would suggest
+ * it is a filename.
+ */
+function srcVia(op) {
+  const id = op.src?.importer;
+  return id ? ` via ${String(id)}` : '';
 }
 
 function typeSuffix(varType) {

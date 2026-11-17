@@ -217,6 +217,7 @@ function translate(text, D, opts = {}) {
     // append/join lines stay as instructions, because a second file has to be merged and
     // that is not a step this translator can honestly write.
     firstSource: null,
+    firstImporter: null,
     sources: sourceIndex(opts.analyses),
   };
   let statements = 0;
@@ -230,10 +231,14 @@ function translate(text, D, opts = {}) {
       continue;
     }
     if (line.startsWith('#')) {
-      // The quoted name on the first `use`, with any backslash escapes undone — the
-      // serializer writes it through the same quoting the parser reads.
-      const use = /^#\s*use\s+"((?:[^"\\]|\\.)*)"/i.exec(line);
-      if (use && ctx.firstSource == null) ctx.firstSource = use[1].replace(/\\(.)/g, '$1');
+      // The quoted name on the first `use`, and the importer that read it. Both come
+      // off the line itself: this translator re-parses the real text and has no second
+      // channel, which is also why the importer is written into the line.
+      const use = /^#\s*use\s+"((?:[^"\\]|\\.)*)"(?:\s+via\s+([\w.-]+))?/i.exec(line);
+      if (use && ctx.firstSource == null) {
+        ctx.firstSource = use[1].replace(/\\(.)/g, '$1');
+        ctx.firstImporter = use[2] ?? null;
+      }
       const c = commentThrough(line, D, ctx);
       if (c != null) body.push(c);
       continue;
@@ -267,7 +272,7 @@ function translate(text, D, opts = {}) {
     // than a placeholder the reader has to find and correct. `read` is null when the
     // extension is one R has no obvious reader for, and then the placeholder and its
     // instruction come back — a line that pretends to work is worse than one that asks.
-    const read = openCommand('r', ctx.firstSource);
+    const read = openCommand('r', ctx.firstSource, ctx.firstImporter);
     const pre = read
       ? [
         D.comment('--- 1. Load the data -------------------------------------------------'),
@@ -292,7 +297,7 @@ function translate(text, D, opts = {}) {
     }
   }
 
-  const opensItsOwnData = !!(ctx.firstSource && openCommand(D.id, ctx.firstSource));
+  const opensItsOwnData = !!(ctx.firstSource && openCommand(D.id, ctx.firstSource, ctx.firstImporter));
   const head = [
     `Exported from CrossTab — best-effort ${D.label} translation.`,
     `${translated} of ${statements} statement${statements === 1 ? '' : 's'} translated` +
@@ -373,8 +378,8 @@ function commentThrough(line, D, ctx = {}) {
     // In R the preamble has already opened this file, so repeating "open it before
     // running this" underneath the read line would contradict it. The anchor is dropped
     // rather than reworded: the read call above says the same thing, in code.
-    if (D.id === 'r' && name && openCommand('r', name)) return null;
-    const open = D.id !== 'r' && name ? openCommand(D.id, name) : null;
+    if (D.id === 'r' && name && openCommand('r', name, ctx.firstImporter)) return null;
+    const open = D.id !== 'r' && name ? openCommand(D.id, name, ctx.firstImporter) : null;
     if (open) {
       return `${D.comment(`CrossTab data source: ${src[2]}`)}
 ${open.line}`;
@@ -1660,7 +1665,66 @@ function endOfOperand(tokens, from) {
 }
 
 /**
- * The command that opens a data file, per dialect, chosen by the file's extension.
+ * What an importer tells us about the file it read.
+ *
+ * The owner's question, and it is the right one: why guess from the extension when the
+ * user told us the format by choosing an importer? Because the two kinds of evidence are
+ * different strengths, and which is stronger depends on the importer:
+ *
+ *  - `reader` — the importer reads exactly one thing, whatever the file is called. A
+ *    `.txt` opened by the CSV codec IS comma-delimited: that is not an inference about
+ *    the name, it is what the codec did to the bytes. The extension cannot beat this and
+ *    is not consulted.
+ *  - `byExtension` — the importer spans formats AND dispatches on the extension itself.
+ *    `readstat` reads six formats across three R packages and picks its parser from the
+ *    suffix, refusing anything it does not recognise. So for a file it accepted, the
+ *    extension is not a guess: the codec already vouched for it.
+ *
+ * The honest limit of the idea, worth writing down because it reads like a gap: a SPSS
+ * file named `foo.baz` cannot reach this code at all. `readstat` throws `Unsupported
+ * file: foo.baz` before parsing a byte, for the same reason — it needs the suffix to
+ * choose a parser. Recording the importer does not rescue that case; it fixes the cases
+ * where the importer knows something the NAME does not.
+ */
+const IMPORTER_FORMAT = {
+  // Reads one thing. The extension says nothing these do not already know.
+  parquet: { reader: 'parquet' },
+  ndjson: { reader: 'ndjson' },
+  excel: { reader: 'excel' },
+  'excel-sheets': { reader: 'excel' },
+  // Delimited, and the codec's own rule is: tab for .tsv, comma for everything else —
+  // including .txt, which is the case the extension gets wrong on its own.
+  csv: { reader: 'delimited' },
+  'import-codebook-csv': { reader: 'delimited' },
+  // Six formats, three packages, dispatched on the suffix by the codec itself.
+  readstat: { byExtension: true },
+  'readstat-pick': { byExtension: true },
+};
+
+/** What `csv` did to the bytes, by its own rule. */
+function delimitedReader(ext) {
+  return ext === 'tsv' || ext === 'tab' ? 'tsvFile' : 'csvFile';
+}
+
+/** Extension → reader key, for files whose importer is unknown or extension-dispatched. */
+function readerForExt(ext) {
+  switch (ext) {
+    case 'csv': return 'csvFile';
+    case 'tsv': case 'tab': return 'tsvFile';
+    case 'sav': case 'zsav': return 'sav';
+    case 'dta': return 'dta';
+    case 'por': return 'por';
+    case 'xpt': case 'sas7bdat': return 'sas';
+    case 'rds': return 'rds';
+    case 'xlsx': case 'xls': case 'xlsm': case 'xlsb': return 'excel';
+    case 'parquet': return 'parquet';
+    case 'json': case 'ndjson': case 'jsonl': return 'ndjson';
+    default: return null;
+  }
+}
+
+/**
+ * The command that opens a data file, per dialect.
  *
  * This exists because the exported R script used to begin
  *
@@ -1669,67 +1733,66 @@ function endOfOperand(tokens, from) {
  *
  * — a placeholder and an instruction to go and fix it. A script you must edit before it
  * runs reproduces nothing, which is the whole point of exporting one (owner,
- * 2026-11-17). Now that the import records the file it read, the line can name it.
+ * 2026-11-17). Now that the import records both the file it read and the reader that
+ * read it, the line can name them.
  *
- * ## Why the extension decides, and what happens when it cannot
- *
- * `read.csv` on a .sav produces a one-column data frame of binary mush, silently — the
- * worst kind of wrong, because it runs. So the reader is chosen by extension, and an
- * extension nobody recognises falls back to the placeholder WITH its instruction rather
- * than guessing: a comment telling you to look is better than a line that pretends.
+ * A wrong reader is worse than none: `read.csv` on a .sav yields a one-column data frame
+ * of binary mush, silently. So anything unresolved returns null and the caller keeps its
+ * placeholder and its instruction — a comment telling you to look beats a line that
+ * pretends.
  *
  * A browser only ever gives a File its basename, so these are relative paths. The script
- * therefore runs as-is when it sits beside its data, which is the common case for
- * "export the script, send both" — and the header says so rather than leaving someone to
- * discover it.
+ * runs as-is beside its data, which is the common case for "send the script and the
+ * file", and the header says so rather than leaving it to be discovered.
  *
  * @param {string} dialect 'r' | 'stata' | 'spss'
  * @param {?string} file the imported file's name, or null if unknown
+ * @param {?string} [importer] the importer id recorded on the load op
  * @returns {?{line: string, note?: string}} the open command, or null when the dialect
  *   cannot open that format natively and the caller should keep its instruction comment
  */
-export function openCommand(dialect, file) {
+export function openCommand(dialect, file, importer = null) {
   const name = String(file ?? '').trim();
   if (!name) return null;
   const ext = (name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+  const known = IMPORTER_FORMAT[String(importer ?? '')] ?? null;
+  const reader = known?.reader === 'delimited'
+    ? delimitedReader(ext)
+    : known?.reader ?? readerForExt(ext);
+  if (!reader) return null;
+
   const q = (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const sq = (s) => `'${s.replace(/'/g, "''")}'`;
 
   if (dialect === 'r') {
-    switch (ext) {
-      case 'csv': return { line: `d <- read.csv(${q(name)}, stringsAsFactors = FALSE)` };
-      case 'tsv':
-      case 'tab': return { line: `d <- read.delim(${q(name)}, stringsAsFactors = FALSE)` };
-      case 'sav':
-      case 'zsav': return { line: `d <- haven::read_sav(${q(name)})`, note: 'needs: install.packages("haven")' };
+    switch (reader) {
+      case 'csvFile': return { line: `d <- read.csv(${q(name)}, stringsAsFactors = FALSE)` };
+      case 'tsvFile': return { line: `d <- read.delim(${q(name)}, stringsAsFactors = FALSE)` };
+      case 'sav': return { line: `d <- haven::read_sav(${q(name)})`, note: 'needs: install.packages("haven")' };
       case 'dta': return { line: `d <- haven::read_dta(${q(name)})`, note: 'needs: install.packages("haven")' };
       case 'por': return { line: `d <- haven::read_por(${q(name)})`, note: 'needs: install.packages("haven")' };
+      case 'sas': return { line: `d <- haven::read_sas(${q(name)})`, note: 'needs: install.packages("haven")' };
       case 'rds': return { line: `d <- readRDS(${q(name)})` };
-      case 'xlsx':
-      case 'xls': return { line: `d <- readxl::read_excel(${q(name)})`, note: 'needs: install.packages("readxl")' };
+      case 'excel': return { line: `d <- readxl::read_excel(${q(name)})`, note: 'needs: install.packages("readxl")' };
       case 'parquet': return { line: `d <- arrow::read_parquet(${q(name)})`, note: 'needs: install.packages("arrow")' };
-      case 'json':
       case 'ndjson': return { line: `d <- jsonlite::stream_in(file(${q(name)}))`, note: 'needs: install.packages("jsonlite")' };
       default: return null;
     }
   }
   if (dialect === 'stata') {
-    switch (ext) {
+    switch (reader) {
       case 'dta': return { line: `use ${q(name)}, clear` };
-      case 'csv': return { line: `import delimited ${q(name)}, clear` };
-      case 'tsv':
-      case 'tab': return { line: `import delimited ${q(name)}, delimiter(tab) clear` };
-      case 'xlsx':
-      case 'xls': return { line: `import excel ${q(name)}, firstrow clear` };
+      case 'csvFile': return { line: `import delimited ${q(name)}, clear` };
+      case 'tsvFile': return { line: `import delimited ${q(name)}, delimiter(tab) clear` };
+      case 'excel': return { line: `import excel ${q(name)}, firstrow clear` };
       // A .sav needs `usespss` or a conversion; naming a command that may not be
       // installed is worse than the instruction comment the caller already writes.
       default: return null;
     }
   }
   if (dialect === 'spss') {
-    switch (ext) {
-      case 'sav':
-      case 'zsav': return { line: `GET FILE=${sq(name)}.` };
+    switch (reader) {
+      case 'sav': return { line: `GET FILE=${sq(name)}.` };
       case 'por': return { line: `IMPORT FILE=${sq(name)}.` };
       // GET DATA for a delimited file needs the full variable list to be correct, and a
       // wrong one silently mistypes every column. The instruction stays.

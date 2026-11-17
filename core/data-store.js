@@ -328,11 +328,11 @@ export class DataStore {
    *   applied on top of normalized-exact matching.
    * @returns {Promise<void>}
    */
-  async loadDataset({ variables, columns, parquet, mode = 'replace', source, origin, joinKey, aliases, joinType, producedBy }) {
+  async loadDataset({ variables, columns, parquet, mode = 'replace', source, origin, importer, joinKey, aliases, joinType, producedBy }) {
     const had = this.#hasData();
     const combine = had && (mode === 'append' || mode === 'join') ? mode : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources(); // the new `load` IS the reset
-    const src = await this.#createSource({ variables, columns, parquet, source, origin });
+    const src = await this.#createSource({ variables, columns, parquet, source, origin, importer });
     this.#addSourceOp(combine === 'replace' ? 'load' : combine === 'join' ? 'join' : 'append', src, {
       joinKey,
       aliases,
@@ -472,7 +472,7 @@ export class DataStore {
    * @param {(ctx: {begin: Function, batch: Function}) => Promise<void>} opts.ingest
    * @returns {Promise<void>}
    */
-  async loadStreaming({ mode = 'replace', source, origin, ingest }) {
+  async loadStreaming({ mode = 'replace', source, origin, importer, ingest }) {
     const had = this.#hasData();
     const combine = had && mode === 'append' ? 'append' : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
@@ -522,7 +522,7 @@ export class DataStore {
 
     this.#sourceTables.add(table);
     // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
-    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null };
+    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null, importer: importer ?? null };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(this.#loadReason(combine, had));
   }
@@ -554,7 +554,7 @@ export class DataStore {
    *   - Stream the whole file once, calling `onBatch` per batch of rows (all columns).
    * @returns {Promise<void>}
    */
-  async loadWide({ mode = 'replace', source, origin, rowGroupRows = 8000, variables, rowCount, onProgress, stream }) {
+  async loadWide({ mode = 'replace', source, origin, importer, rowGroupRows = 8000, variables, rowCount, onProgress, stream }) {
     if (!Array.isArray(variables) || variables.length === 0) {
       throw new Error('loadWide: variables (the file catalog) are required');
     }
@@ -626,6 +626,7 @@ export class DataStore {
       meta: variables.map((m) => ({ ...m })),
       label: source ?? null,
       origin: origin ?? null,
+      importer: importer ?? null,
     };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(this.#loadReason(combine, had));
@@ -677,7 +678,7 @@ export class DataStore {
    *
    * @returns {Promise<{table: string, meta: VariableMeta[], label: string|null}>}
    */
-  async #createSource({ variables, columns, parquet, source, origin }) {
+  async #createSource({ variables, columns, parquet, source, origin, importer }) {
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
     if (parquet) {
@@ -742,6 +743,18 @@ export class DataStore {
       // path from a file input or a drop — so this is a NAME, not a path, and the
       // exporters word it as one.
       origin: origin ?? null,
+      // WHICH READER PARSED IT, which is better evidence than the name.
+      //
+      // A file's extension is a claim; the importer is what actually read the bytes. The
+      // two usually agree, and where they do not the importer is right: a `.txt` opened
+      // by the CSV codec IS comma-delimited, whatever the name suggests, and the codec
+      // is the only thing that knows.
+      //
+      // It does not replace the extension, because one importer can span formats —
+      // `readstat` reads six across three packages — and in that case the extension is
+      // not a guess either: the codec dispatches on it itself and refuses anything it
+      // does not recognise, so a file it accepted has an extension it vouched for.
+      importer: importer ?? null,
     };
   }
 
@@ -786,6 +799,7 @@ export class DataStore {
       meta: src.meta.map((m) => ({ ...m })),
       label: src.label ?? null,
       origin: src.origin ?? null,
+      importer: src.importer ?? null,
     };
   }
 
@@ -1721,7 +1735,7 @@ export class DataStore {
       if (SOURCE_OPS.has(type)) {
         // `origin` rides the save: a project reopened next year should still say which
         // file it was built from, which is the entire point of recording it.
-        op.src = { meta: src.meta.map((m) => ({ ...m })), label: src.label ?? null, origin: src.origin ?? null };
+        op.src = { meta: src.meta.map((m) => ({ ...m })), label: src.label ?? null, origin: src.origin ?? null, importer: src.importer ?? null };
         if (src.wide) {
           op.src.wide = true;
           op.src.rowidBase = src.rowidBase;
@@ -1766,7 +1780,7 @@ export class DataStore {
       if (op.reads?.length) env.reads = op.reads;
       if (SOURCE_OPS.has(op.type)) {
         const s = op.payload.src;
-        const src = { meta: s.meta.map((m) => ({ ...m })), label: s.label ?? null, origin: s.origin ?? null };
+        const src = { meta: s.meta.map((m) => ({ ...m })), label: s.label ?? null, origin: s.origin ?? null, importer: s.importer ?? null };
         if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
         if (liveSrcIds.has(op.id)) {
           // Byte sidecar is keyed by the STABLE op id (not a positional index), so a
@@ -1876,7 +1890,7 @@ export class DataStore {
       if (SOURCE_OPS.has(o.type)) {
         const created = o.src.wide
           ? await this.#restoreWideSource(o.src)
-          : await this.#createSource({ variables: o.src.meta, parquet: o.src.parquet, source: o.src.label, origin: o.src.origin });
+          : await this.#createSource({ variables: o.src.meta, parquet: o.src.parquet, source: o.src.label, origin: o.src.origin, importer: o.src.importer });
         this.#addSourceOp(o.type, created, { joinKey: o.joinKey, aliases: o.aliases, joinType: o.joinType, author: o.author });
       } else {
         // Carry the recipe's recorded author through (#149 A6) — exportState preserves

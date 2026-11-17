@@ -131,3 +131,22 @@ test('data that came from no file is unchanged — null, not a guess', async () 
   const load = stepsOf(store).find((s) => s.type === 'load');
   assert.equal(load.src.origin, null);
 });
+
+test('the importer that read the file is recorded too, and survives the round trip', async () => {
+  // Better evidence than the name: a .txt opened by the CSV codec is comma-delimited,
+  // and nothing about the filename says so.
+  const store = newStore();
+  await store.loadDataset({ ...DATA, mode: 'replace', origin: 'survey.txt', importer: 'csv' });
+  assert.equal(stepsOf(store).find((s) => s.type === 'load').src.importer, 'csv');
+
+  const reopened = newStore('d2');
+  await reopened.restoreState(await store.exportState({ includeParquet: true }));
+  assert.equal(stepsOf(reopened).find((s) => s.type === 'load').src.importer, 'csv');
+});
+
+test('the importer never reaches the data either', async () => {
+  const engine = stubEngine();
+  const store = new DataStore(bus, engine, { id: 'd1', name: 'T' });
+  await store.loadDataset({ ...DATA, mode: 'replace', origin: 'survey.txt', importer: 'csv' });
+  assert.ok(!engine.sql.some((s) => /survey\.txt|'csv'/.test(s)), engine.sql.join(' | '));
+});

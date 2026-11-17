@@ -159,3 +159,66 @@ test('only the FIRST source opens the script; an append stays an instruction', (
   assert.match(out, /read\.csv\("wave1\.csv"/);
   assert.match(out, /append.*wave2\.csv.*open it before running this/);
 });
+
+// =============================================================================
+// The importer, which is better evidence than the name
+// =============================================================================
+
+test('the syntax line says which reader parsed the file', () => {
+  const op = (src) => [{ id: 's1', type: 'load', src: { table: 'src_1', meta: [], ...src } }];
+  assert.match(serialize(op({ origin: 'survey.txt', importer: 'csv' })), /# use "survey\.txt" via csv/);
+  // Unknown importer: the clause is absent rather than empty or "null".
+  assert.match(serialize(op({ origin: 'x.csv', importer: null })), /# use "x\.csv"\n/);
+});
+
+test('the importer beats the extension where it knows better', () => {
+  // THE case this exists for. A .txt opened by the CSV codec IS comma-delimited — that
+  // is what the codec did to the bytes, not an inference about the name — and the
+  // extension alone cannot resolve it at all.
+  assert.equal(openCommand('r', 'survey.txt'), null);
+  assert.match(openCommand('r', 'survey.txt', 'csv').line, /^d <- read\.csv\("survey\.txt"/);
+  // ...and the codec's own rule is tab for .tsv, comma for everything else, so the
+  // extension still refines WITHIN the importer.
+  assert.match(openCommand('r', 'data.tsv', 'csv').line, /read\.delim/);
+});
+
+test('an importer that spans formats still reads the extension — and it is proven', () => {
+  // `readstat` covers six formats across three R packages, so its id alone cannot pick
+  // a reader. But it dispatches on the suffix itself and refuses anything it does not
+  // recognise, so for a file it ACCEPTED the extension is not a guess.
+  assert.match(openCommand('r', 'GSS.sav', 'readstat').line, /haven::read_sav/);
+  assert.match(openCommand('r', 'panel.dta', 'readstat').line, /haven::read_dta/);
+  assert.match(openCommand('r', 'cohort.sas7bdat', 'readstat').line, /haven::read_sas/);
+  // An extension readstat would itself have rejected resolves to nothing, rather than
+  // being forced into one of its six.
+  assert.equal(openCommand('r', 'mystery.baz', 'readstat'), null);
+});
+
+test('a single-format importer ignores the extension entirely', () => {
+  // .xlsb and .xlsm are extensions the first version of this map did not carry; naming
+  // the importer makes listing every one of them unnecessary.
+  assert.match(openCommand('r', 'book.xlsb', 'excel').line, /readxl::read_excel/);
+  assert.match(openCommand('r', 'book.xlsm', 'excel').line, /readxl::read_excel/);
+  assert.match(openCommand('r', 'odd.name', 'parquet').line, /arrow::read_parquet/);
+  assert.match(openCommand('r', 'feed.jsonl', 'ndjson').line, /jsonlite/);
+});
+
+test('an unknown importer id falls back to the extension, not to nothing', () => {
+  // A third-party importer we have no entry for still gets whatever the name supports.
+  assert.match(openCommand('r', 'survey.csv', 'some-third-party').line, /read\.csv/);
+  assert.equal(openCommand('r', 'survey.txt', 'some-third-party'), null);
+});
+
+test('the exported script uses the importer the syntax recorded', () => {
+  const out = scriptToR('# use "survey.txt" via csv\nkeep if age > 18').text;
+  assert.match(out, /d <- read\.csv\("survey\.txt"/);
+  assert.match(out, /Opens survey\.txt itself/);
+  // Without the clause the same file is unresolvable, and the placeholder returns.
+  const bare = scriptToR('# use "survey.txt"\nkeep if age > 18').text;
+  assert.match(bare, /your-data\.csv/);
+});
+
+test('Stata and SPSS read the clause too', () => {
+  assert.match(scriptToStata('# use "data.txt" via csv\nkeep if age > 18').text, /^import delimited "data\.txt", clear$/m);
+  assert.match(scriptToSpss('# use "GSS.sav" via readstat\nkeep if age > 18').text, /^GET FILE='GSS\.sav'\.$/m);
+});

@@ -713,7 +713,7 @@ export class ImportService {
         const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
         // `source` is the provenance COLUMN's value and stays absent on a clean
         // single-file replace; `origin` is the filename, and is always recorded.
-        await this.#data.loadDataset({ ...dataset, mode: fileMode, source: tag, origin: file.name });
+        await this.#data.loadDataset({ ...dataset, mode: fileMode, source: tag, origin: file.name, importer: id });
         committed += 1;
       } catch (err) {
         this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
