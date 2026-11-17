@@ -200,8 +200,22 @@ function opToLines(op) {
   }
 }
 
+/**
+ * What a source line calls its data.
+ *
+ * `origin` — the file it was imported from — leads, because this line exists to tell a
+ * reader what to open. It used to fall through to `src.table`, the internal DuckDB name
+ * (`src_1`), on the commonest import of all: a single file replacing the dataset writes
+ * no `source_file` column, so it set no `label` either, and the syntax said `# use
+ * "src_1"` (owner, 2026-11-17). A reader cannot act on that, and neither can the script
+ * exporter.
+ *
+ * The table name stays as the last resort rather than being dropped: for data that never
+ * came from a file — a plugin's `data.create`, a derived dataset — it is the only handle
+ * that exists, and a wrong name is worse than an internal one.
+ */
 function srcLabel(op) {
-  return op.src?.label || op.src?.table || 'data';
+  return op.src?.origin || op.src?.label || op.src?.table || 'data';
 }
 
 function typeSuffix(varType) {

@@ -317,7 +317,10 @@ export class DataStore {
    * @param {'replace'|'append'|'join'} [dataset.mode='replace'] - `replace` resets
    *   to a single base source; `append` stacks rows (UNION); `join` adds the new
    *   dataset's columns by matching a key (LEFT JOIN onto the stacked base).
-   * @param {string} [dataset.source] - Provenance label for this file's rows.
+   * @param {string} [dataset.source] - Provenance label for this file's rows, written
+   *   into a `source_file` column once more than one source is stacked.
+   * @param {string} [dataset.origin] - The file this data came from, for History, Syntax
+   *   and the script exporters. Metadata about the import, never a column.
    * @param {{left: string, right: string}} [dataset.joinKey] - For `join`: the key
    *   column on the current data (`left`) and the incoming data (`right`).
    * @param {Array<{base: string, incoming: string}>} [dataset.aliases] - For `join`:
@@ -325,11 +328,11 @@ export class DataStore {
    *   applied on top of normalized-exact matching.
    * @returns {Promise<void>}
    */
-  async loadDataset({ variables, columns, parquet, mode = 'replace', source, joinKey, aliases, joinType, producedBy }) {
+  async loadDataset({ variables, columns, parquet, mode = 'replace', source, origin, joinKey, aliases, joinType, producedBy }) {
     const had = this.#hasData();
     const combine = had && (mode === 'append' || mode === 'join') ? mode : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources(); // the new `load` IS the reset
-    const src = await this.#createSource({ variables, columns, parquet, source });
+    const src = await this.#createSource({ variables, columns, parquet, source, origin });
     this.#addSourceOp(combine === 'replace' ? 'load' : combine === 'join' ? 'join' : 'append', src, {
       joinKey,
       aliases,
@@ -469,7 +472,7 @@ export class DataStore {
    * @param {(ctx: {begin: Function, batch: Function}) => Promise<void>} opts.ingest
    * @returns {Promise<void>}
    */
-  async loadStreaming({ mode = 'replace', source, ingest }) {
+  async loadStreaming({ mode = 'replace', source, origin, ingest }) {
     const had = this.#hasData();
     const combine = had && mode === 'append' ? 'append' : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
@@ -519,7 +522,7 @@ export class DataStore {
 
     this.#sourceTables.add(table);
     // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
-    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null };
+    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(this.#loadReason(combine, had));
   }
@@ -551,7 +554,7 @@ export class DataStore {
    *   - Stream the whole file once, calling `onBatch` per batch of rows (all columns).
    * @returns {Promise<void>}
    */
-  async loadWide({ mode = 'replace', source, rowGroupRows = 8000, variables, rowCount, onProgress, stream }) {
+  async loadWide({ mode = 'replace', source, origin, rowGroupRows = 8000, variables, rowCount, onProgress, stream }) {
     if (!Array.isArray(variables) || variables.length === 0) {
       throw new Error('loadWide: variables (the file catalog) are required');
     }
@@ -622,6 +625,7 @@ export class DataStore {
       rowidBase: base,
       meta: variables.map((m) => ({ ...m })),
       label: source ?? null,
+      origin: origin ?? null,
     };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(this.#loadReason(combine, had));
@@ -673,7 +677,7 @@ export class DataStore {
    *
    * @returns {Promise<{table: string, meta: VariableMeta[], label: string|null}>}
    */
-  async #createSource({ variables, columns, parquet, source }) {
+  async #createSource({ variables, columns, parquet, source, origin }) {
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
     if (parquet) {
@@ -719,6 +723,25 @@ export class DataStore {
       table,
       meta: variables.map((m) => ({ ...m, name: safeText(m.name) })),
       label: source ?? null,
+      // WHERE THE ROWS CAME FROM, which is not the same thing as `label`.
+      //
+      // `label` is the value of the `source_file` provenance COLUMN, and it is
+      // deliberately absent on the commonest case — a single file replacing the
+      // dataset — because a constant column repeating one filename on every row is
+      // noise. The consequence was that the one import everybody does recorded no
+      // filename at all: History and Syntax fell back to `src.table`, an internal
+      // DuckDB name like `src_1`, and the exported R said `read.csv("your-data.csv")`
+      // with a note telling you to go and fix it. A script you must edit before it runs
+      // does not reproduce anything (owner, 2026-11-17).
+      //
+      // So the filename rides separately. It is metadata ABOUT the op, never data: it
+      // adds no column and changes no row, and only the surfaces that describe the
+      // import to a human read it.
+      //
+      // A browser gives a File its basename and nothing more — no API yields the full
+      // path from a file input or a drop — so this is a NAME, not a path, and the
+      // exporters word it as one.
+      origin: origin ?? null,
     };
   }
 
@@ -762,6 +785,7 @@ export class DataStore {
       rowidBase,
       meta: src.meta.map((m) => ({ ...m })),
       label: src.label ?? null,
+      origin: src.origin ?? null,
     };
   }
 
@@ -1695,7 +1719,9 @@ export class DataStore {
       const op = { type, ...rest };
       if (author) op.author = author; // provenance snapshot, round-trips the recipe
       if (SOURCE_OPS.has(type)) {
-        op.src = { meta: src.meta.map((m) => ({ ...m })), label: src.label ?? null };
+        // `origin` rides the save: a project reopened next year should still say which
+        // file it was built from, which is the entire point of recording it.
+        op.src = { meta: src.meta.map((m) => ({ ...m })), label: src.label ?? null, origin: src.origin ?? null };
         if (src.wide) {
           op.src.wide = true;
           op.src.rowidBase = src.rowidBase;
@@ -1740,7 +1766,7 @@ export class DataStore {
       if (op.reads?.length) env.reads = op.reads;
       if (SOURCE_OPS.has(op.type)) {
         const s = op.payload.src;
-        const src = { meta: s.meta.map((m) => ({ ...m })), label: s.label ?? null };
+        const src = { meta: s.meta.map((m) => ({ ...m })), label: s.label ?? null, origin: s.origin ?? null };
         if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
         if (liveSrcIds.has(op.id)) {
           // Byte sidecar is keyed by the STABLE op id (not a positional index), so a
@@ -1850,7 +1876,7 @@ export class DataStore {
       if (SOURCE_OPS.has(o.type)) {
         const created = o.src.wide
           ? await this.#restoreWideSource(o.src)
-          : await this.#createSource({ variables: o.src.meta, parquet: o.src.parquet, source: o.src.label });
+          : await this.#createSource({ variables: o.src.meta, parquet: o.src.parquet, source: o.src.label, origin: o.src.origin });
         this.#addSourceOp(o.type, created, { joinKey: o.joinKey, aliases: o.aliases, joinType: o.joinType, author: o.author });
       } else {
         // Carry the recipe's recorded author through (#149 A6) — exportState preserves

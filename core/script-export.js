@@ -213,6 +213,10 @@ function translate(text, D, opts = {}) {
     sawWeight: false,
     sawAnalysis: false,
     sawExact: false,
+    // The file the FIRST `# use` names. A script opens one dataset at the top; later
+    // append/join lines stay as instructions, because a second file has to be merged and
+    // that is not a step this translator can honestly write.
+    firstSource: null,
     sources: sourceIndex(opts.analyses),
   };
   let statements = 0;
@@ -226,7 +230,11 @@ function translate(text, D, opts = {}) {
       continue;
     }
     if (line.startsWith('#')) {
-      const c = commentThrough(line, D);
+      // The quoted name on the first `use`, with any backslash escapes undone — the
+      // serializer writes it through the same quoting the parser reads.
+      const use = /^#\s*use\s+"((?:[^"\\]|\\.)*)"/i.exec(line);
+      if (use && ctx.firstSource == null) ctx.firstSource = use[1].replace(/\\(.)/g, '$1');
+      const c = commentThrough(line, D, ctx);
       if (c != null) body.push(c);
       continue;
     }
@@ -255,14 +263,27 @@ function translate(text, D, opts = {}) {
   // SPSS and Stata assume the dataset is already open in the application; a .R file is
   // handed to someone who has only the file.
   if (D.id === 'r') {
-    const pre = [
-      D.comment('--- 1. Load the data -------------------------------------------------'),
-      D.comment('Export your data from CrossTab (File ▸ Export data…) and point this at it.'),
-      D.comment('A .sav or .dta needs haven: install.packages("haven"); haven::read_sav(path)'),
-      'd <- read.csv("your-data.csv", stringsAsFactors = FALSE)',
-      '',
-      D.comment('--- 2. Prepare the data ----------------------------------------------'),
-    ];
+    // The import recorded which file it read, so this line can open THAT file rather
+    // than a placeholder the reader has to find and correct. `read` is null when the
+    // extension is one R has no obvious reader for, and then the placeholder and its
+    // instruction come back — a line that pretends to work is worse than one that asks.
+    const read = openCommand('r', ctx.firstSource);
+    const pre = read
+      ? [
+        D.comment('--- 1. Load the data -------------------------------------------------'),
+        D.comment(`The file this analysis was built from${read.note ? ` (${read.note})` : ''}.`),
+        read.line,
+        '',
+        D.comment('--- 2. Prepare the data ----------------------------------------------'),
+      ]
+      : [
+        D.comment('--- 1. Load the data -------------------------------------------------'),
+        D.comment('Export your data from CrossTab (File ▸ Export data…) and point this at it.'),
+        D.comment('A .sav or .dta needs haven: install.packages("haven"); haven::read_sav(path)'),
+        'd <- read.csv("your-data.csv", stringsAsFactors = FALSE)',
+        '',
+        D.comment('--- 2. Prepare the data ----------------------------------------------'),
+      ];
     const first = body.findIndex((l) => l !== '');
     body.splice(first < 0 ? 0 : first, 0, ...pre);
     if (ctx.sawAnalysis) {
@@ -271,13 +292,24 @@ function translate(text, D, opts = {}) {
     }
   }
 
+  const opensItsOwnData = !!(ctx.firstSource && openCommand(D.id, ctx.firstSource));
   const head = [
     `Exported from CrossTab — best-effort ${D.label} translation.`,
     `${translated} of ${statements} statement${statements === 1 ? '' : 's'} translated` +
       (skipped ? `; ${skipped} left as comments — search “not translated”.` : '.'),
-    D.id === 'r'
-      ? 'Edit the read.csv() path at the top, then run the file top to bottom.'
-      : 'The data is NOT in this file: open your dataset first, then run this.',
+    // What the file does about its data, stated once and accurately. Three cases, and
+    // the old header only ever described the third: the script opens the file itself
+    // (every dialect can, for a format it reads natively); it names the file but cannot
+    // open it; or it has nothing to go on and carries a placeholder.
+    opensItsOwnData
+      // A browser only ever hands us a basename, so the path is relative and where you
+      // run the script from is the one thing a reader still has to know.
+      ? `Opens ${ctx.firstSource} itself — run it from that file's folder, or make the path absolute.`
+      : ctx.firstSource
+        ? `The data is NOT in this file: open ${ctx.firstSource} first, then run this.`
+        : (D.id === 'r'
+          ? 'Edit the read.csv() path at the top, then run the file top to bottom.'
+          : 'The data is NOT in this file: open your dataset first, then run this.'),
   ];
   if (skipped) head.push('Read every commented line: those steps have NOT been applied.');
   // Said once at the top rather than repeated under every analysis: the commented R is a
@@ -318,7 +350,7 @@ function translate(text, D, opts = {}) {
 
 /** A `#` comment from the native script, rendered in the target dialect. Returns null
  * for the native banner, which this file's own header replaces. */
-function commentThrough(line, D) {
+function commentThrough(line, D, ctx = {}) {
   const t = line.replace(/^#+\s?/, '').trim();
   // A banner or breadcrumb written by OUR OWN importers is a statement about a DIFFERENT
   // file. Left in, the exported file carried "Imported from Stata .do — 46/46 commands
@@ -331,7 +363,24 @@ function commentThrough(line, D) {
   // A data-source anchor is the one comment worth rewording: in a do-file it is an
   // instruction (open this first), not a note about something already done.
   const src = t.match(/^(use|append|join)\s+(".*)$/);
-  if (src) return D.comment(`CrossTab data source (${src[1]}): ${src[2]} — open it before running this.`);
+  if (src) {
+    // SPSS and Stata assume the dataset is already open, so this line is an INSTRUCTION
+    // rather than a note about something already done. Now that the import records the
+    // file, the instruction can be the command itself — but only where the dialect opens
+    // that format natively; `use "survey.csv"` in Stata is a confident error, and a
+    // comment beats one of those.
+    const name = src[1] === 'use' ? ctx.firstSource : null;
+    // In R the preamble has already opened this file, so repeating "open it before
+    // running this" underneath the read line would contradict it. The anchor is dropped
+    // rather than reworded: the read call above says the same thing, in code.
+    if (D.id === 'r' && name && openCommand('r', name)) return null;
+    const open = D.id !== 'r' && name ? openCommand(D.id, name) : null;
+    if (open) {
+      return `${D.comment(`CrossTab data source: ${src[2]}`)}
+${open.line}`;
+    }
+    return D.comment(`CrossTab data source (${src[1]}): ${src[2]} — open it before running this.`);
+  }
   return D.comment(t);
 }
 
@@ -1608,4 +1657,84 @@ function endOfOperand(tokens, from) {
   if (tokens[from].v === '(') return matchParen(tokens, from) + 1;
   if (tokens[from].t === 'name' && tokens[from + 1]?.v === '(') return matchParen(tokens, from + 1) + 1;
   return from + 1;
+}
+
+/**
+ * The command that opens a data file, per dialect, chosen by the file's extension.
+ *
+ * This exists because the exported R script used to begin
+ *
+ *     # Export your data from CrossTab (File > Export data...) and point this at it.
+ *     d <- read.csv("your-data.csv", stringsAsFactors = FALSE)
+ *
+ * — a placeholder and an instruction to go and fix it. A script you must edit before it
+ * runs reproduces nothing, which is the whole point of exporting one (owner,
+ * 2026-11-17). Now that the import records the file it read, the line can name it.
+ *
+ * ## Why the extension decides, and what happens when it cannot
+ *
+ * `read.csv` on a .sav produces a one-column data frame of binary mush, silently — the
+ * worst kind of wrong, because it runs. So the reader is chosen by extension, and an
+ * extension nobody recognises falls back to the placeholder WITH its instruction rather
+ * than guessing: a comment telling you to look is better than a line that pretends.
+ *
+ * A browser only ever gives a File its basename, so these are relative paths. The script
+ * therefore runs as-is when it sits beside its data, which is the common case for
+ * "export the script, send both" — and the header says so rather than leaving someone to
+ * discover it.
+ *
+ * @param {string} dialect 'r' | 'stata' | 'spss'
+ * @param {?string} file the imported file's name, or null if unknown
+ * @returns {?{line: string, note?: string}} the open command, or null when the dialect
+ *   cannot open that format natively and the caller should keep its instruction comment
+ */
+export function openCommand(dialect, file) {
+  const name = String(file ?? '').trim();
+  if (!name) return null;
+  const ext = (name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+  const q = (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const sq = (s) => `'${s.replace(/'/g, "''")}'`;
+
+  if (dialect === 'r') {
+    switch (ext) {
+      case 'csv': return { line: `d <- read.csv(${q(name)}, stringsAsFactors = FALSE)` };
+      case 'tsv':
+      case 'tab': return { line: `d <- read.delim(${q(name)}, stringsAsFactors = FALSE)` };
+      case 'sav':
+      case 'zsav': return { line: `d <- haven::read_sav(${q(name)})`, note: 'needs: install.packages("haven")' };
+      case 'dta': return { line: `d <- haven::read_dta(${q(name)})`, note: 'needs: install.packages("haven")' };
+      case 'por': return { line: `d <- haven::read_por(${q(name)})`, note: 'needs: install.packages("haven")' };
+      case 'rds': return { line: `d <- readRDS(${q(name)})` };
+      case 'xlsx':
+      case 'xls': return { line: `d <- readxl::read_excel(${q(name)})`, note: 'needs: install.packages("readxl")' };
+      case 'parquet': return { line: `d <- arrow::read_parquet(${q(name)})`, note: 'needs: install.packages("arrow")' };
+      case 'json':
+      case 'ndjson': return { line: `d <- jsonlite::stream_in(file(${q(name)}))`, note: 'needs: install.packages("jsonlite")' };
+      default: return null;
+    }
+  }
+  if (dialect === 'stata') {
+    switch (ext) {
+      case 'dta': return { line: `use ${q(name)}, clear` };
+      case 'csv': return { line: `import delimited ${q(name)}, clear` };
+      case 'tsv':
+      case 'tab': return { line: `import delimited ${q(name)}, delimiter(tab) clear` };
+      case 'xlsx':
+      case 'xls': return { line: `import excel ${q(name)}, firstrow clear` };
+      // A .sav needs `usespss` or a conversion; naming a command that may not be
+      // installed is worse than the instruction comment the caller already writes.
+      default: return null;
+    }
+  }
+  if (dialect === 'spss') {
+    switch (ext) {
+      case 'sav':
+      case 'zsav': return { line: `GET FILE=${sq(name)}.` };
+      case 'por': return { line: `IMPORT FILE=${sq(name)}.` };
+      // GET DATA for a delimited file needs the full variable list to be correct, and a
+      // wrong one silently mistypes every column. The instruction stays.
+      default: return null;
+    }
+  }
+  return null;
 }

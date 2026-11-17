@@ -1483,7 +1483,7 @@ export function buildManifest({ name, savedAt, bundle }) {
   const log = (bundle.log ?? []).map((op) => {
     if (isSourceOp(op) && op.payload?.src) {
       const s = op.payload.src;
-      const src = { meta: s.meta, label: s.label ?? null };
+      const src = { meta: s.meta, label: s.label ?? null, origin: s.origin ?? null };
       if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
       if (s.file) src.file = s.file; // byte-less (retracted) sources have none
       return { ...op, payload: { ...op.payload, src } };

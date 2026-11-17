@@ -711,7 +711,9 @@ export class ImportService {
         // A lone single-file replace stays clean (no source_file column); any
         // multi-file or append run tags provenance with each file's name.
         const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
-        await this.#data.loadDataset({ ...dataset, mode: fileMode, source: tag });
+        // `source` is the provenance COLUMN's value and stays absent on a clean
+        // single-file replace; `origin` is the filename, and is always recorded.
+        await this.#data.loadDataset({ ...dataset, mode: fileMode, source: tag, origin: file.name });
         committed += 1;
       } catch (err) {
         this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
@@ -740,7 +742,7 @@ export class ImportService {
       this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
       return;
     }
-    const review = await this.#reviewAndJoin(dataset, baseName(file.name), id);
+    const review = await this.#reviewAndJoin(dataset, baseName(file.name), id, file.name);
     if (review) this.#emitFinished(id, 1);
   }
 
@@ -825,13 +827,18 @@ export class ImportService {
       return;
     }
 
+    // A web import has no file, so its origin is whatever the importer can say about
+    // where the rows came from — a Wikipedia article title, say. Better than nothing,
+    // and better than inventing a filename that is on nobody's disk.
+    const origin = dataset.source ?? null;
+
     let mode = 'replace';
     if (this.#data.rowCount > 0) {
       mode = await askMode(1, true);
       if (!mode) return; // cancelled
     }
     if (mode === 'join') {
-      const ok = await this.#reviewAndJoin(dataset, dataset.source ?? id, id);
+      const ok = await this.#reviewAndJoin(dataset, dataset.source ?? id, id, origin);
       if (ok) this.#emitFinished(id, 1);
       return;
     }
