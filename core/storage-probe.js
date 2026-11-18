@@ -210,6 +210,65 @@ async function runCase(duckdb, label, { seed }) {
   return result;
 }
 
+/**
+ * Can DuckDB read an OPFS file it was given by NAME rather than by handle?
+ *
+ * This is the mobile question, and it is a different question from the two cases above.
+ * `registerFileHandle` posts a `FileSystemFileHandle` to the worker, WebKit refuses to
+ * clone it, and `registerParquetFile` therefore falls back to `registerFileBuffer` —
+ * which loads the whole Parquet into memory. So on iOS the out-of-core path is not
+ * out-of-core, the database is not disk-backed either, and the most memory-constrained
+ * platform we support has no escape hatch at all.
+ *
+ * But `registerOPFSFileName` takes a STRING. The worker calls
+ * `navigator.storage.getDirectory()` itself and opens its own sync access handle, so no
+ * handle ever crosses the boundary and WebKit's objection does not apply. And unlike the
+ * database case, the size gate is satisfied for free: a file we have already written has
+ * bytes in it.
+ *
+ * If this works, iOS can have genuine out-of-core reads today. CSV rather than Parquet
+ * only because a valid Parquet is awkward to synthesise here — what is under test is
+ * whether DuckDB can open an OPFS path by name in a worker, not which format it holds.
+ */
+async function probeOpfsByName(duckdb) {
+  const name = 'crosstab-probe-byname.csv';
+  const out = { case: 'opfs-by-name' };
+  let inst = null;
+  let step = 'start';
+  const at = (s) => { step = s; };
+  try {
+    at('write');
+    await opfsWrite(name, new TextEncoder().encode('a,b\n1,x\n2,y\n3,z\n'));
+    out.bytesWritten = await opfsSize(name);
+    at('instance');
+    inst = await makeInstance(duckdb);
+    at('open');
+    await inst.db.open({});
+    at('registerOPFSFileName');
+    await inst.db.registerOPFSFileName(`opfs://${name}`);
+    out.registered = true;
+    at('query');
+    const conn = await inst.db.connect();
+    const rows = await conn.query(`SELECT count(*) AS n FROM read_csv_auto('opfs://${name}')`);
+    out.rowsRead = jsonSafe(rows.toArray().map((r) => r.toJSON()));
+    out.readable = true;
+    await conn.close();
+    at('done');
+  } catch (err) {
+    out.failedAt = step;
+    out.error = describeError(err);
+    out.readable = false;
+  } finally {
+    if (inst) {
+      await inst.db.terminate().catch(() => {});
+      inst.worker.terminate();
+    }
+    await opfsDelete(name);
+  }
+  debug('probe', 'case:opfs-by-name', out);
+  return out;
+}
+
 /** Which self-reporting APIs this duckdb build actually answers. Useful beyond this
  * probe: the table budget in data-store.js is an ESTIMATE only because none of these
  * was known to work. */
@@ -297,6 +356,10 @@ export async function probeStorage() {
   // and seeded reports true, the remedy is settled and the rest is plumbing.
   report.cases.push(await runCase(duckdb, 'cold', { seed: false }));
   report.cases.push(await runCase(duckdb, 'seeded', { seed: true }));
+  // The mobile question, and independent of the two above: it can pass on a device where
+  // seeding fails, which would mean iOS gets out-of-core READS even without a disk-backed
+  // database. Worth knowing separately rather than folding into one verdict.
+  report.cases.push(await probeOpfsByName(duckdb));
 
   try {
     report.introspection = await probeIntrospection(duckdb);
@@ -306,11 +369,15 @@ export async function probeStorage() {
 
   const cold = report.cases.find((c) => c.case === 'cold');
   const seeded = report.cases.find((c) => c.case === 'seeded');
-  report.verdict = cold?.diskBacked
+  const byName = report.cases.find((c) => c.case === 'opfs-by-name');
+  const db = cold?.diskBacked
     ? 'cold open is ALREADY disk-backed — the premise is wrong, re-read duckdb-manager.js'
     : seeded?.diskBacked
       ? 'seeding works: seed once, then never delete the file'
-      : 'seeding did NOT make it disk-backed — look at the per-case errors';
+      : `seeding did NOT make it disk-backed (failed at ${seeded?.failedAt ?? '?'})`;
+  // Reported as two findings, not one. They fail independently, and conflating them is
+  // how "it does not work on mobile" turns into "mobile gets the slow path" by default.
+  report.verdict = `database: ${db} | opfs-by-name: ${byName?.readable ? 'READS — out-of-core by name works here' : `no (${byName?.failedAt ?? '?'})`}`;
   debug('probe', 'verdict', { verdict: report.verdict });
   return report;
 }

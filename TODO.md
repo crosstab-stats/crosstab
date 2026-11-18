@@ -43,6 +43,25 @@ bottom; they are the project's memory and are not summarised away.
       **A codec's job should be: bytes → raw columns.** That is the part that genuinely differs
       per format. The plan, in order:
 
+      **ON ALL PLATFORMS, and the owner had to say so (2026-11-18):** *"If we are claiming to
+      support mobile (indeed, that other software does not run on mobile is a key
+      differentiator for us) then should not the problem be fixed on all platforms rather than
+      just desktop?"* He is right, and the state of play is worse than it reads. On WebKit:
+      the database is not disk-backed (same gate as everywhere), AND `registerParquetFile`
+      falls back to `registerFileBuffer` because WebKit will not clone a
+      `FileSystemFileHandle` into the worker — so the out-of-core path loads the whole
+      Parquet into memory. **Every path on iOS is in-memory.** The most constrained platform
+      we support has the fewest escape hatches, and it is the one the product is differentiated
+      on. No step below is finished while it is desktop-only.
+
+      Concrete lead, found 2026-11-18: `registerOPFSFileName` takes a **string**, and the
+      worker calls `navigator.storage.getDirectory()` itself — no handle crosses the
+      postMessage boundary, so WebKit's objection does not apply. For an already-written
+      Parquet the size gate passes for free. That is a route to genuine out-of-core reads on
+      iOS *today*, independent of whether the database can be seeded. The storage probe now
+      tests it as its own case. (The code comment calls this "#122", which is not a task that
+      exists in this file — one of us should fix that; the mechanism is written up here.)
+
       1. **Fix the OPFS database first** (see the follow-up entry below). Most of the memory
          branches — `isWideDataset`, cell-sized batches, `rowGroupFor`, the cumulative table
          budget — exist because the heap is a ceiling with no spill. Fixing it does not delete
