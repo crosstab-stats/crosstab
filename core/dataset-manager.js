@@ -822,6 +822,18 @@ export class DatasetManager {
   loadDataset(d) {
     return this.#target().loadDataset(d);
   }
+  /** Estimated bytes the DuckDB source tables hold across ALL datasets. Not really a
+   * delegation — every store answers from the one shared DuckDB — but it is reached
+   * through this interface, and leaving it off is what made the table budget read 0 on
+   * every import and do nothing at all. */
+  get loadedTableBytes() {
+    return this.#target().loadedTableBytes;
+  }
+
+  wouldExceedTableBudget(variables, rowCount) {
+    return this.#target().wouldExceedTableBudget(variables, rowCount);
+  }
+
   loadStreaming(o) {
     return this.#target().loadStreaming(o);
   }

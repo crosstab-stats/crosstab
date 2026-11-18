@@ -45,7 +45,7 @@
 
 import { CoreEvents } from './event-bus.js';
 import { safeText, rowGroupFor } from './plugin-stdlib.js';
-import { quoteIdent } from './duckdb-manager.js';
+import { quoteIdent, estimateTableBytes } from './duckdb-manager.js';
 import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
 import { isCategorical, isQuantitative } from './var-role.js';
@@ -123,75 +123,6 @@ const SOURCE_OPS = new Set(['load', 'append', 'join']);
  * created by the app bootstrap and exposed to plugins (read-mostly) through the
  * {@link DataStore#api} surface.
  */
-/**
- * Roughly what one DuckDB table of this shape costs in the wasm heap.
- *
- * A FLOOR, not a figure: a DOUBLE is 8 bytes, a VARCHAR slot is 16 (`string_t`) and
- * anything over 12 bytes also allocates on the string heap, which this does not count.
- * It is deliberately crude — what it has to do is tell "another Scorecard year" apart
- * from "a 40-column survey", and for that the floor is enough.
- *
- * @param {Array<{type?: string}>} variables
- * @param {number} rowCount
- * @returns {number} bytes
- */
-export function estimateTableBytes(variables, rowCount) {
-  const rows = Math.max(0, Number(rowCount) || 0);
-  let perRow = 8; // the row-id column the ingest bakes in
-  for (const v of variables ?? []) perRow += v?.type === 'string' ? 16 : 8;
-  return perRow * rows;
-}
-
-/**
- * How much table data may sit in the DuckDB heap before an import is sent out-of-core.
- *
- * ## The ceiling is real and it is the CHECKPOINT
- *
- * `loadWide` has said for a while that "DuckDB-WASM's checkpoint can't accumulate past
- * ~600 MB and can't spill (OPFS temp is unimplemented)". That is why the out-of-core
- * Parquet path exists. What was missed is that the ceiling belongs to the DATABASE while
- * `isWideDataset` judges one FILE — so any number of individually-modest imports can walk
- * into it together.
- *
- * Which is what happened (owner, 2026-11-18), importing College Scorecard years one after
- * another, each 3,379 columns and none of them "wide" by the per-file rule:
- *
- *     table 1   6,272 rows  ~170 MB   ok
- *     table 2   6,430 rows  ~175 MB   ok        (~345 MB loaded)
- *     table 3   7,766 rows  ~211 MB   FATAL     (~556 MB loaded)
- *
- *     FATAL Error: Failed to create checkpoint: Out of Memory Error: Allocation failure
- *
- * It had ingested every row — `rowsIngested: 7766`, the full file — and died 18 seconds
- * later writing itself out. And FATAL is not an ordinary error: DuckDB invalidates the
- * database, so the two tables that HAD loaded go down with it.
- *
- * ## Why this number
- *
- * Bracketed by those two observations, not chosen: ~345 MB demonstrably works, ~556 MB
- * demonstrably does not. 384 MiB sits above the first and well below the second, leaving
- * room for what this estimate ignores (string heap, per-column metadata, and the
- * checkpoint's own transient allocation — the thing that actually blew up).
- *
- * Re-measure before raising it. The cost of being wrong in this direction is a slower
- * import; in the other, it is a dead database and the loss of everything already loaded.
- */
-export const TABLE_BYTE_BUDGET = 384 * 1024 * 1024;
-
-/**
- * Should a table of this shape go out-of-core, given what is already loaded?
- *
- * Pure, so the arithmetic can be tested without a DuckDB.
- *
- * @param {number} loadedBytes - {@link DataStore#loadedTableBytes}
- * @param {Array<{type?: string}>} variables
- * @param {number} rowCount
- * @returns {boolean}
- */
-export function exceedsTableBudget(loadedBytes, variables, rowCount) {
-  return (Number(loadedBytes) || 0) + estimateTableBytes(variables, rowCount) > TABLE_BYTE_BUDGET;
-}
-
 export class DataStore {
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
@@ -238,10 +169,6 @@ export class DataStore {
   /** Every source table this dataset has materialised, for reliable cleanup
    * (undone/redo-discarded sources would otherwise leak until dispose). @type {Set<string>} */
   #sourceTables = new Set();
-
-  /** table name → its estimated bytes in the DuckDB heap. Feeds
-   * {@link DataStore#wouldExceedTableBudget}. @type {Map<string, number>} */
-  #tableBytes = new Map();
 
   /** Every registered OPFS Parquet file backing a wide source, for the same
    * reliable cleanup — these are files, not tables. @type {Set<string>} */
@@ -470,7 +397,7 @@ export class DataStore {
           try { await this.#duckdb.dropRegisteredFile(src.file, { removeFromOpfs: true }); } catch { /* best-effort */ }
         }
       } else if (src.table && this.#sourceTables.delete(src.table)) {
-        this.#tableBytes.delete(src.table); // the budget is about what is LOADED now
+        this.#duckdb.forgetTable(src.table); // the budget is about what is LOADED now
         await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(src.table)}`);
       }
     }
@@ -598,20 +525,19 @@ export class DataStore {
     if (!meta) throw new Error('streaming import delivered no variables');
 
     this.#sourceTables.add(table);
-    this.#tableBytes.set(table, estimateTableBytes(meta, ingestedRows));
+    this.#duckdb.noteTableBytes(table, estimateTableBytes(meta, ingestedRows));
     // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
     const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null, importer: importer ?? null };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(this.#loadReason(combine, had));
   }
 
-  /** Estimated bytes the loaded DuckDB source TABLES are holding. Wide sources are
-   * excluded on purpose: they are OPFS Parquet files that DuckDB only reads, so they
-   * never enter the buffer pool or the checkpoint this budget is about. */
+  /** Estimated bytes the source TABLES are holding — across EVERY dataset, because they
+   * share one DuckDB and it is that instance's checkpoint which fails. Delegated for
+   * exactly that reason: a per-store total is per-dataset, and a freshly created store
+   * always answers ~0. */
   get loadedTableBytes() {
-    let total = 0;
-    for (const bytes of this.#tableBytes.values()) total += bytes;
-    return total;
+    return this.#duckdb.loadedTableBytes;
   }
 
   /**
@@ -623,7 +549,7 @@ export class DataStore {
    * @returns {boolean}
    */
   wouldExceedTableBudget(variables, rowCount) {
-    return exceedsTableBudget(this.loadedTableBytes, variables, rowCount);
+    return this.#duckdb.wouldExceedTableBudget(variables, rowCount);
   }
 
   /**
@@ -975,8 +901,8 @@ export class DataStore {
     for (const table of this.#sourceTables) {
       await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
     }
+    for (const table of this.#sourceTables) this.#duckdb.forgetTable(table);
     this.#sourceTables.clear();
-    this.#tableBytes.clear();
     for (const file of this.#wideFiles) {
       try { await this.#duckdb.dropRegisteredFile(file, { removeFromOpfs: true }); } catch { /* best-effort */ }
     }

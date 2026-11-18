@@ -68,6 +68,41 @@ export class DuckDBManager {
    * written to disk. Unique names per op make concurrent ops independent. */
   #scratchSeq = 0;
 
+  /** table name → estimated bytes it holds. Keyed on THIS instance because the
+   * checkpoint ceiling is the instance's, and every dataset shares one. @type {Map<string, number>} */
+  #tableBytes = new Map();
+
+  /** Record (or update) what a source table is estimated to cost. */
+  noteTableBytes(table, bytes) {
+    this.#tableBytes.set(String(table), Math.max(0, Number(bytes) || 0));
+  }
+
+  /** Forget a table that has been dropped; the budget is about what is resident NOW. */
+  forgetTable(table) {
+    this.#tableBytes.delete(String(table));
+  }
+
+  /** Estimated bytes the source TABLES in this database are holding. Wide sources are
+   * absent by construction: they are OPFS Parquet files DuckDB only reads, so they never
+   * enter the buffer pool or the checkpoint this budget exists for. */
+  get loadedTableBytes() {
+    let total = 0;
+    for (const bytes of this.#tableBytes.values()) total += bytes;
+    return total;
+  }
+
+  /**
+   * Would ingesting a table of this shape push the database past
+   * {@link TABLE_BYTE_BUDGET}? If so the caller should route it out-of-core.
+   *
+   * @param {Array<{type?: string}>} variables
+   * @param {number} rowCount
+   * @returns {boolean}
+   */
+  wouldExceedTableBudget(variables, rowCount) {
+    return exceedsTableBudget(this.loadedTableBytes, variables, rowCount);
+  }
+
   /** @returns {boolean} True once the runtime is initialised and ready. */
   get isReady() {
     return this.#conn !== null;
@@ -684,6 +719,83 @@ export class DuckDBManager {
  * @param {string} name
  * @returns {string}
  */
+// --- the table budget --------------------------------------------------------
+//
+// Lives HERE, not in data-store, because the ceiling it guards belongs to the DuckDB
+// INSTANCE and one instance is shared by every dataset. The first version tracked bytes
+// per DataStore, which is per-DATASET — so each new import asked a store that had just
+// been created and was told ~0. Three Scorecard years in a row reported
+// `loadedMiB: 0` and FATAL-ed exactly as before the budget existed.
+
+/**
+ * Roughly what one DuckDB table of this shape costs in the wasm heap.
+ *
+ * A FLOOR, not a figure: a DOUBLE is 8 bytes, a VARCHAR slot is 16 (`string_t`) and
+ * anything over 12 bytes also allocates on the string heap, which this does not count.
+ * It is deliberately crude — what it has to do is tell "another Scorecard year" apart
+ * from "a 40-column survey", and for that the floor is enough.
+ *
+ * @param {Array<{type?: string}>} variables
+ * @param {number} rowCount
+ * @returns {number} bytes
+ */
+export function estimateTableBytes(variables, rowCount) {
+  const rows = Math.max(0, Number(rowCount) || 0);
+  let perRow = 8; // the row-id column the ingest bakes in
+  for (const v of variables ?? []) perRow += v?.type === 'string' ? 16 : 8;
+  return perRow * rows;
+}
+
+/**
+ * How much table data may sit in the DuckDB heap before an import is sent out-of-core.
+ *
+ * ## The ceiling is real and it is the CHECKPOINT
+ *
+ * `loadWide` has said for a while that "DuckDB-WASM's checkpoint can't accumulate past
+ * ~600 MB and can't spill (OPFS temp is unimplemented)". That is why the out-of-core
+ * Parquet path exists. What was missed is that the ceiling belongs to the DATABASE while
+ * `isWideDataset` judges one FILE — so any number of individually-modest imports can walk
+ * into it together.
+ *
+ * Which is what happened (owner, 2026-11-18), importing College Scorecard years one after
+ * another, each 3,379 columns and none of them "wide" by the per-file rule:
+ *
+ *     table 1   6,272 rows  ~170 MB   ok
+ *     table 2   6,430 rows  ~175 MB   ok        (~345 MB loaded)
+ *     table 3   7,766 rows  ~211 MB   FATAL     (~556 MB loaded)
+ *
+ *     FATAL Error: Failed to create checkpoint: Out of Memory Error: Allocation failure
+ *
+ * It had ingested every row — `rowsIngested: 7766`, the full file — and died 18 seconds
+ * later writing itself out. And FATAL is not an ordinary error: DuckDB invalidates the
+ * database, so the two tables that HAD loaded go down with it.
+ *
+ * ## Why this number
+ *
+ * Bracketed by those two observations, not chosen: ~345 MB demonstrably works, ~556 MB
+ * demonstrably does not. 384 MiB sits above the first and well below the second, leaving
+ * room for what this estimate ignores (string heap, per-column metadata, and the
+ * checkpoint's own transient allocation — the thing that actually blew up).
+ *
+ * Re-measure before raising it. The cost of being wrong in this direction is a slower
+ * import; in the other, it is a dead database and the loss of everything already loaded.
+ */
+export const TABLE_BYTE_BUDGET = 384 * 1024 * 1024;
+
+/**
+ * Should a table of this shape go out-of-core, given what is already loaded?
+ *
+ * Pure, so the arithmetic can be tested without a DuckDB.
+ *
+ * @param {number} loadedBytes - {@link DataStore#loadedTableBytes}
+ * @param {Array<{type?: string}>} variables
+ * @param {number} rowCount
+ * @returns {boolean}
+ */
+export function exceedsTableBudget(loadedBytes, variables, rowCount) {
+  return (Number(loadedBytes) || 0) + estimateTableBytes(variables, rowCount) > TABLE_BYTE_BUDGET;
+}
+
 /**
  * How DuckDB refers to an OPFS file we have registered.
  *

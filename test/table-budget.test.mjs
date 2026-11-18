@@ -29,7 +29,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 const { estimateTableBytes, exceedsTableBudget, TABLE_BYTE_BUDGET } =
-  await import('../core/data-store.js');
+  await import('../core/duckdb-manager.js');
 
 const MiB = 1024 * 1024;
 /** The owner's file shape: 3,360 numeric + 19 text, as the picker now types it. */

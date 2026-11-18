@@ -710,7 +710,13 @@ export class ImportService {
         // Three Scorecard years did exactly that (owner, 2026-11-18): every row ingested,
         // then `Failed to create checkpoint: Out of Memory Error` — which is FATAL, so
         // the two tables that had already loaded died with it.
-        const overBudget = !head.wide && !!this.#data.wouldExceedTableBudget?.(head.variables, head.rowCount);
+        // NOT optional-called. The first version wrote `wouldExceedTableBudget?.(…)`,
+        // the method was never forwarded through DatasetManager, and `?.` turned a
+        // missing wiring into a silent `false` — so the budget reported `loadedMiB: 0`
+        // for three imports running and the third FATAL-ed exactly as it had before the
+        // budget existed. A guard that quietly neutralises the feature it guards is
+        // worse than the crash it was meant to prevent.
+        const overBudget = !head.wide && this.#data.wouldExceedTableBudget(head.variables, head.rowCount);
         const wide = head.wide || overBudget;
         debug('import', 'route', {
           wide,
