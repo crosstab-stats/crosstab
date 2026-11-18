@@ -18,6 +18,109 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
+- [ ] **Import machinery: pull host policy OUT of the codecs (owner, 2026-11-18).** After a day
+      of fixing one import, the owner asked the right question: *"special case upon special case
+      upon special case does make me wonder if perhaps we're missing something more basic."* It
+      does, and here it is.
+
+      **The protocol asks every plugin to re-implement host policy.** Typing rules, missing-value
+      detection, batch sizing and storage routing are properties of tabular data and of OUR
+      storage, not of any file format — but they live in the codecs, so each codec gets a
+      different subset right:
+
+      | codec | routes on width | detects missing codes | reads whole file |
+      |---|---|---|---|
+      | CSV | yes | yes | streams |
+      | readstat | yes | no | whole file |
+      | Excel | **no** | **no** | whole file |
+      | NDJSON | no | no | streams |
+      | Parquet | no | no | streams |
+
+      Three of five do not route; four of five do not detect codes. The Excel codec's own comment
+      says its typing "mirrors the CSV codec" — and that mirroring is exactly why fixing CSV's
+      3,347-mistyped-columns bug (e2a3b77) left Excel untouched.
+
+      **A codec's job should be: bytes → raw columns.** That is the part that genuinely differs
+      per format. The plan, in order:
+
+      1. **Fix the OPFS database first** (see the follow-up entry below). Most of the memory
+         branches — `isWideDataset`, cell-sized batches, `rowGroupFor`, the cumulative table
+         budget — exist because the heap is a ceiling with no spill. Fixing it does not delete
+         them, but it turns a class of FATAL into merely slow, after which several can relax
+         instead of multiplying. Do not re-tune the heuristics before this; they are compensating
+         for it.
+      2. **Hoist typing + missing-code detection into the host.** Formats that carry real types
+         (Parquet, readstat) declare them; formats that do not (CSV, Excel, NDJSON) hand over raw
+         values and the host applies ONE typing rule and ONE code-detection pass. Excel and NDJSON
+         get the NA/PS fix for free and the duplicated rule disappears.
+      3. **Move routing wholly to the host.** Codecs report shape in `begin()`; the host decides
+         table vs out-of-core from the file AND from what is already resident. `isWideDataset`
+         leaves plugin code. (The host half already exists — c7265cf — so routing is currently
+         split across two layers, which is worse than either.)
+      4. **Then re-ask** which heuristics still earn their place. Expect the per-file width rule
+         to become unnecessary; do not assume it — re-measure, the numbers are in e85f8e4.
+
+      The test of whether this read is right: the protocol should get SMALLER, not larger.
+
+- [ ] **"Choose which variables to import" for every format, not just SPSS/SAS/Stata (owner,
+      2026-11-18).** `readImportPick` in builtin-readstat-codec is a real feature — picking 50 of
+      the GSS's 7,000 variables — and it is a second import *verb*, reachable only for readstat
+      formats. A CSV user cannot subset at all. That asymmetry is the same disease as the entry
+      above: a capability belonging to importing generally, living inside one codec.
+
+      **Shape:** a checkbox on the File ▸ Import data… picker ("Choose which variables to
+      import"), and a new codec verb — `catalog()`, "the variable list without the data" — that
+      the host calls when it is ticked. The host puts up the picker it already has and passes the
+      chosen subset into the read. One question, asked once, in one place.
+
+      **What each format can actually do**, because the capability is the part that genuinely
+      differs: Parquet reads its footer schema and skips columns for free (columnar); readstat
+      already does both; CSV gets names from the header row cheaply and must still scan every
+      byte but need not STORE the unselected columns — which is the memory win anyway; Excel can
+      only filter after parsing until it streams (see below); NDJSON has no header at all and
+      would need to sample the first N records, with the caveat that a later record can introduce
+      a field.
+
+      So the minimum contract is "drop unselected columns as early as you can", with genuine
+      skipping as an optimisation where the format allows it. That also collapses the second read
+      verb back into one.
+
+- [ ] **The Excel codec still has the bug `af31a0e` deleted from CSV — measured 2026-11-18.** The
+      owner asked what would happen importing Scorecard years as .xlsx. Measured, by running the
+      SHIPPED `readXlsx` over real converted files rather than guessing:
+
+      | rows | cells | peak RSS |
+      |---|---|---|
+      | 500 | 1.7M | 735 MiB |
+      | 1,000 | 3.4M | 1,322 MiB |
+      | 2,000 | 6.8M | 2,578 MiB |
+
+      Dead linear at ~1.23 MiB/row, so the real 6,272-row file needs **≈7.6 GiB** — against a
+      Chrome renderer cap near 4 GiB, and against the ~519 MiB the CSV codec uses for that exact
+      file. **One** file dies, not five, and it dies in the JS heap before DuckDB sees a row.
+      (Writing is no better: 4,000 rows never finished in 15 minutes where 2,000 took 21s.)
+
+      **Cause:** `readAll` → `XLSX.read` → `sheetAoa` → `buildColumns` — the bytes, the parsed
+      workbook, the array-of-arrays and the pivoted columns all alive at once. Verbatim the shape
+      af31a0e removed from CSV. Also confirmed in the same runs: `wide: undefined` (Excel never
+      routes out-of-core) and 211 numeric / 3,168 string (the NA/PS mistyping, in full).
+
+      **Owner's call, 2026-11-18: a streaming reader, not a size cap** — *"I'd hate for the file
+      type selector to have an asterisk next to excel claiming 'only for small files'."*
+
+      **Feasible without a new dependency.** `core/zip.js` already inflates with the browser-native
+      `DecompressionStream('deflate-raw')`; it merely collects the output today. So: stream the
+      entry through it and scan `xl/worksheets/sheetN.xml` incrementally — the cell XML is
+      extremely regular (`<c r="A1" t="s"><v>3</v></c>`), so a narrow scanner beats a general SAX
+      parser. The one thing that must be held whole is `xl/sharedStrings.xml`, since cells index
+      into it; that is bounded by DISTINCT strings, not cells, and for data like this (numbers
+      plus a handful of repeated codes) it is small. A text-heavy workbook is the case to design
+      for, not this one.
+
+      Dropping the AoA and pivoting straight into column buffers is worth doing regardless — it
+      removes two of the four live copies — but it roughly halves 7.6 GiB, which is not enough on
+      its own. Streaming is the actual fix.
+
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
       let's flag that… but it can chill for now"*).** Filed so it is not rediscovered the hard
@@ -2670,7 +2773,10 @@ this is the index.
   columns that were NUMERIC, where per-column cost is small; the 2026-11-18 OOM was 99.6%
   VARCHAR, where it is not. The typing fix removed the symptom for this file. A genuinely
   wide file that is legitimately text still has the old problem. Re-measure before
-  changing the rule — the number to beat is in that commit. *(under #98, codec interface)*
+  changing the rule — the number to beat is in that commit. **Superseded 2026-11-18 as a
+  standalone item:** it is step 3/4 of "Import machinery: pull host policy OUT of the
+  codecs" in Now/near-term, which also says not to re-tune it before the OPFS fix. Kept
+  here because this index is where someone looks for it. *(under #98, codec interface)*
 - **Latent transition analysis** — **DEFERRED 2026-11-02 until someone asks** (feasible: `depmixS4`, closure 17 — demand is the only blocker). *(under #141, More analyses)*
 - ~~**Building-block eligibility**~~ — **CLOSED as moot 2026-10-13**, and this index line
   outlived it by three weeks. The building-block library was removed on 2026-10-02 and
