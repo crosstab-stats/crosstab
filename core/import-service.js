@@ -704,7 +704,21 @@ export class ImportService {
           seen += k ? columns[k].length : 0;
           progress(seen, head.rowCount);
         };
-        if (head.wide) {
+        // The codec decides "wide" from the FILE. The ceiling it protects — DuckDB-WASM's
+        // checkpoint, which cannot accumulate past ~600 MB and cannot spill — belongs to
+        // the DATABASE, so a run of individually-modest imports walks into it together.
+        // Three Scorecard years did exactly that (owner, 2026-11-18): every row ingested,
+        // then `Failed to create checkpoint: Out of Memory Error` — which is FATAL, so
+        // the two tables that had already loaded died with it.
+        const overBudget = !head.wide && !!this.#data.wouldExceedTableBudget?.(head.variables, head.rowCount);
+        const wide = head.wide || overBudget;
+        debug('import', 'route', {
+          wide,
+          declaredWide: head.wide,
+          overBudget,
+          loadedMiB: Math.round((this.#data.loadedTableBytes ?? 0) / 1048576),
+        });
+        if (wide) {
           await this.#data.loadWide({
             mode: fileMode,
             source: tag,
