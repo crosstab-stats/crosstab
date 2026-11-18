@@ -72,6 +72,88 @@ export function debug(tag, ...args) {
   console.debug(`[${tag}]`, ...args);
   _buffer.push({ ts: Date.now(), tag, args: _serialize(args) });
   if (_buffer.length > MAX_BUFFER) _buffer.splice(0, _buffer.length - MAX_BUFFER);
+  _persistSoon();
+}
+
+// --- surviving a process kill -------------------------------------------------
+//
+// Every diagnostic in this file assumes the page lives long enough to export. On iOS it
+// does not: importing a CSV on an iPhone relaunched the PWA outright (owner, 2026-11-18)
+// — the web view was killed for memory, which is not a JS error, so no handler ran, the
+// ring buffer died with the process, and the exported log from the next launch was empty.
+// The one crash that most needed evidence is the one that destroys it.
+//
+// So the tail is mirrored to localStorage as it is written, and the NEXT launch picks it
+// up and carries it in the export as `previousSession`. A hard kill now leaves a trace.
+//
+// Throttled, and small: this runs on every logged line, and a synchronous localStorage
+// write per line on a phone is its own problem. The tail is what matters — the last
+// moments before the kill — so it keeps the final {@link PERSIST_ENTRIES}.
+
+/** Entries mirrored for the next launch. The tail, not the history: enough to see what
+ * was happening, small enough that writing it is cheap and it cannot fill the quota. */
+const PERSIST_ENTRIES = 80;
+/** Minimum gap between mirror writes. */
+const PERSIST_MS = 1000;
+const PERSIST_KEY = 'crosstab_debug_tail';
+
+let _persistAt = 0;
+let _persistTimer = null;
+
+/** Mirror the tail, at most once per {@link PERSIST_MS}, trailing-edge so the LAST
+ * lines before a kill are the ones that survive. */
+function _persistSoon() {
+  const now = Date.now();
+  if (now - _persistAt < PERSIST_MS) {
+    if (_persistTimer == null && typeof setTimeout === 'function') {
+      _persistTimer = setTimeout(() => { _persistTimer = null; _persistNow(); }, PERSIST_MS);
+    }
+    return;
+  }
+  _persistNow();
+}
+
+function _persistNow() {
+  _persistAt = Date.now();
+  try {
+    const tail = _buffer.slice(-PERSIST_ENTRIES).map((e) => ({
+      time: new Date(e.ts).toISOString(),
+      tag: e.tag,
+      message: e.args,
+    }));
+    localStorage.setItem(PERSIST_KEY, JSON.stringify({ at: new Date().toISOString(), tail }));
+  } catch {
+    // Quota, private mode, or no localStorage at all. A diagnostic that breaks the app
+    // it is diagnosing is worse than no diagnostic.
+  }
+}
+
+/** The tail left behind by the previous page load, read once at module load — before
+ * anything this session can overwrite it. Null when there is none. */
+const _previousSession = (() => {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+})();
+
+/** What the previous page load was doing when it stopped. Present in a saved log as
+ * `previousSession`, and the only evidence available after an out-of-memory kill. */
+export function previousSession() {
+  return _previousSession;
+}
+
+/** Mirror the tail NOW, bypassing the throttle. Called when the page is going away —
+ * `pagehide`/`freeze` is the last word a browser gives you, and on iOS it is sometimes
+ * the only one before the web view is reclaimed. */
+export function flushDebugTail() {
+  if (_persistTimer != null) {
+    try { clearTimeout(_persistTimer); } catch { /* no timers here */ }
+    _persistTimer = null;
+  }
+  _persistNow();
 }
 
 /** Whether debug output is currently enabled (any tag). */
@@ -125,6 +207,10 @@ export async function saveLog() {
     // Whether the fast multi-threaded path is even available on this device.
     isolated: typeof crossOriginIsolated === 'boolean' ? String(crossOriginIsolated) : 'unknown',
     lastError: lastError(),
+    // What the PREVIOUS page load was doing when it stopped. After an out-of-memory kill
+    // this is the only evidence there is: no error fires, and this session's buffer
+    // starts empty because the process that filled it is gone.
+    previousSession: previousSession(),
     entries: _buffer.map((e) => ({
       time: new Date(e.ts).toISOString(),
       tag: e.tag,
@@ -210,4 +296,11 @@ export function installErrorCapture(target = globalThis) {
   target.addEventListener?.('unhandledrejection', (e) => {
     recordError(e?.reason, 'unhandledrejection');
   });
+  // The page going away is the last chance to write the tail. `pagehide` fires on a
+  // normal navigation and on a bfcache suspend; `freeze` fires when a background tab is
+  // discarded. Neither fires on a hard out-of-memory kill — that is what the throttled
+  // mirror in `debug()` is for — but when one DOES fire it costs nothing to take it.
+  for (const evt of ['pagehide', 'freeze']) {
+    target.addEventListener?.(evt, () => { if (_enabled) flushDebugTail(); });
+  }
 }
