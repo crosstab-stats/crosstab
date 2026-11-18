@@ -116,6 +116,32 @@ bottom; they are the project's memory and are not summarised away.
 
       The test of whether this read is right: the protocol should get SMALLER, not larger.
 
+- [ ] **A multi-file import asks the mode ONCE and the missing codes N times (owner,
+      2026-11-18).** Selecting four Scorecard years in one dialog produced four NA/PS prompts
+      and a single "new dataset / add rows" prompt, so all four appended into one dataset of
+      27,252 rows. Both halves are defensible alone and incoherent together.
+
+      The mode is asked once ON PURPOSE — `#importFile` gives the first file the chosen mode
+      and appends the rest, because picking four files means they stack. The codes are asked
+      per file because files genuinely differ: **one of those four offered only one code
+      instead of two**, so reusing the first file's answer would have been wrong for it.
+
+      **The hazard is not the tedium.** Stacked sources are combined with `UNION ALL BY NAME`,
+      and DuckDB resolves a column that is DOUBLE in one source and VARCHAR in another by
+      casting to the common supertype — VARCHAR. So ticking the codes on files 1–2 and
+      declining on file 3 silently reverts every recovered column to text FOR THE WHOLE
+      dataset, including the rows where they were accepted. No error; just the original
+      3,347-mistyped-columns problem back across the stack. The owner happened to answer
+      consistently.
+
+      **The coherent shape:** one dataset, one typing decision. Ask once per multi-file
+      import, over the UNION of the candidates found across all the files. CSV already reads
+      in two passes, so pass 1 could run for every file before the question is put — at the
+      cost of restructuring the import loop, which currently finishes each file before
+      starting the next. A cheaper interim is to keep the answer for the remainder of one
+      multi-file import and say so ("apply to the other 3 files"), which removes the
+      inconsistent-answer hazard without the restructure.
+
 - [ ] **"Choose which variables to import" for every format, not just SPSS/SAS/Stata (owner,
       2026-11-18).** `readImportPick` in builtin-readstat-codec is a real feature — picking 50 of
       the GSS's 7,000 variables — and it is a second import *verb*, reachable only for readstat
