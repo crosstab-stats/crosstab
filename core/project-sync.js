@@ -24,7 +24,7 @@ import { el } from './plugin-stdlib.js';
 import { ProjectStore, FOLDER_PROJECT_ID, buildManifest, isSourceFile } from './project-store.js';
 import { attachLiveDoc } from './live-sync.js';
 import { BlobExchange, sourceRefs, assetRefs } from './gap-fill.js';
-import { debug } from './debug.js';
+import { debug, recordError } from './debug.js';
 import { liveOps } from './op-log.js';
 import { rememberFolder, rememberRemote, listLocations, forgetLocation, ensureReadWrite } from './project-locations.js';
 import { passphraseFor, shouldEncrypt, PASSPHRASE_ABORT } from './at-rest.js';
@@ -917,6 +917,12 @@ export class ProjectSync {
       this.#setStatus('saved');
       this.#emitProject();
     } catch (err) {
+      // Recorded, not just logged. A handled error never reaches the global capture, so
+      // the one always-on slot a bug report carries saw nothing — which is how five
+      // successful imports produced a status bar reading "save failed" and a debug
+      // export reading `lastError: null`.
+      recordError(err, 'project:save');
+      debug('project', 'save FAILED', { message: String(err?.message ?? err).slice(0, 200) });
       console.error('[project] save failed', err);
       this.#results.appendError(`Save project failed: ${err.message}`);
       this.#setStatus('error');
@@ -1106,6 +1112,15 @@ export class ProjectSync {
       // all day to catch a sync that announces itself by the next save anyway.
       void this.refreshHealth();
     } catch (err) {
+      // The likeliest one to fire unattended, and the quietest: it deliberately does not
+      // write to the results pane, so without this the only trace was a console line and
+      // a two-word status. `sources` says how much was in flight, which is the first
+      // question when a save starts failing after several large imports.
+      recordError(err, 'project:autosave');
+      debug('project', 'autosave FAILED', {
+        sources: dirty.size ?? dirty.length ?? 0,
+        message: String(err?.message ?? err).slice(0, 200),
+      });
       console.error('[project] autosave failed', err);
       // Keep the dirty set so the next attempt re-tries those sources.
       for (const id of dirty) this.#sourcesDirty.add(id);
@@ -1150,6 +1165,8 @@ export class ProjectSync {
         }
         this.#dirty = false;
       } catch (err) {
+        recordError(err, 'project:settle');
+        debug('project', 'settle save FAILED', { message: String(err?.message ?? err).slice(0, 200) });
         console.error('[project] settle save failed', err);
       }
     }
