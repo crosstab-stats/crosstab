@@ -28,7 +28,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { estimateTableBytes, exceedsTableBudget, TABLE_BYTE_BUDGET } =
+const { estimateTableBytes, exceedsTableBudget, TABLE_BYTE_BUDGET, TABLE_BYTE_BUDGET_IN_MEMORY } =
   await import('../core/duckdb-manager.js');
 
 const MiB = 1024 * 1024;
@@ -119,4 +119,35 @@ test('dropping a dataset frees its share of the budget', () => {
 
 test('a single table larger than the whole budget is routed, not refused', () => {
   assert.equal(exceedsTableBudget(0, SCORECARD, 100000), true);
+});
+
+// =============================================================================
+// Where the ingest cannot stream — WebKit, and a different ceiling entirely
+// =============================================================================
+
+test('ONE Scorecard year is already too much when the ingest cannot stream', () => {
+  // The case that killed the owner's iPhone. On a device that can stream, this first
+  // import is comfortably a table; on one that cannot, `#beginMemoryIngest` holds the
+  // temp table AND the final table at `finish`, and the web view is reclaimed.
+  assert.equal(exceedsTableBudget(0, SCORECARD, 6272, true), false, 'desktop: a table');
+  assert.equal(exceedsTableBudget(0, SCORECARD, 6272, false), true, 'WebKit: out of core');
+});
+
+test('the in-memory budget sits well below what was observed to be fatal', () => {
+  const fatal = estimateTableBytes(SCORECARD, 6272); // ~163 MiB, and ~2x that at finish
+  assert.ok(TABLE_BYTE_BUDGET_IN_MEMORY < fatal / 2,
+    `budget ${TABLE_BYTE_BUDGET_IN_MEMORY} is not comfortably under the one observation (${fatal})`);
+  assert.ok(TABLE_BYTE_BUDGET_IN_MEMORY < TABLE_BYTE_BUDGET, 'and below the spill-capable one');
+});
+
+test('an ordinary survey still goes to a table on WebKit', () => {
+  // The budget must not turn every phone import into the slow path — only the ones that
+  // would otherwise take the app down with them.
+  const survey = Array.from({ length: 40 }, () => ({ type: 'numeric' }));
+  assert.equal(exceedsTableBudget(0, survey, 100000, false), false, '33 MB is fine');
+  assert.equal(exceedsTableBudget(0, survey, 250000, false), true, 'but 82 MB is not');
+});
+
+test('the capability defaults to "can stream", so an unknown platform is not penalised', () => {
+  assert.equal(exceedsTableBudget(0, SCORECARD, 6272), exceedsTableBudget(0, SCORECARD, 6272, true));
 });

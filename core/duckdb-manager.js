@@ -100,7 +100,14 @@ export class DuckDBManager {
    * @returns {boolean}
    */
   wouldExceedTableBudget(variables, rowCount) {
-    return exceedsTableBudget(this.loadedTableBytes, variables, rowCount);
+    return exceedsTableBudget(this.loadedTableBytes, variables, rowCount, this.#opfsHandleOk !== false);
+  }
+
+  /** Whether this browser can stream an ingest out of core. False on WebKit, where
+   * `registerFileHandle` cannot cross into the worker — which makes a table ingest hold
+   * the whole dataset (twice, at `finish`) in the wasm heap. @type {boolean|null} */
+  get canStreamOutOfCore() {
+    return this.#opfsHandleOk;
   }
 
   /** @returns {boolean} True once the runtime is initialised and ready. */
@@ -707,6 +714,10 @@ export class DuckDBManager {
     this.#worker = worker;
     this.#db = db;
     this.#conn = await db.connect();
+    // Probe the handle capability NOW rather than on the first ingest, because the
+    // routing decision for the FIRST import depends on it and that decision is
+    // synchronous. See `wouldExceedTableBudget`.
+    try { await this.#canUseOpfsHandles(); } catch { /* leaves it null; treated as unknown */ }
     return { conn: this.#conn, arrow };
   }
 }
@@ -783,6 +794,34 @@ export function estimateTableBytes(variables, rowCount) {
 export const TABLE_BYTE_BUDGET = 384 * 1024 * 1024;
 
 /**
+ * The budget where the ingest CANNOT stream out of core — WebKit, today.
+ *
+ * A different ceiling for a different reason. Above, the limit is the checkpoint's and
+ * the data is on its way to disk. Here nothing goes to disk: `#beginMemoryIngest` appends
+ * every batch into a temp table and then does
+ *
+ *     CREATE TABLE target AS SELECT *, row_number() OVER () ... FROM tmp
+ *
+ * so at `finish` BOTH tables are resident and a window function materialises across the
+ * whole thing. Peak is upwards of twice the dataset, in a web view iOS will reclaim long
+ * before DuckDB's own 3.1 GiB limit is reached.
+ *
+ * Which it did: importing one 3,379 × 6,272 Scorecard year on an iPhone (~163 MiB by the
+ * estimate above, so ~330 MiB at finish) killed the PWA outright — the log recorded
+ * `read finished` with all 22 batches consumed and nothing after it. That is the single
+ * observation this number is set against, so it is set WELL below it rather than near it,
+ * and an ordinary survey (40 columns × 100,000 rows is 33 MB) still goes to a table.
+ *
+ * The out-of-core path this diverts to is not a consolation prize on WebKit: `loadWide`
+ * encodes Parquet in JS one row group at a time and registers it BY NAME, which is the
+ * one OPFS route WebKit does support (measured, iOS 18.7). It is bounded where this is
+ * not.
+ *
+ * Refine it with a measurement, not a guess — and the measurement is a phone.
+ */
+export const TABLE_BYTE_BUDGET_IN_MEMORY = 64 * 1024 * 1024;
+
+/**
  * Should a table of this shape go out-of-core, given what is already loaded?
  *
  * Pure, so the arithmetic can be tested without a DuckDB.
@@ -790,10 +829,14 @@ export const TABLE_BYTE_BUDGET = 384 * 1024 * 1024;
  * @param {number} loadedBytes - {@link DataStore#loadedTableBytes}
  * @param {Array<{type?: string}>} variables
  * @param {number} rowCount
+ * @param {boolean} [canStreamOutOfCore=true] - False on WebKit, where the ingest holds
+ *   the whole dataset in memory and a far smaller budget applies. See
+ *   {@link TABLE_BYTE_BUDGET_IN_MEMORY}.
  * @returns {boolean}
  */
-export function exceedsTableBudget(loadedBytes, variables, rowCount) {
-  return (Number(loadedBytes) || 0) + estimateTableBytes(variables, rowCount) > TABLE_BYTE_BUDGET;
+export function exceedsTableBudget(loadedBytes, variables, rowCount, canStreamOutOfCore = true) {
+  const budget = canStreamOutOfCore ? TABLE_BYTE_BUDGET : TABLE_BYTE_BUDGET_IN_MEMORY;
+  return (Number(loadedBytes) || 0) + estimateTableBytes(variables, rowCount) > budget;
 }
 
 /**

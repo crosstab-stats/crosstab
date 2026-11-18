@@ -46,6 +46,7 @@
 import { CoreEvents } from './event-bus.js';
 import { safeText, rowGroupFor } from './plugin-stdlib.js';
 import { quoteIdent, estimateTableBytes } from './duckdb-manager.js';
+import { debug } from './debug.js';
 import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
 import { isCategorical, isQuantitative } from './var-role.js';
@@ -506,7 +507,13 @@ export class DataStore {
 
     try {
       await ingest(ctx);
+      // The phases AFTER the read, which had no instrumentation at all — and the iPhone
+      // died in exactly this gap: the log's last line was the codec's `read finished`
+      // and the next thing was a relaunch. `finish` is where a WebKit ingest builds the
+      // final table from its temp one, holding both.
+      debug('data', 'ingest finishing', { rows: ingestedRows });
       if (ingester) await ingester.finish();
+      debug('data', 'ingest finished', { rows: ingestedRows });
     } catch (err) {
       // Roll back a half-built source so the dataset isn't left broken, and sweep
       // any leftover OPFS ingest parts.
@@ -529,7 +536,9 @@ export class DataStore {
     // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
     const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null, importer: importer ?? null };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
+    debug('data', 'rederiving', { rows: ingestedRows, columns: meta.length });
     await this.rederive(this.#loadReason(combine, had));
+    debug('data', 'source ready', { table });
   }
 
   /** Estimated bytes the source TABLES are holding — across EVERY dataset, because they

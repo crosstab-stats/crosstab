@@ -82,6 +82,17 @@ test('the three Scorecard years reproduce the real decision', () => {
   assert.ok(db.loadedTableBytes > 0, `and the total is not zero (was ${db.loadedTableBytes})`);
 });
 
+test('the instance passes its streaming capability into the budget', () => {
+  // The link that makes the WebKit budget apply at all. `wouldExceedTableBudget` is
+  // synchronous and the first import's routing depends on it, which is why the
+  // capability is probed during init rather than on first ingest.
+  const src = stripComments(readFileSync('core/duckdb-manager.js', 'utf8'));
+  assert.match(src, /exceedsTableBudget\(this\.loadedTableBytes, variables, rowCount, this\.#opfsHandleOk !== false\)/,
+    'the capability reaches the budget');
+  assert.match(src, /await this\.#canUseOpfsHandles\(\)/,
+    'and is probed during init, before any routing decision');
+});
+
 test('garbage byte counts cannot poison the total', () => {
   const db = new DuckDBManager();
   db.noteTableBytes('a', -5);
