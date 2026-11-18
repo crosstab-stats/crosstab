@@ -54,13 +54,32 @@ bottom; they are the project's memory and are not summarised away.
       we support has the fewest escape hatches, and it is the one the product is differentiated
       on. No step below is finished while it is desktop-only.
 
-      Concrete lead, found 2026-11-18: `registerOPFSFileName` takes a **string**, and the
-      worker calls `navigator.storage.getDirectory()` itself — no handle crosses the
-      postMessage boundary, so WebKit's objection does not apply. For an already-written
-      Parquet the size gate passes for free. That is a route to genuine out-of-core reads on
-      iOS *today*, independent of whether the database can be seeded. The storage probe now
-      tests it as its own case. (The code comment calls this "#122", which is not a task that
-      exists in this file — one of us should fix that; the mechanism is written up here.)
+      **CONFIRMED ON THE DEVICE, 2026-11-18 (iPhone, iOS 18.7, Safari 27).** Not a lead any
+      more. `registerOPFSFileName` takes a **string**; the worker calls
+      `navigator.storage.getDirectory()` and opens its own sync access handle, so no handle
+      crosses the postMessage boundary and WebKit's objection does not apply. The probe wrote
+      a file to OPFS, registered it by name and read it back — `registered: true`,
+      `rowsRead: [{n: 3}]` — in the same session that reported
+      `opfsHandlesToWorker: false` with the `DataCloneError`. Handle-posting fails and
+      by-name succeeds, same device, same run. For an already-written Parquet the size gate
+      costs nothing, since the file has bytes.
+
+      So iOS can have genuine out-of-core READS today, independent of whether the database
+      can ever be seeded. (The code comment calls this "#122", which is not a task that
+      exists in this file; the mechanism is written up here instead.)
+
+      **What it needs before it ships**, and why it was not done the moment it was measured:
+      the SQL reference becomes `opfs://<name>` rather than `<name>`, because that is the key
+      the registration creates. Checked: that is session-local, NOT persisted —
+      `#restoreWideSource` mints a fresh `${sourcePrefix}${seq}.parquet` on every restore and
+      what is saved is the BYTES. So there is no storage-compat problem, only a rename to
+      carry through `#wideFiles`, `dropRegisteredFile` and the `read_parquet(…)` call sites.
+
+      The open question is whether it should be ONE path or two: if by-name works on Chrome
+      as well, `#canUseOpfsHandles` stops being needed for Parquet at all and both platforms
+      get the same, simpler, genuinely out-of-core route. Do not rewrite the registration
+      until a desktop probe run says which — being right about iOS is not a reason to guess
+      about Chrome.
 
       1. **Fix the OPFS database first** (see the follow-up entry below). Most of the memory
          branches — `isWideDataset`, cell-sized batches, `rowGroupFor`, the cumulative table

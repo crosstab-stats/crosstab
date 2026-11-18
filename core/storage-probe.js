@@ -152,29 +152,56 @@ async function runCase(duckdb, label, { seed }) {
     if (seed) {
       // Make a valid, empty DuckDB image and put it in OPFS so the file is non-empty
       // BEFORE the real open — which is the condition the registration is gated on.
-      at('seed:instance');
-      const s = await makeInstance(duckdb);
-      try {
-        at('seed:open-memory');
-        await s.db.open({});
-        at('seed:connect');
-        const conn = await s.db.connect();
-        at('seed:attach');
-        await conn.query(`ATTACH '${name}' AS seed`);
-        at('seed:checkpoint');
-        await conn.query('CHECKPOINT');
-        at('seed:detach');
-        await conn.query('DETACH seed');
-        at('seed:copyFileToBuffer');
-        const bytes = await s.db.copyFileToBuffer(name);
-        result.seedBytes = bytes?.length ?? 0;
-        at('seed:opfsWrite');
-        await opfsWrite(name, bytes);
-        await conn.close();
-      } finally {
-        await s.db.terminate().catch(() => {});
-        s.worker.terminate();
+      // Two ways to produce a valid empty image, tried in order, because the first run
+      // died at `copyFileToBuffer` — almost certainly because it had already DETACHed,
+      // so the file was gone from DuckDB's registry by the time it was asked for. Copy
+      // before detaching; and if that is not it, open the path directly instead.
+      const strategies = [
+        {
+          name: 'attach-copy-detach',
+          run: async (db, conn) => {
+            await conn.query(`ATTACH '${name}' AS seed`);
+            await conn.query('CHECKPOINT');
+            const bytes = await db.copyFileToBuffer(name); // BEFORE the detach
+            await conn.query('DETACH seed').catch(() => {});
+            return bytes;
+          },
+        },
+        {
+          name: 'open-buffered-path',
+          run: async (db, conn) => {
+            await conn.query('CHECKPOINT').catch(() => {});
+            return db.copyFileToBuffer(name);
+          },
+          openPath: name, // open the file itself rather than attaching it
+        },
+      ];
+
+      result.seedAttempts = [];
+      let bytes = null;
+      for (const strategy of strategies) {
+        at(`seed:${strategy.name}`);
+        const s = await makeInstance(duckdb);
+        try {
+          await s.db.open(strategy.openPath ? { path: strategy.openPath } : {});
+          const conn = await s.db.connect();
+          bytes = await strategy.run(s.db, conn);
+          await conn.close();
+          result.seedAttempts.push({ strategy: strategy.name, bytes: bytes?.length ?? 0 });
+          if (bytes?.length) break;
+          bytes = null;
+        } catch (err) {
+          result.seedAttempts.push({ strategy: strategy.name, error: describeError(err).slice(0, 300) });
+          bytes = null;
+        } finally {
+          await s.db.terminate().catch(() => {});
+          s.worker.terminate();
+        }
       }
+      if (!bytes?.length) throw new Error(`no seed strategy produced an image: ${jsonSafe(result.seedAttempts)}`);
+      result.seedBytes = bytes.length;
+      at('seed:opfsWrite');
+      await opfsWrite(name, bytes);
       result.sizeBeforeOpen = await opfsSize(name);
     } else {
       result.sizeBeforeOpen = await opfsSize(name); // expected null: this is today's path
