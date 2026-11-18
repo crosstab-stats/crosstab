@@ -16,6 +16,10 @@
  */
 
 import { defineSetting } from './settings.js';
+// build-stamp.js imports nothing, so this cannot cycle. (help.js, which collects the
+// same two fields for Help ▸ Report a bug…, imports FROM here — which is why this
+// module reads the stamp itself rather than borrowing `collectDiagnostics`.)
+import { formatBuildTime, runningBuildStamp } from './build-stamp.js';
 
 const MAX_BUFFER = 2000;
 
@@ -83,11 +87,44 @@ export function setDebug(on) {
   if (on) debug('debug', 'logging enabled');
 }
 
-/** Export the buffered log entries as a downloadable JSON file. */
-export function saveLog() {
+/**
+ * Export the buffered log entries as a downloadable JSON file.
+ *
+ * ## Why the header is bigger than it was
+ *
+ * It used to carry `exported`, `userAgent` and the entries, and that is not enough to
+ * triage anything. A report off the owner's work desktop (a 67 MB CSV dying at 3.1 GiB)
+ * arrived as one entry — `logging enabled` — and no way to tell WHICH BUILD produced
+ * it. A day went into the stale-service-worker theory before the build stamp, read from
+ * a separate Help ▸ Report a bug…, showed the build was current and the fault was
+ * somewhere else entirely.
+ *
+ * `collectDiagnostics` in help.js had both fields all along. The export did not, and
+ * nobody files two reports. So the fields that answer the first two questions are here:
+ *
+ *  - `build`, via `runningBuildStamp`, which reads THROUGH the service worker and so
+ *    reports the code actually executing rather than the newest deploy (build-stamp.js
+ *    explains why those differ on an installed PWA, and why getting it backwards tells
+ *    you that you are up to date while you run last week's code).
+ *  - `lastError`, the always-on single slot. The ring buffer only fills when debugging
+ *    was ENABLED, which is exactly wrong for a bug report — nobody turns debugging on
+ *    before the thing they could not reproduce. An export can therefore have no entries
+ *    and still carry the failure.
+ */
+export async function saveLog() {
+  let build = 'unknown';
+  try {
+    build = formatBuildTime(await runningBuildStamp()) || 'unknown';
+  } catch {
+    /* a report that cannot name its build is still worth having */
+  }
   const payload = {
     exported: new Date().toISOString(),
+    build,
     userAgent: navigator.userAgent,
+    // Whether the fast multi-threaded path is even available on this device.
+    isolated: typeof crossOriginIsolated === 'boolean' ? String(crossOriginIsolated) : 'unknown',
+    lastError: lastError(),
     entries: _buffer.map((e) => ({
       time: new Date(e.ts).toISOString(),
       tag: e.tag,
