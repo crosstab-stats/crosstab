@@ -125,10 +125,24 @@ async function makeInstance(duckdb) {
     workerUrl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
   }
   const worker = new Worker(workerUrl);
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);
+  // A CAPTURING logger, not a ConsoleLogger. Two runs reported the seed failing with
+  // `[object Error] — Error` and nothing else: duckdb-wasm marshals worker errors across
+  // postMessage and the message does not survive, so no amount of squeezing the Error
+  // object on this side recovers it. The logger is the other channel — the worker's own
+  // account of what it was doing — and at DEBUG it says what the C++ side reported.
+  const logs = [];
+  const logger = {
+    log: (entry) => {
+      try {
+        logs.push(typeof entry === 'string' ? entry : jsonSafe(entry));
+        if (logs.length > 60) logs.shift(); // the tail is the interesting part
+      } catch { /* a logger must never be the thing that throws */ }
+    },
+  };
+  const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   URL.revokeObjectURL(workerUrl);
-  return { db, worker };
+  return { db, worker, logs };
 }
 
 /**
@@ -156,24 +170,44 @@ async function runCase(duckdb, label, { seed }) {
       // died at `copyFileToBuffer` — almost certainly because it had already DETACHed,
       // so the file was gone from DuckDB's registry by the time it was asked for. Copy
       // before detaching; and if that is not it, open the path directly instead.
+      // Each strategy is a LIST OF NAMED STEPS, not one opaque function. The last two runs
+      // said "attach-copy-detach failed" — which could have been the ATTACH, the
+      // CHECKPOINT or the copy, three different diagnoses. Now the failure names the
+      // statement.
       const strategies = [
         {
           name: 'attach-copy-detach',
-          run: async (db, conn) => {
-            await conn.query(`ATTACH '${name}' AS seed`);
-            await conn.query('CHECKPOINT');
-            const bytes = await db.copyFileToBuffer(name); // BEFORE the detach
-            await conn.query('DETACH seed').catch(() => {});
-            return bytes;
-          },
+          steps: [
+            ['attach', (db, conn) => conn.query(`ATTACH '${name}' AS seed`)],
+            ['checkpoint', (db, conn) => conn.query('CHECKPOINT')],
+            ['copyFileToBuffer', (db) => db.copyFileToBuffer(name)], // BEFORE the detach
+            ['detach', (db, conn) => conn.query('DETACH seed').catch(() => undefined)],
+          ],
+          // Which step's return value is the image.
+          bytesFrom: 'copyFileToBuffer',
         },
         {
           name: 'open-buffered-path',
-          run: async (db, conn) => {
-            await conn.query('CHECKPOINT').catch(() => {});
-            return db.copyFileToBuffer(name);
-          },
           openPath: name, // open the file itself rather than attaching it
+          steps: [
+            ['checkpoint', (db, conn) => conn.query('CHECKPOINT').catch(() => undefined)],
+            ['copyFileToBuffer', (db) => db.copyFileToBuffer(name)],
+          ],
+          bytesFrom: 'copyFileToBuffer',
+        },
+        {
+          // Third way in, added because the first two fail identically on both platforms
+          // and may share a cause: let DuckDB create the file through a plain CREATE,
+          // which exercises the write path without ATTACH or an explicit path at all.
+          name: 'attach-with-table',
+          steps: [
+            ['attach', (db, conn) => conn.query(`ATTACH '${name}' AS seed`)],
+            ['create', (db, conn) => conn.query('CREATE TABLE seed.t (i INTEGER)')],
+            ['checkpoint', (db, conn) => conn.query('CHECKPOINT seed')],
+            ['copyFileToBuffer', (db) => db.copyFileToBuffer(name)],
+            ['detach', (db, conn) => conn.query('DETACH seed').catch(() => undefined)],
+          ],
+          bytesFrom: 'copyFileToBuffer',
         },
       ];
 
@@ -182,28 +216,39 @@ async function runCase(duckdb, label, { seed }) {
       for (const strategy of strategies) {
         at(`seed:${strategy.name}`);
         const s = await makeInstance(duckdb);
+        const attempt = { strategy: strategy.name, reached: [] };
         try {
-          // READ_WRITE explicitly. Both strategies failed last run, and the second said
-          // why: "Cannot open database … in read-only mode: database does not exist".
-          // `open()` does not default to read-write, so neither ATTACH (which must
-          // create a file) nor opening a path that is not there could ever have worked.
+          // READ_WRITE explicitly. `open()` does not default to read-write, so neither
+          // ATTACH (which must CREATE a file) nor opening a path that is not there could
+          // ever have worked — the second strategy said exactly that once the error
+          // reporting was fixed.
+          attempt.reached.push('open');
           await s.db.open({
             ...(strategy.openPath ? { path: strategy.openPath } : {}),
             accessMode: duckdb.DuckDBAccessMode.READ_WRITE,
           });
+          attempt.reached.push('connect');
           const conn = await s.db.connect();
-          bytes = await strategy.run(s.db, conn);
+          for (const [label, fn] of strategy.steps) {
+            attempt.reached.push(label);
+            const out = await fn(s.db, conn);
+            if (label === strategy.bytesFrom) bytes = out;
+          }
           await conn.close();
-          result.seedAttempts.push({ strategy: strategy.name, bytes: bytes?.length ?? 0 });
-          if (bytes?.length) break;
-          bytes = null;
+          attempt.bytes = bytes?.length ?? 0;
+          if (!bytes?.length) bytes = null;
         } catch (err) {
-          result.seedAttempts.push({ strategy: strategy.name, error: describeError(err).slice(0, 300) });
+          attempt.failedAt = attempt.reached[attempt.reached.length - 1];
+          attempt.error = describeError(err).slice(0, 300);
           bytes = null;
         } finally {
+          // The worker's own account, which is the only place the real message survives.
+          attempt.workerLog = (s.logs ?? []).slice(-8);
           await s.db.terminate().catch(() => {});
           s.worker.terminate();
         }
+        result.seedAttempts.push(attempt);
+        if (bytes?.length) break;
       }
       if (!bytes?.length) throw new Error(`no seed strategy produced an image: ${jsonSafe(result.seedAttempts)}`);
       result.seedBytes = bytes.length;
@@ -232,6 +277,7 @@ async function runCase(duckdb, label, { seed }) {
   } catch (err) {
     result.failedAt = step;
     result.error = describeError(err);
+    result.workerLog = (inst?.logs ?? []).slice(-8);
   } finally {
     if (inst) {
       await inst.db.terminate().catch(() => {});
@@ -408,7 +454,10 @@ export async function probeStorage() {
     ? 'cold open is ALREADY disk-backed — the premise is wrong, re-read duckdb-manager.js'
     : seeded?.diskBacked
       ? 'seeding works: seed once, then never delete the file'
-      : `seeding did NOT make it disk-backed (failed at ${seeded?.failedAt ?? '?'})`;
+      // Name the STATEMENT, not just the strategy: "attach-copy-detach failed" could be
+      // three different diagnoses, and two runs were spent not knowing which.
+      : `seeding did NOT make it disk-backed (${(seeded?.seedAttempts ?? [])
+          .map((a) => `${a.strategy}@${a.failedAt ?? 'ok'}`).join(', ') || seeded?.failedAt || '?'})`;
   // Reported as two findings, not one. They fail independently, and conflating them is
   // how "it does not work on mobile" turns into "mobile gets the slow path" by default.
   report.verdict = `database: ${db} | opfs-by-name: ${byName?.readable ? 'READS — out-of-core by name works here' : `no (${byName?.failedAt ?? '?'})`}`;
