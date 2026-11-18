@@ -2341,6 +2341,29 @@ export async function boot(mounts) {
     order: 20,
     command: () => saveLog(),
   });
+  menus.register({
+    id: 'core:debug-storage-probe',
+    path: ['Edit', 'Debugging'],
+    label: 'Storage diagnostics…',
+    order: 30,
+    // Answers whether an `opfs://` database actually lands on disk, which decides the
+    // shape of the spill fix. Deliberate rather than automatic: it stands up a second
+    // duckdb instance for the duration. Writes only its own crosstab-probe-* files.
+    command: async () => {
+      const { probeStorage } = await import('./storage-probe.js');
+      if (!isDebug()) {
+        results.api.appendText('Turn on Edit ▸ Debugging ▸ Debug logging first — the probe reports through the log.');
+        return;
+      }
+      results.api.appendText('Running storage diagnostics… this takes a few seconds and builds a second DuckDB.');
+      try {
+        const report = await probeStorage();
+        results.api.appendText(`Storage diagnostics: ${report.verdict ?? 'see the debug log'}. Save the debug log to send the detail.`);
+      } catch (err) {
+        results.api.appendError(`Storage diagnostics failed: ${err.message}`);
+      }
+    },
+  });
 
   // `dataStore` kept as an alias to the manager (it delegates to the active
   // dataset) so console pokes / older references keep working. Exposed before the
