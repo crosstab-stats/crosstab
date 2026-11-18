@@ -30,7 +30,7 @@
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { uniqueName } = globalThis.ctStd;
+const { uniqueName, createTypeScan } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-excel-codec',
@@ -98,9 +98,24 @@ export async function readXlsx(app, { name }) {
   if (chosen == null) throw new Error('Excel import cancelled');
   if (!chosen.length) throw new Error('Excel: no sheets selected');
 
+  // Type the sheets, asking the host which recurring values mean "missing" (#the NA/PS
+  // problem — a Scorecard year typed 211 of 3,379 columns numeric here against the CSV
+  // reader's 3,360, because this rule was a COPY of that one and only one got fixed).
+  //
+  // Asked ONCE, from the primary sheet's proposal, and applied to every chosen sheet: a
+  // missing-value code is a convention of the file, not of a tab within it. A workbook
+  // whose sheets use different codes would need a prompt each, which is worse than this
+  // is wrong.
+  const aoas = chosen.map((sn) => sheetAoa(XLSX, wb.Sheets[sn]));
+  const scans = aoas.map((aoa) => scanSheet(aoa));
+  const accepted = typeof app.codec.missingCodes === 'function' && scans.length
+    ? await app.codec.missingCodes(scans[0].proposal())
+    : [];
+  const codes = Array.isArray(accepted) ? accepted.filter((v) => typeof v === 'string') : [];
+
   // Build each chosen sheet's columns; drop any that turn out to have no columns.
   const built = chosen
-    .map((sn) => ({ sheet: sn, ...buildColumns(sheetAoa(XLSX, wb.Sheets[sn])) }))
+    .map((sn, i) => ({ sheet: sn, ...buildColumns(aoas[i], scans[i].decide(codes)) }))
     .filter((b) => b.variables.length);
   if (!built.length) throw new Error('Excel: the selected sheet(s) have no columns');
 
@@ -110,7 +125,7 @@ export async function readXlsx(app, { name }) {
   const total = primary.columns[primary.variables[0].name].length;
   // The row count is known here, so the progress bar can show a denominator rather
   // than counting up towards nothing.
-  await app.codec.begin(primary.variables, primary.storageTypes, { rowCount: total });
+  await app.codec.begin(primary.variables, primary.storageTypes, { rowCount: total, missingCodes: codes });
   const perBatch = Math.max(1, Math.floor(EMIT_CELLS / Math.max(1, primary.variables.length)));
   for (let off = 0; off < total; off += perBatch) {
     const chunk = {};
@@ -188,7 +203,7 @@ async function readAll(app, size) {
 /** Turn an array-of-arrays (row 0 = header) into {variables, storageTypes, columns}:
  * numeric columns as Float64Array (NaN for missing), everything else as string
  * arrays (null for missing). */
-function buildColumns(aoa) {
+function buildColumns(aoa, decision = null) {
   if (!aoa.length) return { variables: [], storageTypes: {}, columns: {} };
 
   const headerRow = aoa[0] || [];
@@ -209,6 +224,10 @@ function buildColumns(aoa) {
     }
   }
 
+  // The typing rule is `createTypeScan`'s, shared with every codec that infers types
+  // from values. `decision` is what it concluded; a caller that has not run one gets a
+  // fresh scan with no accepted codes, which is the old behaviour exactly.
+  const decided = decision ?? scanSheet(aoa).decide([]);
   const variables = [];
   const storageTypes = {};
   const columns = {};
@@ -217,32 +236,34 @@ function buildColumns(aoa) {
     const nm = uniqueName(header[c], used);
     used[nm] = true;
     const values = raw[c];
-    if (isNumericColumn(values)) {
+    if (decided.isNumeric[c]) {
       variables.push({ name: nm, type: 'numeric', measurementLevel: 'scale' });
       storageTypes[nm] = 'numeric';
       const a = new Float64Array(values.length);
-      for (let i = 0; i < values.length; i++) a[i] = values[i] === null ? NaN : Number(values[i]);
+      for (let i = 0; i < values.length; i++) a[i] = decided.isMissing(values[i]) ? NaN : Number(values[i]);
       columns[nm] = a;
     } else {
       variables.push({ name: nm, type: 'string', measurementLevel: 'nominal' });
       storageTypes[nm] = 'string';
-      columns[nm] = values.map(cellToString);
+      // A value the host called missing is missing here too, even though the column
+      // stayed text — the same rule the CSV reader applies.
+      columns[nm] = values.map((v) => (decided.isMissing(v) ? null : cellToString(v)));
     }
   }
   return { variables, storageTypes, columns };
 }
 
-/** True if every non-null value is a real (finite) number — SheetJS raw mode yields
- * genuine JS numbers for numeric cells, so a text/date/boolean cell disqualifies the
- * column (→ string), matching the CSV codec's conservative rule. */
-function isNumericColumn(values) {
-  let seen = 0;
-  for (const v of values) {
-    if (v === null) continue;
-    seen++;
-    if (typeof v !== 'number' || !Number.isFinite(v)) return false;
-  }
-  return seen > 0;
+/** A spreadsheet cell is a number only when SheetJS handed back a real one. A text cell
+ * reading "01234" is a ZIP code, and parsing it would drop the leading zero — which is
+ * why this rule differs from the CSV reader's and is passed in rather than assumed. */
+const EXCEL_NUMERIC = (v) => typeof v === 'number' && Number.isFinite(v);
+
+/** Run the shared type scan over a sheet's rows (row 0 is the header). */
+function scanSheet(aoa) {
+  const width = aoa.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
+  const scan = createTypeScan({ columns: width, numeric: EXCEL_NUMERIC });
+  for (let r = 1; r < aoa.length; r++) scan.observeRow(aoa[r] || []);
+  return scan;
 }
 
 /** Stringify a cell for a string column: Dates → ISO text, everything else via

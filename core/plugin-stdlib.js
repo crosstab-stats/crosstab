@@ -1207,6 +1207,177 @@ export function subjectRows(cols) {
  * @param {number} rowCount rows, or -1 when the codec cannot know yet
  * @returns {boolean}
  */
+// --- typing text columns (one rule, one detector, every codec) ----------------
+//
+// This used to live inside builtin-csv-codec, and builtin-excel-codec carried a comment
+// saying its typing "mirrors the CSV codec" — which is exactly why fixing CSV's
+// mistyping left Excel with all of it. Measured on the same 3,379-column file: CSV now
+// types 3,360 columns numeric, Excel types 211.
+//
+// Typing text is a property of TABULAR DATA, not of a file format. A codec's job is
+// bytes → values; deciding what those values ARE belongs here, so there is one rule and
+// one place to fix.
+
+/** Distinct non-numeric values tracked per column before giving up on it.
+ *
+ * The memory bound, and the reason the detector is affordable at all: an `INSTNM` column
+ * has 6,272 distinct blocking values, and holding those for 3,379 columns is the very
+ * thing a wide import already dies of. A column that blows the cap is genuinely text and
+ * stops being tracked, so the cost is at most four short strings per numeric-looking
+ * column. A missing-value code recurs by definition — a column needing five DIFFERENT
+ * ones to become numeric is not a numeric column. */
+const MAX_CODES_PER_COLUMN = 4;
+
+/** Distinct codes offered to the host, so a file of columns full of unrelated junk
+ * cannot propose thousands. What does not fit is counted, never silently dropped. */
+const MAX_CANDIDATES = 12;
+
+/**
+ * Accumulate what is needed to type a table of text values, and to notice the recurring
+ * non-numeric values that are really missing-value codes.
+ *
+ * ## The rule
+ *
+ * A column is numeric iff every non-empty value either parses as finite or is a code the
+ * host accepted as missing — and the column had some value at all. That last clause
+ * preserves the old answer for an empty column: a string column, because nothing says it
+ * is a number and calling it numeric would turn every blank into NaN.
+ *
+ * ## Fed by ROW, deliberately
+ *
+ * One call per row rather than per value. At 21 million cells a per-cell call is 21
+ * million calls; per row it is six thousand, and both CSV and Excel already have a row
+ * in hand at the point they would ask.
+ *
+ * ## `numeric` is a parameter, because the formats genuinely disagree
+ *
+ * In a text format every value is text, so "looks like a number" is the only question
+ * there is. A spreadsheet already knows: SheetJS hands back a real JS number for a
+ * numeric cell and a string for a text one, and Excel's reader has always required the
+ * former. That difference is not pedantry — a ZIP code stored as text ("01234") must
+ * stay text, and parsing it would silently drop the leading zero.
+ *
+ * So the default is the text rule and a caller that knows better passes its own. What is
+ * shared is everything above it: the bounded blocker tracking, the two guards, the
+ * candidate arithmetic, and what "missing" means.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.columns] - Width, if known; otherwise taken from the first row.
+ * @param {(v: any) => boolean} [opts.numeric] - Does this value count as a number?
+ * @returns {{observeRow: (values: any[]) => void, rows: () => number,
+ *            proposal: () => object, decide: (accepted: Iterable<string>) => object}}
+ */
+export function createTypeScan({ columns = 0, numeric = (v) => Number.isFinite(Number(v)) } = {}) {
+  /** per column: distinct non-numeric values → count, or null once there were too many */
+  let blockers = columns ? Array.from({ length: columns }, () => new Map()) : null;
+  let hasNumber = columns ? new Array(columns).fill(false) : null;
+  let seen = columns ? new Array(columns).fill(false) : null;
+  let width = columns;
+  let rowCount = 0;
+
+  const widen = (n) => {
+    if (!blockers) { blockers = []; hasNumber = []; seen = []; width = 0; }
+    for (let c = width; c < n; c++) { blockers.push(new Map()); hasNumber.push(false); seen.push(false); }
+    if (n > width) width = n;
+  };
+
+  return {
+    observeRow(values) {
+      if (!values) return;
+      if (values.length > width) widen(values.length);
+      rowCount += 1;
+      for (let c = 0; c < width && c < values.length; c++) {
+        const v = values[c];
+        if (v === '' || v === undefined || v === null) continue;
+        seen[c] = true;
+        if (numeric(v)) { hasNumber[c] = true; continue; }
+        const b = blockers[c];
+        if (b === null) continue; // given up: too many distinct values to be codes
+        const key = String(v);
+        const n = b.get(key);
+        if (n !== undefined) b.set(key, n + 1);
+        else if (b.size < MAX_CODES_PER_COLUMN) b.set(key, 1);
+        else blockers[c] = null;
+      }
+    },
+
+    rows: () => rowCount,
+
+    /**
+     * What to offer the host, and the arithmetic its dialog needs.
+     *
+     * Two stages, and they are not the same set of columns. Stage 1 decides which VALUES
+     * may be offered, and only a column that is numeric apart from its codes gets a say —
+     * that is what keeps a three-value text column ("Public" / "Private Nonprofit" / …)
+     * from having its values proposed as missing codes. Stage 2 then counts every column
+     * those offered codes would recover, INCLUDING columns with no number in them at all,
+     * whose values are all codes: 2,652 columns of one Scorecard year are withheld for
+     * every institution, and they become numeric-and-entirely-missing once the code is
+     * ticked. Counting only stage 1's columns reported 695 where the answer was 3,347.
+     *
+     * `combos` carries the distinct blocker SETS, because the recovery count is not a sum
+     * of per-value counts: a column blocked by both codes is recovered by neither alone.
+     */
+    proposal() {
+      const weight = new Map();
+      for (let c = 0; c < width; c++) {
+        const b = blockers[c];
+        if (!b || b.size === 0 || !hasNumber[c]) continue;
+        for (const [v, n] of b) weight.set(v, (weight.get(v) || 0) + n);
+      }
+      const ranked = [...weight.entries()].sort((a, b) => b[1] - a[1]);
+      const offered = new Set(ranked.slice(0, MAX_CANDIDATES).map(([v]) => v));
+
+      const byValue = new Map();
+      const combos = new Map();
+      for (let c = 0; c < width; c++) {
+        const b = blockers[c];
+        if (!b || b.size === 0) continue;
+        const keys = [...b.keys()].sort();
+        if (!keys.every((v) => offered.has(v))) continue;
+        const sig = JSON.stringify(keys);
+        const combo = combos.get(sig);
+        if (combo) combo.columns += 1;
+        else combos.set(sig, { codes: keys, columns: 1 });
+        for (const [v, n] of b) {
+          const e = byValue.get(v);
+          if (e) { e.values += n; e.columns += 1; } else byValue.set(v, { value: v, values: n, columns: 1 });
+        }
+      }
+      return {
+        candidates: [...byValue.values()].sort((a, b) => b.values - a.values),
+        combos: [...combos.values()].sort((a, b) => b.columns - a.columns),
+        omitted: ranked.length - offered.size,
+      };
+    },
+
+    /**
+     * The verdict, given the codes the host accepted.
+     *
+     * @param {Iterable<string>} accepted
+     * @returns {{isNumeric: boolean[], codes: ?Set<string>, isMissing: (v: any) => boolean}}
+     */
+    decide(accepted) {
+      const codes = new Set(accepted ?? []);
+      const isNumeric = [];
+      for (let c = 0; c < width; c++) {
+        const b = blockers[c];
+        isNumeric.push(!!(b && seen[c] && [...b.keys()].every((v) => codes.has(v))));
+      }
+      const live = codes.size ? codes : null;
+      return {
+        isNumeric,
+        codes: live,
+        // An accepted code is missing wherever it appears, including in a column that
+        // stayed text: the host was asked whether the value means missing and said yes,
+        // and storing it as data in one column while striking it out in the next would
+        // be incoherent.
+        isMissing: (v) => v === '' || v === undefined || v === null || (live !== null && live.has(String(v))),
+      };
+    },
+  };
+}
+
 export function isWideDataset(varCount, rowCount) {
   const cols = Number(varCount) || 0;
   // An unknown row count is assumed substantial: guessing small is the guess that

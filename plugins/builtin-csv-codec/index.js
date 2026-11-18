@@ -16,7 +16,7 @@
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { uniqueName, isWideDataset } = globalThis.ctStd;
+const { uniqueName, isWideDataset, createTypeScan } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-csv-codec',
@@ -82,21 +82,12 @@ const READ_CHUNK = 1 << 22; // 4 MiB per random-access read
 // So pass 1 also COLLECTS the non-numeric values blocking each column, and the host is
 // asked which of them mean "missing" (pre-selected, never applied invisibly — the
 // answer belongs to the import, so a replay re-applies it rather than re-asking).
-
-/** Distinct non-numeric values tracked per column before giving up on it.
- *
- * This is the memory bound, and it is the whole reason the detector is affordable: an
- * `INSTNM` column has 6,272 distinct blocking values and holding those for 3,379
- * columns is the very thing this file already dies of. A column that blows the cap is
- * genuinely text and stops being tracked, so the cost is at most four short strings per
- * numeric-looking column. A missing-value code recurs by definition — a column needing
- * five DIFFERENT ones to become numeric is not a numeric column. */
-const MAX_CODES_PER_COLUMN = 4;
-
-/** Distinct codes offered to the host. A cap so a file of 3,379 columns of unrelated
- * junk cannot propose 13,516 of them; `omitted` reports what did not fit, because a
- * silent truncation reads as "this is all of them". */
-const MAX_CANDIDATES = 12;
+//
+// THE RULE AND THE DETECTOR NOW LIVE IN THE HOST (`createTypeScan` in plugin-stdlib),
+// not here. They were written here first, and builtin-excel-codec's comment said its
+// typing "mirrors the CSV codec" — which is precisely why fixing this file left Excel
+// typing 211 of the same 3,379 columns numeric against this reader's 3,360. Typing text
+// is a property of tabular data, not of CSV. This reader's job is to hand over rows.
 
 // --- read --------------------------------------------------------------------
 
@@ -142,46 +133,29 @@ export async function readCsv(app, { name }) {
   const delimiter = /\.tsv$/i.test(name || '') ? '\t' : ',';
 
   // --- pass 1: the header, the row count, and which columns are numeric ---------
+  //
+  // The typing RULE is not here. `createTypeScan` is the host's, shared by every codec
+  // that has to infer types from text — this reader's only job is to hand it rows.
   let header = null;
   let rowCount = 0;
-  /** Per column: the distinct non-numeric values seen and how often, or `null` once
-   * there were more than {@link MAX_CODES_PER_COLUMN} of them — which means the column
-   * is genuinely text rather than a numeric column with a code in it. */
-  let blockers = null;
-  /** Per column: did any value parse as finite? Used only to decide what may be
-   * PROPOSED — see {@link proposeMissingCodes}. It is deliberately not part of typing. */
-  let hasNumber = null;
-  let seen = null; // per column: any non-empty value at all?
+  let typeScan = null;
   await scan(app, size, delimiter, (row) => {
     if (!header) {
       header = row.map((h, i) => h.trim() || `V${i + 1}`);
-      blockers = header.map(() => new Map());
-      hasNumber = header.map(() => false);
-      seen = header.map(() => false);
+      typeScan = createTypeScan({ columns: header.length });
       return undefined;
     }
     if (row.length === 1 && row[0] === '') return undefined; // blank trailing line
     rowCount += 1;
-    for (let c = 0; c < header.length && c < row.length; c++) {
-      const v = row[c];
-      if (v === '' || v === undefined) continue;
-      seen[c] = true;
-      if (Number.isFinite(Number(v))) { hasNumber[c] = true; continue; }
-      const b = blockers[c];
-      if (b === null) continue; // given up: too many distinct values to be codes
-      const n = b.get(v);
-      if (n !== undefined) b.set(v, n + 1);
-      else if (b.size < MAX_CODES_PER_COLUMN) b.set(v, 1);
-      else blockers[c] = null;
-    }
+    typeScan.observeRow(row);
     return undefined;
   }, (rows) => app.codec.progress(rows, -1));
   if (!header || !header.length) throw new Error('CSV: no columns found');
 
   // Which recurring non-numeric values mean "missing"? The host decides (and records
   // the answer against the import); an empty set reproduces the old typing exactly.
-  const accepted = await proposeMissingCodes(app, header, blockers, hasNumber);
-  const codes = accepted.size ? accepted : null;
+  const accepted = await askMissingCodes(app, typeScan);
+  const { isNumeric, isMissing } = typeScan.decide(accepted);
 
   const used = {};
   const variables = [];
@@ -190,22 +164,7 @@ export async function readCsv(app, { name }) {
   for (let c = 0; c < header.length; c++) {
     const nm = uniqueName(header[c], used);
     used[nm] = true;
-    const b = blockers[c];
-    // Numeric iff the column was not given up as text, it had some value, and every
-    // non-empty value either parses as finite or is a code the host accepted.
-    //
-    // This is the ORIGINAL rule with one change: an accepted code no longer counts
-    // against a column. `seen[c]` preserves the old answer for a column with no values
-    // at all — a string column, because there is nothing to say it is a number and
-    // calling it numeric would turn every blank into NaN.
-    //
-    // A column whose values are ALL accepted codes therefore comes out numeric and
-    // entirely missing, which is right: the host was asked whether that value means
-    // missing and said yes. 2,652 columns of the owner's file are exactly this — every
-    // institution's figure withheld or unreported for 2025-26. What stops a TEXT column
-    // being swept up this way is that its values can never be proposed in the first
-    // place (see `hasNumber` in {@link proposeMissingCodes}), not a rule here.
-    const num = !!(b && seen[c] && [...b.keys()].every((v) => accepted.has(v)));
+    const num = !!isNumeric[c];
     isNum.push(num);
     variables.push({ name: nm, type: num ? 'numeric' : 'string', measurementLevel: num ? 'scale' : 'nominal' });
     storageTypes[nm] = num ? 'numeric' : 'string';
@@ -244,11 +203,11 @@ export async function readCsv(app, { name }) {
     for (let c = 0; c < width; c++) {
       const v = c < row.length ? row[c] : '';
       const col = buf[c];
-      // An accepted code is missing wherever it appears, including in a column that
-      // stayed text. The user ticked "NA means missing in this file", not "…in the
-      // columns it happened to rescue", and storing it as data in one column while
-      // striking it out in the next would be incoherent.
-      const missing = v === '' || v === undefined || (codes !== null && codes.has(v));
+      // `isMissing` is the scan's, so "which values count as missing" is decided in one
+      // place and applied identically by every codec — including in a column that stayed
+      // text, since the host ticked "NA means missing in this file", not "…in the columns
+      // it happened to rescue".
+      const missing = isMissing(v);
       if (isNum[c]) col[fill] = missing ? NaN : Number(v);
       else col[fill] = missing ? null : v;
     }
@@ -263,79 +222,24 @@ export async function readCsv(app, { name }) {
 /**
  * Ask the host which recurring non-numeric values should count as missing.
  *
- * Returns the accepted set — empty when the host does not implement the verb, which is
- * what keeps this reader working against an older host and reproduces the old typing
- * byte for byte.
+ * Thin on purpose: the detection and the arithmetic are `createTypeScan`'s, shared with
+ * every other codec that infers types from text. All that is left here is the call.
  *
- * ## Why it sends combinations as well as totals
- *
- * The dialog has to answer "how many columns become numeric?" for whatever subset the
- * user ticks, and that is not a sum of per-value counts: a column blocked by BOTH "NA"
- * and "PS" is recovered by neither alone. Per-value totals alone would overcount it
- * twice and a per-value "columns recovered" would undercount it to nothing.
- *
- * So the payload carries the distinct blocker SETS and how many columns have each —
- * `{codes:['NA'],columns:2843}`, `{codes:['PS'],columns:414}`,
- * `{codes:['NA','PS'],columns:90}` on the owner's file. Ticking a subset recovers every
- * combo whose codes are all ticked: 2,843 + 414 + 90 = 3,347, exactly as measured. It
- * is a handful of rows rather than one per column, because thousands of columns share
- * the same two codes.
+ * Returns the empty set when the host does not implement the verb — an older host, or
+ * the test harness — which reproduces the old typing byte for byte. The host is asked
+ * even when there is nothing to propose, because a REPLAYED import carries the codes
+ * accepted the first time and must apply them whether or not this file revision still
+ * proposes them.
  *
  * @param {object} app
- * @param {string[]} header
- * @param {Array<Map<string,number>|null>} blockers
- * @param {boolean[]} hasNumber
+ * @param {{proposal: () => object}} typeScan
  * @returns {Promise<Set<string>>}
  */
-async function proposeMissingCodes(app, header, blockers, hasNumber) {
+async function askMissingCodes(app, typeScan) {
   if (typeof app.codec.missingCodes !== 'function') return new Set();
-
-  // Stage 1 — which values may be OFFERED at all. Only a column that is numeric apart
-  // from its codes gets a say, which is what keeps a text column's values out: a
-  // three-value column of "Public" / "Private Nonprofit" / … has no number in it, so
-  // those never become candidates and nothing downstream can sweep the column up.
-  const weight = new Map(); // value -> occurrences, among proposal-eligible columns
-  for (let c = 0; c < header.length; c++) {
-    const b = blockers[c];
-    if (!b || b.size === 0 || !hasNumber[c]) continue;
-    for (const [v, n] of b) weight.set(v, (weight.get(v) || 0) + n);
-  }
-  const ranked = [...weight.entries()].sort((a, b) => b[1] - a[1]);
-  const offered = new Set(ranked.slice(0, MAX_CANDIDATES).map(([v]) => v));
-
-  // Stage 2 — the arithmetic, over every column the offered codes would actually
-  // recover. That includes columns with no number in them at all, whose values are ALL
-  // codes: 2,652 of the owner's columns are withheld for every institution, and they
-  // become numeric-and-entirely-missing the moment the code is ticked. Counting only
-  // stage 1's columns would have told the user 695 where the answer is 3,347.
-  const byValue = new Map(); // value -> {value, values, columns}
-  const combos = new Map(); // sorted codes joined -> {codes, columns}
-  for (let c = 0; c < header.length; c++) {
-    const b = blockers[c];
-    if (!b || b.size === 0) continue;
-    const keys = [...b.keys()].sort();
-    if (!keys.every((v) => offered.has(v))) continue; // not recoverable by what is offered
-    const sig = JSON.stringify(keys);
-    const combo = combos.get(sig);
-    if (combo) combo.columns += 1;
-    else combos.set(sig, { codes: keys, columns: 1 });
-    for (const [v, n] of b) {
-      const e = byValue.get(v);
-      if (e) { e.values += n; e.columns += 1; } else byValue.set(v, { value: v, values: n, columns: 1 });
-    }
-  }
-  // The host is asked even when there is nothing to propose. A REPLAYED import carries
-  // the codes that were accepted the first time, and must apply them whether or not
-  // this file revision still has a column that would propose them — otherwise re-running
-  // the same script against next year's release silently retypes everything. An empty
-  // proposal is the host's cue not to put a dialog up, not a reason to skip asking.
-  const answer = await app.codec.missingCodes({
-    candidates: [...byValue.values()].sort((a, b) => b.values - a.values),
-    combos: [...combos.values()].sort((a, b) => b.columns - a.columns),
-    omitted: ranked.length - offered.size,
-  });
-  // The host decides; anything it names that was not offered is still honoured, since
-  // a recorded import may legitimately carry codes from a different file revision.
+  const answer = await app.codec.missingCodes(typeScan.proposal());
+  // Anything the host names is honoured even if it was not offered: a recorded import
+  // may legitimately carry codes from a different revision of the file.
   return new Set(Array.isArray(answer) ? answer.filter((v) => typeof v === 'string') : []);
 }
 
