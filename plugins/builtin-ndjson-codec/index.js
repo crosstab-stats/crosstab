@@ -48,7 +48,7 @@ const READ_CHUNK = 1 << 20; // 1 MiB source reads
 // Values per ingest batch, not rows: an object with three thousand keys costs three
 // thousand times what one with three keys does, and a fixed row count cannot know that.
 // `perBatch` is derived once the first object reveals the width.
-const READ_CELLS = 2_000_000;
+const READ_CELLS = 1_000_000;
 const READ_BATCH_MAX = 10_000; // ...and never more rows than this, however narrow
 const WRITE_BATCH = 10_000; // rows per output flush
 

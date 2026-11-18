@@ -175,3 +175,50 @@ test('a read verb refuses politely outside a read, rather than being undefined',
     assert.throws(() => svc.serviceApi[verb](), /outside a codec invocation/, verb);
   }
 });
+
+// =============================================================================
+// Where a dataset is ingested, and how much of it is in memory while that happens
+// =============================================================================
+
+test('the wide rule routes on SIZE, and a width term was measured and rejected', async () => {
+  const { isWideDataset } = await import('../core/plugin-stdlib.js');
+  // The shapes the rule is for.
+  assert.equal(isWideDataset(7000, 70000), true, 'the 7k-column GSS');
+  assert.equal(isWideDataset(50, 2_000_000), true, 'tall rather than wide');
+  assert.equal(isWideDataset(50, 1000), false, 'an ordinary file becomes a table');
+  // An unknown row count assumes substantial: guessing small is the guess that crashes.
+  assert.equal(isWideDataset(500, -1), true);
+
+  // And the one that is pinned BY A MEASUREMENT rather than by reasoning. A 3,300-column
+  // College Scorecard extract is 21 million values — under the threshold — and it is
+  // what killed a phone, so routing it out of core was the obvious guess. Measured on
+  // desktop: 7.3s and 178 MiB of JS heap through parquet, against 8.7s and 121 MiB as a
+  // table. The out-of-core path costs MORE, because it accumulates a row group in JS.
+  // If this ever flips to `true`, that measurement has to be redone first.
+  assert.equal(isWideDataset(3300, 6500), false);
+});
+
+test('a row group is sized by cells, so the wide path is bounded too', async () => {
+  const { rowGroupFor } = await import('../core/plugin-stdlib.js');
+  // The out-of-core writer accumulates a whole row group in JS before writing it, so
+  // the group size IS that path's peak memory. A flat 8,000 rows had the same blind
+  // spot as a flat batch size: 26 million values at 3,300 columns, 56 million at 7,000.
+  for (const cols of [10, 50, 1200, 3300, 7000]) {
+    assert.ok(rowGroupFor(cols) * cols <= 4_000_000, `${cols} columns -> ${rowGroupFor(cols)} rows`);
+  }
+  // Nothing narrow changes: the old 8,000 is still the cap.
+  assert.equal(rowGroupFor(10), 8000);
+  assert.equal(rowGroupFor(50), 8000);
+  // ...and nothing is driven so small that the file becomes all overhead.
+  assert.ok(rowGroupFor(100000) >= 256);
+});
+
+test('both codecs route on the SAME rule', async () => {
+  // Two copies of a routing decision send the same file down different paths depending
+  // on which reader opened it. readstat had the only copy and CSV had none.
+  for (const name of ['builtin-csv-codec', 'builtin-readstat-codec']) {
+    const src = readFileSync(`plugins/${name}/index.js`, 'utf8');
+    assert.match(src, /isWideDataset/, `${name} does not use the shared rule`);
+    assert.ok(!/Math\.ceil\(\(varCount \* rows\)/.test(code(src)), `${name} still has its own copy`);
+  }
+});

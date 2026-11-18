@@ -70,12 +70,13 @@ function formatForName(name) {
   return FORMAT_BY_EXT[i >= 0 ? String(name).slice(i).toLowerCase() : ''] ?? null;
 }
 
-/** Ultra-wide heuristic (mirrors the host path): route huge column counts to the
- * out-of-core loadWide ingest rather than a DuckDB table (OOMs on ~7k-col GSS). */
-function isWide(varCount, rowCount) {
-  const rows = rowCount >= 0 ? rowCount : 100000;
-  return Math.ceil((varCount * rows) / 4_000_000) > 8;
-}
+/** Route huge or very WIDE datasets to the out-of-core loadWide ingest rather than a
+ * DuckDB table. The rule itself moved to the stdlib when the CSV codec turned out to
+ * need it too — and to need a term this copy lacked: it measured total SIZE only, so a
+ * 3,300-column by 6,500-row file came in under it and still killed an iPhone's web
+ * view. See `isWideDataset`. */
+const { isWideDataset } = globalThis.ctStd;
+const isWide = (varCount, rowCount) => isWideDataset(varCount, rowCount);
 
 // --- engine (main-thread, ASYNCIFY) -----------------------------------------
 // One Module for the plugin's lifetime, instantiated on first use from the host-

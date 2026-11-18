@@ -74,7 +74,7 @@ export const manifest = {
 // reader came to hand DuckDB one batch of 21 million cells and OOM at 3.1 GiB
 // (owner, 2026-11-17). A sheet that wide is rarer than a CSV that wide, but the
 // arithmetic is identical and so is the fix.
-const EMIT_CELLS = 2_000_000;
+const EMIT_CELLS = 1_000_000;
 
 // --- read --------------------------------------------------------------------
 

@@ -1183,3 +1183,51 @@ export function subjectRows(cols) {
   const n = cols[0]?.length ?? 0;
   return Array.from({ length: n }, (_, i) => cols.map((c) => c[i]));
 }
+
+/**
+ * Should this dataset go to the out-of-core (Parquet) ingest rather than a DuckDB table?
+ *
+ * One rule, in one place, because two codecs route on it and a routing decision that
+ * disagrees with itself sends the same file down different paths depending on which
+ * reader opened it. `builtin-readstat-codec` had the only copy and `builtin-csv-codec`
+ * had none, so a huge CSV built a table however big it was.
+ *
+ * ## The threshold is about SIZE, and a width term was tried and rejected
+ *
+ * A DuckDB table charges per column as well as per value, so it was tempting to route
+ * anything very wide — a 3,300-column College Scorecard extract is only 21 million
+ * values, under this threshold, and it is what an iPhone died on. Measured on desktop
+ * with that shape, the two paths came out at 7.3s/178 MiB of JS heap (parquet) against
+ * 8.7s/121 MiB (table): the out-of-core path cost MORE, because it accumulates a whole
+ * row group in JS before writing it. Routing on width would have been a guess that made
+ * the constrained case worse, so it is not here. If the width cost is ever shown to
+ * matter, the number to beat is the one above.
+ *
+ * @param {number} varCount columns
+ * @param {number} rowCount rows, or -1 when the codec cannot know yet
+ * @returns {boolean}
+ */
+export function isWideDataset(varCount, rowCount) {
+  const cols = Number(varCount) || 0;
+  // An unknown row count is assumed substantial: guessing small is the guess that
+  // crashes, and the parquet path is only slower, never wrong.
+  const rows = rowCount >= 0 ? rowCount : 100000;
+  return Math.ceil((cols * rows) / 4_000_000) > 8;
+}
+
+/**
+ * Rows per Parquet row group for a dataset this wide.
+ *
+ * The out-of-core writer accumulates a whole row group in JS before writing it, so the
+ * group size IS the peak memory of that path — and a flat row count has the same blind
+ * spot a flat batch size had: 8,000 rows is 80,000 values at ten columns and 56 million
+ * at the 7,000-column GSS this path exists for. The budget is therefore in VALUES, with
+ * the old 8,000 kept as the cap so nothing narrow changes.
+ *
+ * @param {number} varCount columns
+ * @returns {number}
+ */
+export function rowGroupFor(varCount) {
+  const cols = Math.max(1, Number(varCount) || 1);
+  return Math.max(256, Math.min(8000, Math.floor(4_000_000 / cols)));
+}

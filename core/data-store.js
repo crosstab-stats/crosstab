@@ -44,7 +44,7 @@
  */
 
 import { CoreEvents } from './event-bus.js';
-import { safeText } from './plugin-stdlib.js';
+import { safeText, rowGroupFor } from './plugin-stdlib.js';
 import { quoteIdent } from './duckdb-manager.js';
 import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
@@ -554,13 +554,19 @@ export class DataStore {
    *   - Stream the whole file once, calling `onBatch` per batch of rows (all columns).
    * @returns {Promise<void>}
    */
-  async loadWide({ mode = 'replace', source, origin, importer, rowGroupRows = 8000, variables, rowCount, onProgress, stream }) {
+  async loadWide({ mode = 'replace', source, origin, importer, rowGroupRows = 0, variables, rowCount, onProgress, stream }) {
     if (!Array.isArray(variables) || variables.length === 0) {
       throw new Error('loadWide: variables (the file catalog) are required');
     }
     const had = this.#hasData();
     const combine = had && mode === 'append' ? 'append' : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
+
+    // A row group is accumulated whole in JS before it is written, so its size IS the
+    // peak memory of this path — and a flat row count is blind to width in exactly the
+    // way a flat batch size was: 8,000 rows is 80,000 values at ten columns and 26
+    // million at 3,300. Derived from the width unless the caller insists.
+    const groupRows = rowGroupRows > 0 ? rowGroupRows : rowGroupFor(variables.length);
 
     const seq = ++this.#sourceSeq;
     const base = seq * ROWID_STRIDE;
@@ -608,7 +614,7 @@ export class DataStore {
         for (let k = 0; k < n; k++) rowIdx.push(rowBase + k);
         rowBase += n;
         accRows += n;
-        if (accRows >= rowGroupRows) flush();
+        if (accRows >= groupRows) flush();
         onProgress?.(rowBase, rowCount);
       });
       flush();

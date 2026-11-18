@@ -16,7 +16,7 @@
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { uniqueName } = globalThis.ctStd;
+const { uniqueName, isWideDataset } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-csv-codec',
@@ -47,7 +47,20 @@ export const manifest = {
 };
 
 const WRITE_BATCH = 50_000;
-const EMIT_CELLS = 2_000_000; // target values per batch; rows-per-batch derived
+// Values per ingest batch; rows-per-batch is derived from the file's width.
+//
+// Sized for the platform that is tight, not the one this is developed on. A batch
+// crosses the sandbox boundary by postMessage, and iOS/Safari REFUSES the transfer
+// list across an opaque-origin iframe (#91) — so there every batch is CLONED, and the
+// transient peak is the batch twice over. At a million values that is 8 MiB doubled
+// rather than 16.
+//
+// Measured at 3,300 columns, ingest time and JS heap after: 500k -> 11.1s/92 MiB,
+// 1M -> 10.6s/98 MiB, 2M -> 8.7s/121 MiB. The heap figures are one sample each and
+// move with GC timing, so the choice rests on the clone above rather than on them;
+// what the timings do show is that the cost of a smaller batch lands on WIDE files,
+// where a batch is few rows and the per-column overhead is paid more often.
+const EMIT_CELLS = 1_000_000;
 const READ_CHUNK = 1 << 22; // 4 MiB per random-access read
 
 // --- read --------------------------------------------------------------------
@@ -133,7 +146,15 @@ export async function readCsv(app, { name }) {
   }
 
   // --- pass 2: fill and emit ----------------------------------------------------
-  await app.codec.begin(variables, storageTypes, { rowCount });
+  // A dataset too big for a DuckDB table goes to the out-of-core ingest instead — the
+  // host writes Parquet and queries that. readstat has routed on this rule for a while
+  // and the CSV reader did not, so a huge CSV built a table however big it was.
+  //
+  // The rule is about SIZE. Routing on WIDTH was tried and dropped: measured at 3,300
+  // columns the parquet path cost MORE (178 MiB of JS heap against 121), because it
+  // accumulates a whole row group in JS. See `isWideDataset`.
+  const wide = isWideDataset(variables.length, rowCount);
+  await app.codec.begin(variables, storageTypes, { rowCount, wide });
   const width = variables.length;
   const perBatch = Math.max(1, Math.min(rowCount || 1, Math.floor(EMIT_CELLS / Math.max(1, width))));
   let buf = newBuffers(variables, isNum, perBatch);

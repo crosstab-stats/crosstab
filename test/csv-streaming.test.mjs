@@ -50,6 +50,7 @@ async function run(text, { chunk = 1 << 22, name = 'data.csv' } = {}) {
         out.variables = variables;
         out.storageTypes = storageTypes;
         out.rowCount = opts?.rowCount ?? null;
+        out.wide = !!opts?.wide;
       },
       progress: async (done, total) => { out.progress.push([done, total]); },
       batch: async (cols) => { out.batches.push(cols); },
@@ -237,4 +238,29 @@ test('every column in a batch has the SAME length', async () => {
   }
   assert.equal(r.columns.v0.length, 5000, 'and not one row was dropped');
   assert.equal(r.columns.v1.length, 5000);
+});
+
+// =============================================================================
+// Where the data goes once it is parsed
+// =============================================================================
+
+test('a dataset too big for a table is routed to the out-of-core ingest', async () => {
+  // readstat has routed on this rule for a while and the CSV reader did not, so a huge
+  // CSV built a DuckDB table however big it got. The threshold is ~32 million values;
+  // 400 columns x 90,000 rows is 36 million.
+  const cols = 400;
+  const header = Array.from({ length: cols }, (_, c) => `v${c}`).join(',');
+  const line = Array.from({ length: cols }, (_, c) => String(c)).join(',');
+  const r = await run(`${header}
+${`${line}
+`.repeat(90000)}`);
+  assert.equal(r.rowCount, 90000);
+  assert.equal(r.wide, true, 'a 36-million-value file must not become a DuckDB table');
+});
+
+test('an ordinary file is NOT routed out of core', async () => {
+  // The parquet path is slower and the file lands as a file rather than a table, so it
+  // is for the shapes that need it. Routing everything there would be its own bug.
+  const r = await run('a,b,c\n1,x,2\n2,y,3\n');
+  assert.ok(!r.wide, 'a three-column file went out of core');
 });
