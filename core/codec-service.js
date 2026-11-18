@@ -173,6 +173,9 @@ export class CodecService {
       },
       begin: (variables, storageTypes, opts) => need('read').sink.begin(variables, storageTypes, opts),
       batch: (columns) => need('read').sink.batch(columns),
+      // Advisory: "still working, this many rows". A codec with a long pass that emits
+      // no batches — a CSV counting its rows — has nothing else to say so with.
+      progress: (done, total) => need('read').sink.progress(done, total),
       // --- write: emit output bytes ---
       writeChunk: (bytes) => {
         const s = need('write');

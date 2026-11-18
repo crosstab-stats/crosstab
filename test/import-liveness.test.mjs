@@ -130,3 +130,48 @@ test('the host relays a codec report, including before the schema is known', () 
   const begun = imp.indexOf('await reader.begin()');
   assert.ok(at > 0 && begun > 0 && at < begun, 'subscribe before begin(), not after');
 });
+
+// =============================================================================
+// The chain, end to end — because checking the links is not checking the chain
+// =============================================================================
+
+test('every codec verb exists at all four points in the chain', async () => {
+  // THE BUG THIS EXISTS FOR. `progress` was added to the sandbox namespace, to the
+  // broker's dispatch table, and to the read session's sink — three of the four — and
+  // the fourth, the `serviceApi` object the dispatch actually calls, was missed. Every
+  // test above passed. The import died on an iPhone with:
+  //
+  //   plugin crashed during loading: services.codec.progress is not a function
+  //
+  // (owner, 2026-11-18). Each link was checked; the chain was not. So this walks it.
+  const { CodecService } = await import('../core/codec-service.js');
+  const svc = new CodecService({ importers: {}, exporters: {}, loader: {}, results: {} });
+  const api = new Set(Object.keys(svc.serviceApi));
+
+  const broker = readFileSync('core/plugin-broker.js', 'utf8');
+  const dispatched = [...broker.matchAll(/dispatch\['codec\.(\w+)'\]/g)].map((m) => m[1]);
+  assert.ok(dispatched.length >= 6, `found only ${dispatched.length} dispatched codec verbs`);
+
+  const host = readFileSync('plugin-host.html', 'utf8');
+  const exposed = /makeNamespace\('codec', \[([^\]]*)\]/.exec(host)?.[1] ?? '';
+  const inSandbox = new Set([...exposed.matchAll(/'(\w+)'/g)].map((m) => m[1]));
+
+  for (const verb of dispatched) {
+    assert.ok(api.has(verb), `broker dispatches codec.${verb}, but serviceApi has no such verb`);
+    assert.ok(inSandbox.has(verb), `codec.${verb} is dispatched but not exposed to plugins`);
+  }
+  // ...and nothing is offered to a plugin that the host cannot answer.
+  for (const verb of inSandbox) {
+    assert.ok(dispatched.includes(verb), `plugins can call codec.${verb}, but nothing dispatches it`);
+  }
+});
+
+test('a read verb refuses politely outside a read, rather than being undefined', async () => {
+  // `progress` is advisory, but it still goes through the same session guard as the
+  // rest: a codec calling it in a write would otherwise reach into a null session.
+  const { CodecService } = await import('../core/codec-service.js');
+  const svc = new CodecService({ importers: {}, exporters: {}, loader: {}, results: {} });
+  for (const verb of ['begin', 'batch', 'progress']) {
+    assert.throws(() => svc.serviceApi[verb](), /outside a codec invocation/, verb);
+  }
+});
