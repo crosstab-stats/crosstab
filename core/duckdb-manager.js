@@ -403,7 +403,9 @@ export class DuckDBManager {
    *
    * @param {Array<{name: string, type: 'numeric'|'string'}>} columns - Column schema
    *   (numeric → DOUBLE, string → UTF8 BYTE_ARRAY), in order.
-   * @returns {Promise<{writeRowGroup: (columnData: Array<{name: string, data: ArrayLike<*>}>) => void, finalize: (name: string) => Promise<number>}>}
+   * @returns {Promise<{writeRowGroup: (columnData: Array<{name: string, data: ArrayLike<*>}>) => void, finalize: (name: string) => Promise<string>}>}
+   *   `finalize` resolves to the DuckDB REFERENCE for the file (`opfs://<name>` on the
+   *   by-name route), which is what `read_parquet` must be given.
    */
   async openParquetWriter(columns) {
     if (!this.#parquetWriter) this.#parquetWriter = await import(/* @vite-ignore */ getAssets().hyparquetWriterUrl);

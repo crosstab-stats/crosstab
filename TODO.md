@@ -75,11 +75,27 @@ bottom; they are the project's memory and are not summarised away.
       what is saved is the BYTES. So there is no storage-compat problem, only a rename to
       carry through `#wideFiles`, `dropRegisteredFile` and the `read_parquet(…)` call sites.
 
-      The open question is whether it should be ONE path or two: if by-name works on Chrome
-      as well, `#canUseOpfsHandles` stops being needed for Parquet at all and both platforms
-      get the same, simpler, genuinely out-of-core route. Do not rewrite the registration
-      until a desktop probe run says which — being right about iOS is not a reason to guess
-      about Chrome.
+      **ANSWERED and SHIPPED (9e4fc8d):** by-name works on Chromium too, so it is one path.
+      `registerParquetFile` uses it everywhere and the handle route is a fallback nothing
+      normal takes.
+
+      **WHAT IS STILL NOT FIXED ON MOBILE, and it is half the story.** Only the wide-file
+      READ path went through `registerParquetFile`. The streaming out-of-core INGEST
+      (`beginStreamIngest`) registers each OPFS part with `registerFileHandle` and then has
+      DuckDB `COPY … TO` it — so on WebKit it still falls back to the in-memory ingest.
+
+      And it cannot simply switch to by-name, because of an asymmetry worth stating plainly:
+      **by-name registration is gated on the file already having bytes** (the same
+      `!fromCached && handle.getSize()` that defeats the database seeding). Registering a
+      *new, empty* part to write into therefore cannot work — the gate skips it and it
+      buffers. Reading a file that already exists is fine, which is exactly why
+      `registerParquetFile` works: it writes the bytes with `createWritable` on the main
+      thread FIRST, then registers.
+
+      So the ingest path needs a different shape on WebKit — e.g. COPY to a buffered file,
+      `copyFileToBuffer`, write to OPFS, register by name — which costs an extra copy and
+      should be measured before being assumed better than the in-memory ingest it replaces.
+      Until then: mobile has out-of-core READS but not out-of-core INGEST.
 
       1. **Fix the OPFS database first** (see the follow-up entry below). Most of the memory
          branches — `isWideDataset`, cell-sized batches, `rowGroupFor`, the cumulative table
