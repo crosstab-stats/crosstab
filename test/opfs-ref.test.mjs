@@ -23,7 +23,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { opfsRef } = await import('../core/duckdb-manager.js');
+const { opfsRef, opfsName } = await import('../core/duckdb-manager.js');
+const { stripComments } = await import('../core/plugin-modules.js');
+const { readFileSync } = await import('node:fs');
 
 test('a plain name becomes an opfs reference', () => {
   assert.equal(opfsRef('ct_wide_3.parquet'), 'opfs://ct_wide_3.parquet');
@@ -42,10 +44,29 @@ test('empty and nullish inputs do not produce "opfs://undefined"', () => {
   assert.equal(opfsRef(undefined), 'opfs://');
 });
 
-test('stripping the prefix recovers the OPFS file name', () => {
-  // The inverse `dropRegisteredFile` performs: OPFS knows nothing about the prefix, so
-  // `removeEntry` must never see it.
-  const strip = (n) => String(n ?? '').replace(/^opfs:\/\//, '');
-  assert.equal(strip(opfsRef('ct_wide_3.parquet')), 'ct_wide_3.parquet');
-  assert.equal(strip('ct_wide_3.parquet'), 'ct_wide_3.parquet', 'a plain name survives untouched');
+test('opfsName is the inverse, and idempotent', () => {
+  assert.equal(opfsName(opfsRef('ct_wide_3.parquet')), 'ct_wide_3.parquet');
+  assert.equal(opfsName('ct_wide_3.parquet'), 'ct_wide_3.parquet', 'a plain name survives untouched');
+  assert.equal(opfsName(opfsName('opfs://x')), 'x');
+  assert.equal(opfsName(null), '');
+});
+
+test('EVERY OPFS call in duckdb-manager strips the prefix first', () => {
+  // The rule, enforced rather than remembered. `opfsRef` made the reference flow outward
+  // as `src.file`, the save path handed it to `getFileHandle`, and OPFS rejected it —
+  // `/` and `:` are not legal in a name:
+  //
+  //   TypeError: Failed to execute 'getFileHandle' on 'FileSystemDirectoryHandle':
+  //   Name is not allowed.
+  //
+  // `dropRegisteredFile` had been taught to strip and `readOpfsFile` had not. One
+  // unwrapped call site is the whole bug, so none of them may be unwrapped.
+  //
+  // Comments stripped first: the explanation above quotes the broken form, and this
+  // assertion would otherwise match the prose rather than the code.
+  const src = stripComments(readFileSync('core/duckdb-manager.js', 'utf8'));
+  const calls = src.match(/\.(?:getFileHandle|removeEntry)\s*\(([^,)]*)/g) ?? [];
+  assert.ok(calls.length >= 8, `expected the OPFS call sites, found ${calls.length}`);
+  const bare = calls.filter((c) => !c.includes('opfsName('));
+  assert.deepEqual(bare, [], 'these reach OPFS without stripping the opfs:// prefix');
 });

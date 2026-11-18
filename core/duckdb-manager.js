@@ -241,12 +241,12 @@ export class DuckDBManager {
     const PROT = this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS;
     const sqlList = (names) => names.map((p) => `'${p}'`).join(', ');
     const reReg = async (name) => {
-      const h = await root.getFileHandle(name);
+      const h = await root.getFileHandle(opfsName(name));
       await this.#db.registerFileHandle(name, h, PROT, true);
     };
     const removePart = async (name) => {
       try { await this.#db.dropFile(name); } catch { /* best-effort */ }
-      try { await root.removeEntry(name); } catch { /* best-effort */ }
+      try { await root.removeEntry(opfsName(name)); } catch { /* best-effort */ }
     };
 
     const flushPart = async () => {
@@ -261,7 +261,7 @@ export class DuckDBManager {
       // occasionally flush truncated under load — retry while we still have the data).
       let ok = false;
       for (let attempt = 0; attempt < 3 && !ok; attempt++) {
-        const handle = await root.getFileHandle(name, { create: true });
+        const handle = await root.getFileHandle(opfsName(name), { create: true });
         await this.#db.registerFileHandle(name, handle, PROT, true);
         await conn.query(`COPY ${src} TO '${name}' (FORMAT parquet)`);
         await this.#db.dropFile(name); // release write handle → flush to OPFS
@@ -331,7 +331,7 @@ export class DuckDBManager {
     const name = '__ct_fsaccess_probe';
     try {
       const root = await navigator.storage.getDirectory();
-      const h = await root.getFileHandle(name, { create: true });
+      const h = await root.getFileHandle(opfsName(name), { create: true });
       await this.#db.registerFileHandle(name, h, this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS, true);
       this.#opfsHandleOk = true;
     } catch {
@@ -340,7 +340,7 @@ export class DuckDBManager {
     try { await this.#db.dropFile(name); } catch { /* best-effort */ }
     try {
       const root = await navigator.storage.getDirectory();
-      await root.removeEntry(name);
+      await root.removeEntry(opfsName(name));
     } catch { /* best-effort */ }
     return this.#opfsHandleOk;
   }
@@ -400,7 +400,7 @@ export class DuckDBManager {
     // Write the OPFS file regardless (main-thread createWritable works on iOS, and it
     // keeps the file available for readOpfsFile/persistence).
     const root = await navigator.storage.getDirectory();
-    const handle = await root.getFileHandle(name, { create: true });
+    const handle = await root.getFileHandle(opfsName(name), { create: true });
     const writable = await handle.createWritable();
     await writable.write(bytes);
     await writable.close();
@@ -483,7 +483,7 @@ export class DuckDBManager {
     try { await this.#db.dropFile(opfsRef(plain)); } catch { /* best-effort */ }
     try { await this.#db.dropFile(plain); } catch { /* best-effort */ }
     if (removeFromOpfs) {
-      try { const root = await navigator.storage.getDirectory(); await root.removeEntry(plain); } catch { /* best-effort */ }
+      try { const root = await navigator.storage.getDirectory(); await root.removeEntry(opfsName(name)); } catch { /* best-effort */ }
     }
   }
 
@@ -491,7 +491,7 @@ export class DuckDBManager {
    * export). @param {string} name @returns {Promise<Uint8Array>} */
   async readOpfsFile(name) {
     const root = await navigator.storage.getDirectory();
-    const handle = await root.getFileHandle(name);
+    const handle = await root.getFileHandle(opfsName(name));
     const file = await handle.getFile();
     return new Uint8Array(await file.arrayBuffer());
   }
@@ -505,7 +505,7 @@ export class DuckDBManager {
       for await (const [n] of root.entries()) {
         if (n.startsWith(`${table}__`)) {
           try { await this.#db?.dropFile(n); } catch { /* best-effort */ }
-          try { await root.removeEntry(n); } catch { /* best-effort */ }
+          try { await root.removeEntry(opfsName(n)); } catch { /* best-effort */ }
         }
       }
     } catch { /* OPFS unavailable */ }
@@ -693,8 +693,8 @@ export class DuckDBManager {
       const OPFS_DB = 'crosstab-duckdb.db';
       try {
         const root = await navigator.storage.getDirectory();
-        await root.removeEntry(OPFS_DB).catch(() => {});
-        await root.removeEntry(`${OPFS_DB}.wal`).catch(() => {});
+        await root.removeEntry(opfsName(OPFS_DB)).catch(() => {});
+        await root.removeEntry(opfsName(`${OPFS_DB}.wal`)).catch(() => {});
       } catch {
         /* OPFS unavailable — db.open below will fall back or throw, handled next */
       }
@@ -821,6 +821,31 @@ export function exceedsTableBudget(loadedBytes, variables, rowCount) {
 export function opfsRef(name) {
   const s = String(name ?? '');
   return s.startsWith('opfs://') ? s : `opfs://${s}`;
+}
+
+/**
+ * The inverse: the plain OPFS file name, whichever spelling you have.
+ *
+ * **Every OPFS call in this file goes through this**, and a test enforces that, because
+ * relying on remembering is what broke. `opfsRef` was introduced so DuckDB could be told
+ * about a file by name; the reference then flows outward as `src.file`, and the save path
+ * handed it to `getFileHandle` — which rejects it, since `/` and `:` are not legal in an
+ * OPFS name:
+ *
+ *     TypeError: Failed to execute 'getFileHandle' on 'FileSystemDirectoryHandle':
+ *     Name is not allowed.
+ *
+ * — owner, 2026-11-18, on the first import that routed wide. `dropRegisteredFile` had
+ * been taught to strip; `readOpfsFile` had not. One call site is a bug waiting; the rule
+ * is that there are no bare ones.
+ *
+ * Idempotent, so it is safe on a name that never had the prefix.
+ *
+ * @param {string} ref
+ * @returns {string}
+ */
+export function opfsName(ref) {
+  return String(ref ?? '').replace(/^opfs:\/\//, '');
 }
 
 export function quoteIdent(name) {
