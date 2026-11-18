@@ -107,6 +107,51 @@ import { escapeHtml } from './text.js';
 import { debug, recordError } from './debug.js';
 import { looksLikeZip as looksLikeZipBytes } from './plugin-package.js';
 
+/**
+ * The `selectFromList` options for the missing-value-code question, or null when there
+ * is nothing to ask.
+ *
+ * Pure, and separate from the asking, because the arithmetic in the hint is the part
+ * that can be wrong: see below.
+ *
+ * @param {string} fileName
+ * @param {{candidates?: Array<{value: string, values: number, columns: number}>,
+ *          combos?: Array<{codes: string[], columns: number}>, omitted?: number}} proposal
+ * @returns {?object}
+ */
+export function missingCodesPrompt(fileName, proposal) {
+  const candidates = proposal?.candidates ?? [];
+  if (!candidates.length) return null;
+  const n = (x) => Number(x).toLocaleString();
+
+  // What ticking EVERYTHING achieves. Computed from the blocker-set signatures rather
+  // than by summing the per-value column counts, because a column blocked by BOTH codes
+  // is recovered by neither alone — on the owner's file the per-value counts are 2,933
+  // and 504, which sums to 3,437 for an answer that is 3,347.
+  //
+  // (Recomputing this live as each box is ticked is exactly what `combos` carries enough
+  // information for. `selectFromList` has no hook for it, so this shows the all-ticked
+  // figure — and the boxes all start ticked.)
+  const all = (proposal?.combos ?? []).reduce((a, k) => a + k.columns, 0);
+
+  const items = candidates.map((c) => ({
+    value: c.value,
+    label: `${c.value} — ${n(c.values)} values in ${n(c.columns)} columns`,
+  }));
+  return {
+    title: 'Missing-value codes',
+    hint: `These values appear in “${fileName}” where numbers are expected, and look like `
+      + `missing-value codes. Ticked, they are read as missing${all ? `, which makes ${n(all)} more columns numeric` : ''}`
+      + '. Unticked, they stay text — and so does every column containing them. '
+      + 'Cancel imports everything as text.'
+      + (proposal?.omitted ? ` (${n(proposal.omitted)} rarer values are not listed.)` : ''),
+    items,
+    multiple: true,
+    selected: items.map((i) => i.value), // pre-selected: the detector proposes, you dispose
+    okLabel: 'Import',
+  };
+}
+
 export class ImportService {
   /** @type {import('./menu-shell.js').MenuShell} */
   #menus;
@@ -118,6 +163,8 @@ export class ImportService {
   #bus;
   /** WebRManager, for host-side staging of large uploads. @type {?import('./webr-manager.js').WebRManager} */
   #webr;
+  /** UiService, for the questions an import has to ask. @type {?import('./ui-service.js').UiService} */
+  #ui;
 
   /** Called after a SWAP lands and BEFORE the outgoing dataset is binned, so anything
    * attached to it (coding, analyses) can be offered a new home while it still exists
@@ -146,13 +193,51 @@ export class ImportService {
    * @param {import('./webr-manager.js').WebRManager} [deps.webr] - For staging
    *   large uploads host-side (see the `stage` importer option).
    */
-  constructor({ menus, data, results, bus, webr, onSwap }) {
+  constructor({ menus, data, results, bus, webr, onSwap, ui }) {
     this.#menus = menus;
     this.#data = data;
     this.#results = results;
     this.#bus = bus;
     this.#webr = webr ?? null;
     this.#onSwap = onSwap ?? null;
+    this.#ui = ui ?? null;
+  }
+
+  /**
+   * Ask which recurring non-numeric values mean "missing", and return the accepted ones.
+   *
+   * ## Why there is a question here at all
+   *
+   * College Scorecard's MERGED2025_26_PP.csv is 3,379 columns of which 19 are genuinely
+   * text — and the reader typed THIRTEEN as numeric, because the rule is all-or-nothing
+   * and two sentinels ("NA", "PS") defeat it. 3,347 numeric variables arrived as strings,
+   * unanalysable. The codes are DETECTED rather than hard-coded because the spelling the
+   * Scorecard docs use, "PrivacySuppressed", appears nowhere in that release.
+   *
+   * Pre-selected and never applied invisibly: the detector proposes, the user disposes.
+   *
+   * ## Cancel imports as text
+   *
+   * `selectFromList` resolves null on cancel, and that is read as "no codes" — the import
+   * proceeds with the old typing rather than aborting. The first pass has already read
+   * the whole file by this point, so throwing it away is the more annoying answer, and
+   * the hint says plainly which it is.
+   *
+   * @param {string} fileName
+   * @param {{candidates?: Array<{value: string, values: number, columns: number}>,
+   *          combos?: Array<{codes: string[], columns: number}>, omitted?: number}} proposal
+   * @returns {Promise<string[]>}
+   */
+  async #askMissingCodes(fileName, proposal) {
+    const opts = missingCodesPrompt(fileName, proposal);
+    if (!opts || !this.#ui?.selectFromList) return [];
+    const chosen = await this.#ui.selectFromList(opts);
+    debug('import', 'missing codes', {
+      offered: opts.items.length,
+      accepted: chosen?.length ?? 0,
+      cancelled: chosen == null,
+    });
+    return Array.isArray(chosen) ? chosen : [];
   }
 
   /**
@@ -598,14 +683,22 @@ export class ImportService {
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
       this.#bus.emit('import:started', { importer: id, file: file.name });
+      // Outside the try so the catch can say how far the ingest got. The OOM that
+      // started all this is thrown by the CONSUMER — `ctx.batch` below, inside DuckDB —
+      // not by the codec, so the codec's own promise never settles and the log line on
+      // it never ran. "Died after N rows" is the number that distinguishes a table that
+      // could not be created from an ingest that ran out of room.
+      let seen = 0;
       try {
         const reader = spec.startRead(file);
         // Registered BEFORE begin(): a codec's first pass runs before it can declare
         // its variables, and on a large file that pass is most of the wait.
         const progress = this.#progressEmitter(file.name);
         reader.onProgress?.((done, total) => progress(done, total));
+        // Same reason, and it must be the same side of begin(): the codec asks during
+        // pass 1, because the answer decides the types it declares IN begin().
+        reader.onMissingCodes?.((proposal) => this.#askMissingCodes(file.name, proposal));
         const head = await reader.begin();
-        let seen = 0;
         const tick = (columns) => {
           const k = Object.keys(columns)[0];
           seen += k ? columns[k].length : 0;
@@ -636,6 +729,7 @@ export class ImportService {
         }
         committed += 1;
       } catch (err) {
+        debug('import', 'FAILED', { rowsIngested: seen, message: String(err?.message ?? err).slice(0, 200) });
         this.#failed(`Import of "${file.name}" failed: ${err.message}`, err, 'import:file');
         console.error('[import]', err);
       } finally {

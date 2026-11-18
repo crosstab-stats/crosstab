@@ -178,6 +178,11 @@ export class CodecService {
       // Advisory: "still working, this many rows". A codec with a long pass that emits
       // no batches — a CSV counting its rows — has nothing else to say so with.
       progress: (done, total) => need('read').sink.progress(done, total),
+      // Which recurring non-numeric values mean "missing". Asked BEFORE begin(), because
+      // the answer decides the column types the codec is about to declare. Resolves to
+      // the accepted values, or `[]` when nobody is listening — which is what keeps the
+      // old typing exactly as it was.
+      missingCodes: (proposal) => need('read').sink.missingCodes(proposal),
       // --- write: emit output bytes ---
       writeChunk: (bytes) => {
         const s = need('write');
@@ -213,6 +218,8 @@ export class CodecService {
     // that used to look like a hang: a big CSV spent it tokenising with nothing on
     // screen but a spinner the blocked main thread could not even turn.
     let onProgress = null;
+    /** Answers the codec's missing-code question. Set by the host before the read. */
+    let onMissingCodes = null;
     const headPromise = new Promise((res, rej) => { headResolve = res; headReject = rej; });
     const wake = () => { if (notify) { const n = notify; notify = null; n(); } };
 
@@ -244,11 +251,31 @@ export class CodecService {
         // deliberately NOT awaited by the caller the way `batch` is — a progress report
         // that applies backpressure would be a progress report that can stall an import.
         progress: (done, total = -1) => { onProgress?.(Number(done) || 0, Number(total)); },
+        // Like `progress`, this is registered before the read starts, because the codec
+        // asks during its FIRST pass — before it has declared any variables. Unlike
+        // `progress` it is awaited: the codec cannot type its columns until it knows.
+        missingCodes: async (proposal) => {
+          if (!onMissingCodes) return [];
+          const codes = await onMissingCodes(proposal ?? {});
+          debug('codec', 'missing codes', {
+            offered: proposal?.candidates?.length ?? 0,
+            accepted: Array.isArray(codes) ? codes.length : 0,
+          });
+          return Array.isArray(codes) ? codes : [];
+        },
       },
     };
 
-    this.#loader
-      .invoke(spec.pluginId, spec.read, [{ name: file.name }])
+    // Deferred by a microtask, so that a host registering its callbacks SYNCHRONOUSLY on
+    // the reader this function returns is always in place before the codec can call
+    // back. Today that holds anyway — `invoke` crosses into the sandbox, which cannot
+    // complete inside a microtask — but it held by luck, and `onMissingCodes` is awaited
+    // by the codec rather than being advisory like `onProgress`, so losing that race
+    // would silently type every column as text instead of merely dropping a progress
+    // report. This is the same shape as the begin()/batch() race in #91, where desktop
+    // won it and iPad Safari did not.
+    Promise.resolve()
+      .then(() => this.#loader.invoke(spec.pluginId, spec.read, [{ name: file.name }]))
       .then(() => { ended = true; debug('codec', 'read finished', { batches: seenBatches }); if (!head) headReject(new Error('codec read produced no variables')); })
       // The failure the user is about to read off the results pane, with the count of
       // batches that made it through — which is how far in it got.
@@ -258,6 +285,7 @@ export class CodecService {
     return {
       begin: () => headPromise,
       onProgress: (cb) => { onProgress = cb; },
+      onMissingCodes: (cb) => { onMissingCodes = cb; },
       drain: async (cb) => {
         for (;;) {
           if (queue.length) { const it = queue.shift(); seenBatches += 1; try { await cb(it.columns); } finally { it.ack(); } continue; }

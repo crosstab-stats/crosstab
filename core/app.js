@@ -645,7 +645,7 @@ export async function boot(mounts) {
   };
 
   const importers = new ImportService({
-    menus, data: datasets, results: results.api, bus, webr,
+    menus, data: datasets, results: results.api, bus, webr, ui,
     onSwap: ({ fromId, toId }) => offerRehome({
       fromId,
       toId,

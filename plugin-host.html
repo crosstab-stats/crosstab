@@ -262,7 +262,7 @@
             state: makeNamespace('state', ['get', 'set', 'list', 'delete', 'read', 'write']),
             // Codec plugins (#98): streaming format read/write. Live only during a
             // codec invocation; no-op host-side otherwise.
-            codec: makeNamespace('codec', ['size', 'sourceFile', 'read', 'begin', 'batch', 'progress', 'writeChunk', 'loadAsset']),
+            codec: makeNamespace('codec', ['size', 'sourceFile', 'read', 'begin', 'batch', 'progress', 'missingCodes', 'writeChunk', 'loadAsset']),
             // Assets (#139, generalised #152): `load` resolves an `asset:`/`data:` ref to a Blob to
             // render (needs the media CSP, see core/plugin-sandbox.js); `put` streams a
             // host-held File into the store and returns its ref (importer sink). The host
