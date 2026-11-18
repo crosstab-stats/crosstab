@@ -591,12 +591,48 @@ export class DuckDBManager {
     await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     URL.revokeObjectURL(workerUrl);
 
-    // Open the database on OPFS so storage is disk-backed: DuckDB then pages to
-    // disk and can hold datasets far larger than the wasm ~4 GB heap (verified
-    // out-of-core — a 1.2 GB table queried under a 488 MB cap). Start each session
-    // from a clean DB: dataset *persistence* is owned by the project/parquet store,
-    // so a carried-over DuckDB file would only orphan tables and grow unbounded.
+    // Open the database on OPFS so storage is disk-backed: DuckDB then pages to disk and
+    // can hold datasets far larger than the wasm ~4 GB heap. Start each session from a
+    // clean DB: dataset *persistence* is owned by the project/parquet store, so a
+    // carried-over DuckDB file would only orphan tables and grow unbounded.
     // (`ATTACH 'opfs://…'` does NOT page — it must be the opened database.)
+    //
+    // ## THIS DOES NOT CURRENTLY WORK, and this comment used to claim it did
+    //
+    // The database is in the wasm heap on every machine, every session. Read in
+    // duckdb-wasm 1.33.1-dev56.0: the worker's OPEN handler does call
+    // `prepareDBFileHandle(path, 3)` for an `opfs://` path, but that registers the file
+    // only if it already has bytes —
+    //
+    //     !fromCached && handle.getSize() && await this.registerFileHandleAsync(…)
+    //
+    // — and `prepareFileHandles` creates a missing file with `create:true`, i.e. at zero
+    // length. So the `&&` short-circuits, nothing is registered, `getDefaultDataProtocol`
+    // returns 2 (BUFFER), and DuckDB logs `Buffering missing file: opfs:/…`. The
+    // `removeEntry` call below guarantees the zero length by deleting the file first, so
+    // "start from a clean DB" is what defeats the disk backing. `registerOPFSFileName` is
+    // no escape: `prepareFileHandle` carries the identical gate.
+    //
+    // `db.open()` does NOT throw, so the catch below never fires and nothing warns. The
+    // only outward sign is that console line, in a worker, on an installed PWA.
+    //
+    // The "verified out-of-core — a 1.2 GB table queried under a 488 MB cap" this comment
+    // used to cite cannot have been this path. It must have been the OPFS **Parquet
+    // parts** path further down, which registers handles directly and does work.
+    //
+    // CONSEQUENCE, measured 2026-11-18: there is no spill, so a table that outgrows the
+    // heap dies with "no temporary directory is specified" and no safety valve. A 67 MB
+    // CSV OOMed at 3.1 GiB and was fixed by correcting its column TYPES (3,366 VARCHAR →
+    // 3,360 DOUBLE), not by storage — the database was in memory for the successful
+    // import too. Which means this is latent, not theoretical: the next file that is
+    // genuinely too big has nowhere to page.
+    //
+    // NOT FIXED HERE because the fix needs measuring in a browser, not reasoning: both
+    // registration paths carry the size gate, so nothing in duckdb-wasm can bootstrap a
+    // NEW OPFS database, and simply dropping `removeEntry` leaves a first-ever boot still
+    // buffered. It likely needs a valid empty DB seeded into OPFS first (open buffered,
+    // `copyFileToBuffer`, write, reopen) and a clean start done by dropping tables rather
+    // than deleting the file. See TODO, open follow-ups.
     try {
       const OPFS_DB = 'crosstab-duckdb.db';
       try {

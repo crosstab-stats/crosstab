@@ -2639,6 +2639,38 @@ line, and an index that quietly disagrees with the entry it points at is worse t
 index — which is exactly what the building-block line was doing. They stay there because the reasoning around them is the parent entry's;
 this is the index.
 
+- **The DuckDB store has never actually been on OPFS** — found 2026-11-18 while reproducing
+  the owner's 3.1 GiB import OOM, and the code comment asserted the opposite. duckdb-wasm
+  registers an `opfs://` database only if the file already has bytes
+  (`!fromCached && handle.getSize() && registerFileHandleAsync(…)`), and our
+  `removeEntry` deletes it immediately before `open()` to "start from a clean DB" — so it
+  is always zero-length, always falls back to protocol 2 (BUFFER), and the database lives
+  in the wasm heap on every machine. `open()` does not throw, so the in-memory fallback's
+  warning never fires; the only sign is `Buffering missing file: opfs:/…` from a worker.
+  The "verified out-of-core, 1.2 GB under a 488 MB cap" the comment cited must have been
+  the OPFS **Parquet parts** path, which registers handles directly and does work.
+  **Latent, not theoretical:** there is no spill at all, so a table that outgrows the heap
+  has nowhere to page. The 67 MB Scorecard CSV was fixed by correcting column TYPES
+  (3,366 VARCHAR → 3,360 DOUBLE, confirmed 2026-11-18: same cells, same route, same
+  in-memory DB, 22 batches, no OOM), which means the next genuinely-too-big file still
+  dies. **Needs a browser, not reasoning:** both registration paths carry the size gate,
+  so nothing upstream can bootstrap a NEW OPFS database and dropping `removeEntry` alone
+  leaves a first boot buffered. Probably: seed a valid empty DB (open buffered →
+  `copyFileToBuffer` → write → reopen), then clean-start by dropping tables instead of
+  deleting the file. Mechanism is written up in `core/duckdb-manager.js`. *(under #98, codec interface / f27c337)*
+- **Record the accepted missing-value codes on the import op** so an exported script
+  re-applies them instead of re-asking. Op-log replay inside a project is unaffected (it
+  restores the stored parquet and never re-runs the codec); it is the `.ctscript`/`.do`
+  path that would re-prompt. The provenance channel already exists — `loadDataset` →
+  `src` → `op.src`, same as `origin`/`importer` (147e53a) — plus script-export and the
+  syntax. *(under #98 / 643c30e)*
+- **`isWideDataset` ignores width, and width is what costs** — it routes on cells
+  (`ceil(cols*rows/4e6) > 8`), so the 3,379 × 6,272 Scorecard file was "not wide" at 21.2M
+  cells and built a plain table. e85f8e4 measured width-routing and rejected it, but on
+  columns that were NUMERIC, where per-column cost is small; the 2026-11-18 OOM was 99.6%
+  VARCHAR, where it is not. The typing fix removed the symptom for this file. A genuinely
+  wide file that is legitimately text still has the old problem. Re-measure before
+  changing the rule — the number to beat is in that commit. *(under #98, codec interface)*
 - **Latent transition analysis** — **DEFERRED 2026-11-02 until someone asks** (feasible: `depmixS4`, closure 17 — demand is the only blocker). *(under #141, More analyses)*
 - ~~**Building-block eligibility**~~ — **CLOSED as moot 2026-10-13**, and this index line
   outlived it by three weeks. The building-block library was removed on 2026-10-02 and
