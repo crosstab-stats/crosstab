@@ -599,13 +599,16 @@ export class ImportService {
       this.#bus.emit('import:started', { importer: id, file: file.name });
       try {
         const reader = spec.startRead(file);
+        // Registered BEFORE begin(): a codec's first pass runs before it can declare
+        // its variables, and on a large file that pass is most of the wait.
+        const progress = this.#progressEmitter(file.name);
+        reader.onProgress?.((done, total) => progress(done, total));
         const head = await reader.begin();
-        const progress = this.#progressEmitter(file.name, head.rowCount);
         let seen = 0;
         const tick = (columns) => {
           const k = Object.keys(columns)[0];
           seen += k ? columns[k].length : 0;
-          progress(seen);
+          progress(seen, head.rowCount);
         };
         if (head.wide) {
           await this.#data.loadWide({
@@ -613,7 +616,7 @@ export class ImportService {
             source: tag,
             variables: head.variables,
             rowCount: head.rowCount,
-            onProgress: (done) => progress(done),
+            onProgress: (done) => progress(done, head.rowCount),
             stream: (onBatch) => reader.drain((columns) => { tick(columns); onBatch(columns); }),
           });
         } else {
@@ -651,9 +654,18 @@ export class ImportService {
   /** A throttled "rows read" progress reporter for one file: emits `import:progress`
    * at most every ~1,000 rows (and once at the end). Exact counts don't matter — it
    * just keeps the busy indicator's "X / Y rows" climbing. */
-  #progressEmitter(fileName, total) {
+  /**
+   * A throttled `import:progress` emitter for one file.
+   *
+   * The total arrives per CALL rather than up front, because the first thing a codec
+   * does may be the long thing: a CSV has to scan the file before it can say how many
+   * rows are in it, and that scan is exactly the stretch that used to show nothing.
+   * So a codec reports `(rowsSoFar, -1)` while it is still counting and
+   * `(rowsSoFar, total)` once it knows.
+   */
+  #progressEmitter(fileName) {
     let last = 0;
-    return (done) => {
+    return (done, total = -1) => {
       if (done - last >= 1000 || (total >= 0 && done >= total)) {
         last = done;
         this.#bus.emit('import:progress', { file: fileName, done, total });

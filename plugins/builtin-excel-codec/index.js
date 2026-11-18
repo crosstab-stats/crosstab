@@ -69,7 +69,12 @@ export const manifest = {
   ],
 };
 
-const EMIT_BATCH = 50_000;
+// Values per ingest batch, not ROWS. A fixed row count is fine at ten columns and
+// fatal at three thousand: the width decides what a batch costs, which is how the CSV
+// reader came to hand DuckDB one batch of 21 million cells and OOM at 3.1 GiB
+// (owner, 2026-11-17). A sheet that wide is rarer than a CSV that wide, but the
+// arithmetic is identical and so is the fix.
+const EMIT_CELLS = 2_000_000;
 
 // --- read --------------------------------------------------------------------
 
@@ -102,11 +107,14 @@ export async function readXlsx(app, { name }) {
   // First chosen sheet → stream through the host ingest as the primary dataset
   // (the codec contract requires emitting a schema via begin()).
   const primary = built[0];
-  await app.codec.begin(primary.variables, primary.storageTypes);
   const total = primary.columns[primary.variables[0].name].length;
-  for (let off = 0; off < total; off += EMIT_BATCH) {
+  // The row count is known here, so the progress bar can show a denominator rather
+  // than counting up towards nothing.
+  await app.codec.begin(primary.variables, primary.storageTypes, { rowCount: total });
+  const perBatch = Math.max(1, Math.floor(EMIT_CELLS / Math.max(1, primary.variables.length)));
+  for (let off = 0; off < total; off += perBatch) {
     const chunk = {};
-    for (const v of primary.variables) chunk[v.name] = primary.columns[v.name].slice(off, off + EMIT_BATCH);
+    for (const v of primary.variables) chunk[v.name] = primary.columns[v.name].slice(off, off + perBatch);
     await app.codec.batch(chunk);
   }
 

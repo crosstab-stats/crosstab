@@ -47,121 +47,239 @@ export const manifest = {
 };
 
 const WRITE_BATCH = 50_000;
-const EMIT_BATCH = 50_000;
+const EMIT_CELLS = 2_000_000; // target values per batch; rows-per-batch derived
+const READ_CHUNK = 1 << 22; // 4 MiB per random-access read
 
 // --- read --------------------------------------------------------------------
 
-/** Decode a delimited file into the dataset. Reads the whole file via the codec's
- * random-access reads, parses it, then streams rows to the host ingest in batches. */
+/**
+ * Decode a delimited file into the dataset, in two streaming passes.
+ *
+ * ## Why two passes, and why neither holds the file
+ *
+ * This used to read the whole file, decode it to one JS string, tokenise that into an
+ * array of arrays of STRINGS, pivot those into per-column arrays, and only then emit —
+ * holding every one of those at once. On a 67 MB College Scorecard extract (~3,300
+ * columns) that is ~21 million JS strings, and the import died at 3.1 GiB having never
+ * shown a row count:
+ *
+ *     Out of Memory Error: failed to allocate data of size 1.0 MiB (3.1 GiB/3.1 GiB used)
+ *
+ * — owner, 2026-11-17. The spinner froze too, because the tokeniser never yielded: the
+ * one visible sign of life was blocked by the work it was meant to be reporting.
+ *
+ * So the parse streams, and the cost of streaming is that a column's TYPE is not known
+ * until its last value has been seen. The old code could decide after the fact because
+ * it had every value in hand. Rather than weaken that rule — "numeric iff every
+ * non-empty value parses as finite", which is what makes a column with one "N/A" stay a
+ * string — the file is read twice:
+ *
+ *   1. count the rows and watch each column for a non-numeric value. Holds one boolean
+ *      and one counter per column, and NO cells.
+ *   2. re-read, converting each row straight into the output buffers and emitting a
+ *      batch whenever enough CELLS have accumulated.
+ *
+ * Re-reading is cheap — the source is a File on disk, already being read in chunks —
+ * and it buys exact typing with bounded memory.
+ *
+ * ## Batching by cells rather than rows
+ *
+ * A fixed 50,000-row batch is fine at 10 columns and fatal at 3,300: it is the width
+ * that decides how much a batch costs. The batch is therefore sized in VALUES, so a
+ * wide file sends more, smaller batches and a narrow one still sends few, large ones.
+ * (`builtin-readstat-codec` reached the same conclusion for the same reason.)
+ */
 export async function readCsv(app, { name }) {
   const size = await app.codec.size();
-  const bytes = await readAll(app, size);
-  const text = new TextDecoder('utf-8').decode(bytes);
   const delimiter = /\.tsv$/i.test(name || '') ? '\t' : ',';
-  const { variables, storageTypes, columns } = parseCsv(text, delimiter);
-  if (!variables.length) throw new Error('CSV: no columns found');
 
-  await app.codec.begin(variables, storageTypes);
-  const total = variables.length ? columns[variables[0].name].length : 0;
-  for (let off = 0; off < total; off += EMIT_BATCH) {
-    const chunk = {};
-    for (const v of variables) chunk[v.name] = columns[v.name].slice(off, off + EMIT_BATCH);
-    await app.codec.batch(chunk);
+  // --- pass 1: the header, the row count, and which columns are numeric ---------
+  let header = null;
+  let rowCount = 0;
+  let numeric = null; // per column: still numeric so far?
+  let seen = null; // per column: any non-empty value at all?
+  await scan(app, size, delimiter, (row) => {
+    if (!header) {
+      header = row.map((h, i) => h.trim() || `V${i + 1}`);
+      numeric = header.map(() => true);
+      seen = header.map(() => false);
+      return undefined;
+    }
+    if (row.length === 1 && row[0] === '') return undefined; // blank trailing line
+    rowCount += 1;
+    for (let c = 0; c < header.length && c < row.length; c++) {
+      const v = row[c];
+      if (v === '' || v === undefined) continue;
+      seen[c] = true;
+      if (numeric[c] && !Number.isFinite(Number(v))) numeric[c] = false;
+    }
+    return undefined;
+  }, (rows) => app.codec.progress(rows, -1));
+  if (!header || !header.length) throw new Error('CSV: no columns found');
+
+  const used = {};
+  const variables = [];
+  const storageTypes = {};
+  const isNum = [];
+  for (let c = 0; c < header.length; c++) {
+    const nm = uniqueName(header[c], used);
+    used[nm] = true;
+    // A column with no values at all is a string column: there is nothing to say it is
+    // a number, and calling it numeric would turn every blank into NaN.
+    const num = numeric[c] && seen[c];
+    isNum.push(num);
+    variables.push({ name: nm, type: num ? 'numeric' : 'string', measurementLevel: num ? 'scale' : 'nominal' });
+    storageTypes[nm] = num ? 'numeric' : 'string';
   }
+
+  // --- pass 2: fill and emit ----------------------------------------------------
+  await app.codec.begin(variables, storageTypes, { rowCount });
+  const width = variables.length;
+  const perBatch = Math.max(1, Math.min(rowCount || 1, Math.floor(EMIT_CELLS / Math.max(1, width))));
+  let buf = newBuffers(variables, isNum, perBatch);
+  let fill = 0;
+  let emitted = 0;
+  let first = true;
+
+  const flush = async () => {
+    if (!fill) return;
+    await app.codec.batch(sliceBuffers(buf, variables, isNum, fill));
+    emitted += fill;
+    fill = 0;
+    buf = newBuffers(variables, isNum, perBatch);
+  };
+
+  await scan(app, size, delimiter, (row) => {
+    if (first) { first = false; return undefined; } // header
+    if (row.length === 1 && row[0] === '') return undefined;
+    for (let c = 0; c < width; c++) {
+      const v = c < row.length ? row[c] : '';
+      const col = buf[c];
+      if (isNum[c]) col[fill] = v === '' || v === undefined ? NaN : Number(v);
+      else col[fill] = v === '' || v === undefined ? null : v;
+    }
+    fill += 1;
+    // The promise is the signal: `scan` awaits it, so the next row lands in a fresh
+    // buffer rather than past the end of a full one.
+    return fill >= perBatch ? flush() : undefined;
+  }, () => app.codec.progress(emitted + fill, rowCount));
+  await flush();
 }
 
-/** Read the whole source via chunked random-access reads, concatenated. */
-async function readAll(app, size) {
-  const CHUNK = 1 << 22; // 4 MiB
-  const parts = [];
-  let off = 0;
-  while (off < size) {
-    const u8 = await app.codec.read(off, Math.min(CHUNK, size - off));
-    if (!u8.length) break;
-    parts.push(u8);
-    off += u8.length;
+/** Column buffers for one batch: Float64Array for numeric, plain array for string. */
+function newBuffers(variables, isNum, n) {
+  return variables.map((_v, c) => (isNum[c] ? new Float64Array(n) : new Array(n)));
+}
+
+/** The filled prefix of each buffer, keyed by variable name. */
+function sliceBuffers(buf, variables, isNum, n) {
+  const out = {};
+  for (let c = 0; c < variables.length; c++) {
+    out[variables[c].name] = isNum[c] ? buf[c].subarray(0, n) : buf[c].slice(0, n);
   }
-  const out = new Uint8Array(off);
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.byteLength; }
   return out;
 }
 
-/** Parse delimited text → {variables, storageTypes, columns} (numeric cols as
- * Float64Array with NaN for missing; string cols as arrays with null for missing). */
-function parseCsv(text, delimiter) {
-  const rows = tokenize(text, delimiter);
-  if (rows.length === 0) return { variables: [], storageTypes: {}, columns: {} };
+/**
+ * Read the file in chunks and hand complete rows to `onRow`, honouring RFC-4180
+ * quoting across chunk boundaries.
+ *
+ * `onRow` may return a promise — pass 2 returns one exactly when a batch filled up —
+ * and it is awaited before the next row. That is what keeps a batch at its size: the
+ * first version flushed at CHUNK boundaries instead, so a chunk holding more rows than
+ * a batch overran the buffers, and because a Float64Array silently ignores a write past
+ * its end while a plain Array grows, the numeric and string columns of one batch came
+ * out DIFFERENT LENGTHS. Caught in the browser, where a 4 MiB chunk holds ~400 rows of
+ * a 3,300-column file against a 606-row batch; node's smaller reads had hidden it.
+ *
+ * `onTick` is called per chunk so a long scan can say it is alive.
+ */
+async function scan(app, size, delimiter, onRow, onTick) {
+  const decoder = new TextDecoder('utf-8');
+  const tok = tokenizer(delimiter);
+  let off = 0;
+  let rows = 0;
 
-  const header = rows[0].map((h, i) => h.trim() || `V${i + 1}`);
-  const raw = header.map(() => []);
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (row.length === 1 && row[0] === '') continue; // skip blank trailing line
-    for (let c = 0; c < header.length; c++) {
-      const cell = row[c];
-      raw[c].push(cell === undefined || cell === '' ? null : cell);
+  const feed = async (text, final = false) => {
+    for (const row of final ? tok.end(text) : tok.push(text)) {
+      rows += 1;
+      const wait = onRow(row);
+      if (wait) await wait; // eslint-disable-line no-await-in-loop -- a batch flushed
     }
-  }
+  };
 
-  const variables = [];
-  const storageTypes = {};
-  const columns = {};
-  const used = {};
-  for (let c = 0; c < header.length; c++) {
-    const name = uniqueName(header[c], used);
-    used[name] = true;
-    const values = raw[c];
-    if (isNumericColumn(values)) {
-      variables.push({ name, type: 'numeric', measurementLevel: 'scale' });
-      storageTypes[name] = 'numeric';
-      const a = new Float64Array(values.length);
-      for (let i = 0; i < values.length; i++) a[i] = values[i] === null ? NaN : Number(values[i]);
-      columns[name] = a;
-    } else {
-      variables.push({ name, type: 'string', measurementLevel: 'nominal' });
-      storageTypes[name] = 'string';
-      columns[name] = values;
-    }
+  while (off < size) {
+    // eslint-disable-next-line no-await-in-loop -- sequential by nature
+    const u8 = await app.codec.read(off, Math.min(READ_CHUNK, size - off));
+    if (!u8.length) break;
+    off += u8.length;
+    // eslint-disable-next-line no-await-in-loop
+    await feed(decoder.decode(u8, { stream: true }));
+    onTick(rows);
+    // Hand the event loop back, every chunk. In the app `read` is a postMessage round
+    // trip and would yield anyway, but relying on that puts the responsiveness of the
+    // UI at the mercy of how someone else implements a read — and a yield per 4 MiB
+    // costs about a millisecond against a parse that takes far longer.
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => { setTimeout(r, 0); });
   }
-  return { variables, storageTypes, columns };
+  await feed(decoder.decode(), true);
+  onTick(rows);
 }
 
-/** True if every non-null value parses as a finite number (and at least one does). */
-function isNumericColumn(values) {
-  let seen = 0;
-  for (const v of values) {
-    if (v === null) continue;
-    seen++;
-    if (!Number.isFinite(Number(v))) return false;
-  }
-  return seen > 0;
-}
-
-/** Split delimited text into rows of fields, honouring RFC-4180 quoting (quoted
- * fields may contain the delimiter, newlines, and escaped `""`); handles \n and \r\n. */
-function tokenize(text, delimiter) {
-  const rows = [];
+/**
+ * An incremental RFC-4180 tokeniser: feed it text, get back the rows it completed,
+ * with the partial field and row carried over to the next call.
+ *
+ * It returns rows rather than calling back per row so the caller stays in charge of
+ * when to await — a tokeniser that invoked an async callback mid-scan could not be
+ * paused, which is the whole reason the batch overran.
+ */
+function tokenizer(delimiter) {
   let row = [];
   let field = '';
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false;
-      } else field += ch;
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === delimiter) {
-      row.push(field); field = '';
-    } else if (ch === '\n' || ch === '\r') {
-      if (ch === '\r' && text[i + 1] === '\n') i++;
-      row.push(field); field = ''; rows.push(row); row = [];
-    } else field += ch;
-  }
-  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
-  return rows;
+  let quoted = false;
+  let wasQuoted = false;
+  let pendingQuote = false; // a '"' inside a quoted field: close, or an escaped '"'?
+  let afterCR = false;
+
+  const endField = () => { row.push(field); field = ''; wasQuoted = false; };
+
+  const drain = (text) => {
+    const out = [];
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (pendingQuote) {
+        pendingQuote = false;
+        if (ch === '"') { field += '"'; continue; } // escaped quote
+        quoted = false; // the field closed
+      }
+      if (quoted) {
+        if (ch === '"') pendingQuote = true;
+        else field += ch;
+        continue;
+      }
+      if (afterCR) { afterCR = false; if (ch === '\n') continue; }
+      if (ch === '"' && field === '' && !wasQuoted) { quoted = true; wasQuoted = true; continue; }
+      if (ch === delimiter) { endField(); continue; }
+      if (ch === '\n') { endField(); out.push(row); row = []; continue; }
+      if (ch === '\r') { endField(); out.push(row); row = []; afterCR = true; continue; }
+      field += ch;
+    }
+    return out;
+  };
+
+  return {
+    push: drain,
+    end(text) {
+      const out = drain(text);
+      // A file with no trailing newline still has a last row — unless the stream ended
+      // exactly on one, in which case there is nothing pending and adding a row would
+      // invent a blank one.
+      if (field !== '' || row.length) { endField(); out.push(row); row = []; }
+      return out;
+    },
+  };
 }
 
 // --- write -------------------------------------------------------------------

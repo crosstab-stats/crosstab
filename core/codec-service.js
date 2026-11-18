@@ -201,6 +201,12 @@ export class CodecService {
     let error = null;
     let head = null;
     let headResolve, headReject;
+    // Where a codec's progress reports go once someone asks for them. Set before the
+    // read starts, so a codec that reports during its FIRST pass — before it knows the
+    // variables, and so before `begin()` — is still heard. That pass is exactly the one
+    // that used to look like a hang: a big CSV spent it tokenising with nothing on
+    // screen but a spinner the blocked main thread could not even turn.
+    let onProgress = null;
     const headPromise = new Promise((res, rej) => { headResolve = res; headReject = rej; });
     const wake = () => { if (notify) { const n = notify; notify = null; n(); } };
 
@@ -214,6 +220,10 @@ export class CodecService {
           headResolve(head);
         },
         batch: (columns) => new Promise((ack) => { queue.push({ columns, ack }); wake(); }),
+        // Advisory and one-way: a count, and a total when the codec knows one. It is
+        // deliberately NOT awaited by the caller the way `batch` is — a progress report
+        // that applies backpressure would be a progress report that can stall an import.
+        progress: (done, total = -1) => { onProgress?.(Number(done) || 0, Number(total)); },
       },
     };
 
@@ -225,6 +235,7 @@ export class CodecService {
 
     return {
       begin: () => headPromise,
+      onProgress: (cb) => { onProgress = cb; },
       drain: async (cb) => {
         for (;;) {
           if (queue.length) { const it = queue.shift(); try { await cb(it.columns); } finally { it.ack(); } continue; }

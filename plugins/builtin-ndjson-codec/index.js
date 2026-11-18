@@ -45,7 +45,11 @@ export const manifest = {
 };
 
 const READ_CHUNK = 1 << 20; // 1 MiB source reads
-const READ_BATCH = 10_000; // rows per ingest batch
+// Values per ingest batch, not rows: an object with three thousand keys costs three
+// thousand times what one with three keys does, and a fixed row count cannot know that.
+// `perBatch` is derived once the first object reveals the width.
+const READ_CELLS = 2_000_000;
+const READ_BATCH_MAX = 10_000; // ...and never more rows than this, however narrow
 const WRITE_BATCH = 10_000; // rows per output flush
 
 /**
@@ -64,12 +68,14 @@ export async function readNdjson(app, _info) {
   let types = null;
   let began = false;
 
+  let perBatch = READ_BATCH_MAX;
   const begin = async (row) => {
     columns = Object.keys(row);
     types = {};
     for (const c of columns) types[c] = typeof row[c] === 'number' ? 'numeric' : 'string';
     const variables = columns.map((c) => ({ name: c, type: types[c] }));
     await app.codec.begin(variables, types);
+    perBatch = Math.max(1, Math.min(READ_BATCH_MAX, Math.floor(READ_CELLS / Math.max(1, variables.length))));
     began = true;
   };
 
@@ -99,7 +105,7 @@ export async function readNdjson(app, _info) {
     if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) return;
     if (!began) await begin(obj);
     rows.push(obj);
-    if (rows.length >= READ_BATCH) await flush();
+    if (rows.length >= perBatch) await flush();
   };
 
   while (offset < size) {
