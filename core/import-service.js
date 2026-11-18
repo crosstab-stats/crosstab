@@ -104,6 +104,7 @@ import { passphraseFor } from './at-rest.js';
  */
 
 import { escapeHtml } from './text.js';
+import { debug, recordError } from './debug.js';
 import { looksLikeZip as looksLikeZipBytes } from './plugin-package.js';
 
 export class ImportService {
@@ -436,7 +437,7 @@ export class ImportService {
       const { blob, name } = await this.#download(url);
       resolved = await this.#resolveDownload(blob, name);
     } catch (err) {
-      this.#results.appendError(`Import from URL failed: ${err.message}`);
+      this.#failed(`Import from URL failed: ${err.message}`, err, 'import:url');
       console.error('[import:url]', err);
       return;
     }
@@ -635,7 +636,7 @@ export class ImportService {
         }
         committed += 1;
       } catch (err) {
-        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+        this.#failed(`Import of "${file.name}" failed: ${err.message}`, err, 'import:file');
         console.error('[import]', err);
       } finally {
         this.#bus.emit('import:ended', { importer: id, file: file.name });
@@ -689,7 +690,7 @@ export class ImportService {
         const receipt = await this.#parseOne(spec, file);
         if (receipt) committed += 1; // null/undefined/false = aborted (self-reported)
       } catch (err) {
-        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+        this.#failed(`Import of "${file.name}" failed: ${err.message}`, err, 'import:file');
         console.error('[import]', err);
       } finally {
         this.#bus.emit('import:ended', { importer: id, file: file.name });
@@ -728,7 +729,7 @@ export class ImportService {
         await this.#data.loadDataset({ ...dataset, mode: fileMode, source: tag, origin: file.name, importer: id });
         committed += 1;
       } catch (err) {
-        this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+        this.#failed(`Import of "${file.name}" failed: ${err.message}`, err, 'import:file');
         console.error('[import]', err);
       }
     }
@@ -743,6 +744,29 @@ export class ImportService {
   }
 
   /**
+   * Report a failure that was caught here: on screen, and into the always-on error slot.
+   *
+   * `appendError` alone is not enough. A handled error never reaches the global capture
+   * in debug.js, and that capture is the only thing that fills the single `lastError`
+   * slot a bug report carries — so the most common real failure in the app was the one
+   * failure a report could never describe. The owner's 3.1 GiB OOM on a 67 MB CSV
+   * reached the results pane, was read aloud off the screen, and the debug export
+   * exported from the same session said `lastError: null`.
+   *
+   * `where` is a STATIC label, never a filename: it travels into a world-readable issue
+   * via `collectDiagnostics`, where a file path counts as the user's data (and
+   * help-bug-report.test.mjs asserts as much).
+   *
+   * @param {string} message - what the user sees
+   * @param {any} err - the caught error
+   * @param {string} where - a short static hint, e.g. `'import:file'`
+   */
+  #failed(message, err, where) {
+    recordError(err, where);
+    this.#results.appendError(message);
+  }
+
+  /**
    * Parse one file and merge it into the loaded data by a key: run the join
    * review (key pick + match preview + manual pairing), then commit a LEFT JOIN.
    */
@@ -751,7 +775,7 @@ export class ImportService {
     try {
       dataset = await this.#parseOne(spec, file);
     } catch (err) {
-      this.#results.appendError(`Import of "${file.name}" failed: ${err.message}`);
+      this.#failed(`Import of "${file.name}" failed: ${err.message}`, err, 'import:join');
       return;
     }
     const review = await this.#reviewAndJoin(dataset, baseName(file.name), id, file.name);
@@ -824,7 +848,7 @@ export class ImportService {
     try {
       dataset = await this.#awaitTicket((ticket) => spec.parse({ ticket }));
     } catch (err) {
-      this.#results.appendError(`Import failed: ${err.message}`);
+      this.#failed(`Import failed: ${err.message}`, err, 'import:web');
       console.error('[import]', err);
       return;
     }
@@ -869,7 +893,7 @@ export class ImportService {
     try {
       await this.#data.loadDataset({ ...dataset, mode, source: tag });
     } catch (err) {
-      this.#results.appendError(`Import failed: ${err.message}`);
+      this.#failed(`Import failed: ${err.message}`, err, 'import:load');
       console.error('[import]', err);
       return;
     }

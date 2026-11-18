@@ -34,6 +34,8 @@
  * strictly serial, so there's never more than one in flight.
  */
 
+import { debug } from './debug.js';
+
 /**
  * Host-vetted **shared-library** assets — the narrow allowlist of dependencies the
  * *host* provides to any codec, kept ONLY for CrossTab's own shared runtimes/libs
@@ -203,6 +205,7 @@ export class CodecService {
     let ended = false;
     let error = null;
     let head = null;
+    let seenBatches = 0; // how far the read got, for the log line on finish/failure
     let headResolve, headReject;
     // Where a codec's progress reports go once someone asks for them. Set before the
     // read starts, so a codec that reports during its FIRST pass — before it knows the
@@ -220,6 +223,20 @@ export class CodecService {
       sink: {
         begin: (variables, storageTypes, opts = {}) => {
           head = { variables, storageTypes, rowCount: opts.rowCount ?? -1, wide: !!opts.wide };
+          // The whole shape of the import, in one line, at the moment it is decided.
+          // The owner's OOM reproduced with logging ON and left NOTHING in the log,
+          // because this path had no instrumentation at all: the route (a DuckDB table
+          // vs the out-of-core ingest) is chosen from these numbers, and recovering
+          // them afterwards meant re-measuring the file by hand. Counts only — no
+          // variable names, no values.
+          debug('codec', 'begin', {
+            codec: spec.pluginId,
+            columns: variables?.length ?? 0,
+            rows: head.rowCount,
+            cells: (variables?.length ?? 0) * Math.max(0, head.rowCount),
+            wide: head.wide,
+            missingCodes: Array.isArray(opts.missingCodes) ? opts.missingCodes.length : 0,
+          });
           headResolve(head);
         },
         batch: (columns) => new Promise((ack) => { queue.push({ columns, ack }); wake(); }),
@@ -232,8 +249,10 @@ export class CodecService {
 
     this.#loader
       .invoke(spec.pluginId, spec.read, [{ name: file.name }])
-      .then(() => { ended = true; if (!head) headReject(new Error('codec read produced no variables')); })
-      .catch((e) => { error = e; ended = true; if (!head) headReject(e); })
+      .then(() => { ended = true; debug('codec', 'read finished', { batches: seenBatches }); if (!head) headReject(new Error('codec read produced no variables')); })
+      // The failure the user is about to read off the results pane, with the count of
+      // batches that made it through — which is how far in it got.
+      .catch((e) => { error = e; ended = true; debug('codec', 'read FAILED', { batches: seenBatches, message: String(e?.message ?? e) }); if (!head) headReject(e); })
       .finally(() => { this.#session = null; wake(); });
 
     return {
@@ -241,7 +260,7 @@ export class CodecService {
       onProgress: (cb) => { onProgress = cb; },
       drain: async (cb) => {
         for (;;) {
-          if (queue.length) { const it = queue.shift(); try { await cb(it.columns); } finally { it.ack(); } continue; }
+          if (queue.length) { const it = queue.shift(); seenBatches += 1; try { await cb(it.columns); } finally { it.ack(); } continue; }
           if (error) throw error;
           if (ended) return;
           // eslint-disable-next-line no-await-in-loop -- block until the next batch
