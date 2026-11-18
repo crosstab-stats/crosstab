@@ -169,14 +169,19 @@ test('a reader that throws is an issue, not an exception', async () => {
   assert.match(issues[0].why, /network down/);
 });
 
-test('a commented-out import costs nothing but a warning', async () => {
+test('a commented-out import costs nothing at all', async () => {
   // The reason none of this throws: the scan is textual, so this looks exactly like a real
   // import. A plugin that works today must not start failing because of a stale comment.
+  //
+  // It no longer warns either. Comments are stripped before deciding whether a specifier
+  // is worth complaining about, because the JSDoc type import every built-in carries was
+  // producing 64 warnings a session and burying real diagnostics. The specifier is still
+  // looked for — the walk reads raw source on purpose — and still skipped; it is now
+  // skipped quietly. See `stripComments` for why that asymmetry is deliberate.
   const src = "// import { old } from './removed.js';\nexport const manifest = { id: 'x' };";
   const { modules, issues } = await collectModuleClosure(src, reader({}));
   assert.deepEqual(modules, {});
-  assert.equal(issues.length, 1, 'reported…');
-  assert.match(issues[0].why, /does not include/); // …and the caller only warns
+  assert.deepEqual(issues, [], 'a stale comment is not a missing file');
 });
 
 // =============================================================================

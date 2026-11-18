@@ -76,6 +76,79 @@ export function scanRelativeImports(source) {
 }
 
 /**
+ * The same source with its comments blanked out.
+ *
+ * ## Why this exists
+ *
+ * Every built-in plugin carries this line:
+ *
+ *     /** @type {import('../../core/loader.js').PluginManifest} *\/
+ *
+ * which is a JSDoc TYPE import — and it matches the dynamic-`import()` pattern above
+ * exactly. So every one of the 64 plugins reported:
+ *
+ *     [plugin ./plugins/builtin-clusterse/index.js] The plugin imports
+ *     “../../core/loader.js”. A plugin's modules must sit beside its entry …
+ *
+ * 64 warnings per session, none of them real. Harmless on its own, except that it is
+ * what buried the actual diagnostics while chasing an import failure — the owner went
+ * looking for the cause of a 3.1 GiB OOM and found a screen of these instead.
+ *
+ * ## What it is deliberately not
+ *
+ * This is NOT a parser, and a regex literal containing a slash-slash — `/https:\/\//` —
+ * lexes here as the start of a line comment, so the rest of that line is lost.
+ *
+ * That is survivable only because of HOW the result is used: it gates the warnings and
+ * nothing else. Module collection still walks the raw source, so the worst a mis-lex can
+ * do is withhold a complaint. Were it the other way round, the same bug would silently
+ * drop a module a plugin actually needs, and the plugin would fail with its import
+ * naming a file that is right there in its directory.
+ *
+ * @param {string} source
+ * @returns {string} the source with comment bodies removed, newlines preserved
+ */
+export function stripComments(source) {
+  const s = String(source ?? '');
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    // A string or template literal is copied verbatim: a URL in one is not a comment,
+    // and `'/*'` must not open a block that swallows the rest of the file.
+    if (ch === '"' || ch === "'" || ch === '`') {
+      out += ch;
+      i += 1;
+      while (i < s.length) {
+        if (s[i] === '\\') { out += s.slice(i, i + 2); i += 2; continue; }
+        const c = s[i];
+        out += c;
+        i += 1;
+        if (c === ch) break;
+      }
+      continue;
+    }
+    if (ch === '/' && s[i + 1] === '/') {
+      while (i < s.length && s[i] !== '\n') i += 1;
+      continue; // the newline itself is copied by the next pass
+    }
+    if (ch === '/' && s[i + 1] === '*') {
+      i += 2;
+      while (i < s.length && !(s[i] === '*' && s[i + 1] === '/')) {
+        // Newlines survive so that anything reporting a line number still can.
+        if (s[i] === '\n') out += '\n';
+        i += 1;
+      }
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
  * The flat filename a specifier names, or null if this version cannot support it.
  *
  * @param {string} specifier
@@ -105,20 +178,27 @@ export async function collectModuleClosure(entrySource, readModule) {
   const seen = new Set();
 
   const enqueue = (source, fromLabel) => {
+    // Which specifiers are in real CODE rather than in a comment. This decides whether a
+    // specifier is worth COMPLAINING about and nothing else — the walk below still reads
+    // the raw source, so a `stripComments` mis-lex can only ever cost a warning. See
+    // {@link stripComments} for why that asymmetry is the whole point.
+    const inCode = new Set(scanRelativeImports(stripComments(source)));
     for (const spec of scanRelativeImports(source)) {
       const name = flatName(spec);
       if (!name) {
-        issues.push({
-          specifier: spec,
-          why: `${fromLabel} imports “${spec}”. A plugin's modules must sit beside its entry `
-            + '(“./name.js”) — subdirectories and “../” are not supported, by design. Name the '
-            + 'file flat instead (“lib-util.js” rather than “lib/util.js”).',
-        });
+        if (inCode.has(spec)) {
+          issues.push({
+            specifier: spec,
+            why: `${fromLabel} imports “${spec}”. A plugin's modules must sit beside its entry `
+              + '(“./name.js”) — subdirectories and “../” are not supported, by design. Name the '
+              + 'file flat instead (“lib-util.js” rather than “lib/util.js”).',
+          });
+        }
         continue;
       }
       if (seen.has(name)) continue;
       seen.add(name);
-      queue.push({ name, fromLabel });
+      queue.push({ name, fromLabel, inCode: inCode.has(spec) });
     }
   };
 
@@ -128,17 +208,20 @@ export async function collectModuleClosure(entrySource, readModule) {
       issues.push({ specifier: '', why: `A plugin may import at most ${MAX_MODULES} of its own modules.` });
       break;
     }
-    const { name, fromLabel } = queue.shift();
+    const { name, fromLabel, inCode } = queue.shift();
     let source = null;
     try {
       source = await readModule(name);
     } catch (err) {
       source = null;
-      issues.push({ specifier: `./${name}`, why: `${fromLabel} imports “./${name}”, which could not be read: ${err.message}` });
+      if (inCode) issues.push({ specifier: `./${name}`, why: `${fromLabel} imports “./${name}”, which could not be read: ${err.message}` });
       continue;
     }
     if (source == null) {
-      issues.push({ specifier: `./${name}`, why: `${fromLabel} imports “./${name}”, which this plugin does not include.` });
+      // A commented-out `import './old.js'` is still looked for — the walk reads raw
+      // source on purpose — but a stale comment is not worth a complaint about a missing
+      // file. A real import of a missing file still fails, loudly, at import time.
+      if (inCode) issues.push({ specifier: `./${name}`, why: `${fromLabel} imports “./${name}”, which this plugin does not include.` });
       continue;
     }
     modules[name] = source;
