@@ -669,7 +669,10 @@ export class DataStore {
 
     const seq = ++this.#sourceSeq;
     const base = seq * ROWID_STRIDE;
-    const file = `${this.#sourcePrefix}${seq}.parquet`;
+    // Starts as the OPFS file name and becomes the DuckDB reference once registered —
+    // `opfs://<name>` on the by-name route. `dropRegisteredFile` accepts either spelling,
+    // so the error path below is correct before or after the reassignment.
+    let file = `${this.#sourcePrefix}${seq}.parquet`;
 
     const columns = variables.map((v) => ({ name: v.name, type: v.type === 'string' ? 'string' : 'numeric' }));
     columns.push({ name: CT_ROW, type: 'numeric' });
@@ -717,7 +720,8 @@ export class DataStore {
         onProgress?.(rowBase, rowCount);
       });
       flush();
-      await writer.finalize(file);
+      // The reference, from the registration — `opfs://<name>` on the by-name route.
+      file = await writer.finalize(file);
       this.#wideFiles.add(file);
     } catch (err) {
       try { await this.#duckdb.dropRegisteredFile(file, { removeFromOpfs: true }); } catch { /* best-effort */ }
@@ -892,8 +896,12 @@ export class DataStore {
    * row-id base is kept so row ids are stable across save/restore. */
   async #restoreWideSource(src) {
     const seq = ++this.#sourceSeq;
-    const file = `${this.#sourcePrefix}${seq}.parquet`;
-    await this.#duckdb.registerParquetFile(file, src.parquet);
+    const name = `${this.#sourcePrefix}${seq}.parquet`;
+    // The reference DuckDB will answer to, which is `opfs://<name>` when it registered
+    // by name — the route that works on WebKit as well as Chromium. Taken from the
+    // registration rather than assumed, because the fallbacks register under the plain
+    // name. Session-local either way: this is minted fresh on every restore.
+    const file = await this.#duckdb.registerParquetFile(name, src.parquet);
     this.#wideFiles.add(file);
     const rowidBase = src.rowidBase ?? seq * ROWID_STRIDE;
     this.#noteRowidBase(rowidBase); // the saved base may be ahead of a restart-from-0 seq

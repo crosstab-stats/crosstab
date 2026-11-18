@@ -183,7 +183,14 @@ async function runCase(duckdb, label, { seed }) {
         at(`seed:${strategy.name}`);
         const s = await makeInstance(duckdb);
         try {
-          await s.db.open(strategy.openPath ? { path: strategy.openPath } : {});
+          // READ_WRITE explicitly. Both strategies failed last run, and the second said
+          // why: "Cannot open database … in read-only mode: database does not exist".
+          // `open()` does not default to read-write, so neither ATTACH (which must
+          // create a file) nor opening a path that is not there could ever have worked.
+          await s.db.open({
+            ...(strategy.openPath ? { path: strategy.openPath } : {}),
+            accessMode: duckdb.DuckDBAccessMode.READ_WRITE,
+          });
           const conn = await s.db.connect();
           bytes = await strategy.run(s.db, conn);
           await conn.close();

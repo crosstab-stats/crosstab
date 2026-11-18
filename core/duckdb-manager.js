@@ -369,17 +369,28 @@ export class DuckDBManager {
     const writable = await handle.createWritable();
     await writable.write(bytes);
     await writable.close();
-    if (await this.#canUseOpfsHandles()) {
-      // Out-of-core: DuckDB reads the OPFS file directly via its handle (Chrome).
-      await this.#db.registerFileHandle(name, handle, this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS, true);
-    } else {
-      // Safari/WebKit can't accept an OPFS FileSystemFileHandle in the worker
-      // (DataCloneError — the same wall as #123). Register the bytes as an in-memory
-      // buffer instead so read_parquet still works; the OPFS file written above keeps
-      // persistence intact. Bounded by memory (a multi-GB cumulative GSS may still
-      // exceed it — a device limit, not the clone bug), but wide files that fit now
-      // import on iOS. True out-of-core on Safari (opfs:// paths) is #122.
-      await this.#db.registerFileBuffer(name, bytes);
+    // Register BY NAME, on every platform. See {@link opfsRef}: this is the only route
+    // that works on WebKit, and it works on Chromium too, so there is one path rather
+    // than a capability branch. What it replaces on iOS was `registerFileBuffer` — the
+    // whole Parquet in the heap, which made the out-of-core path not out-of-core exactly
+    // where that hurt most.
+    //
+    // The handle fallback stays for one reason only: if registration by name ever fails,
+    // a device that CAN post handles should not lose the feature over it.
+    try {
+      await this.#db.registerOPFSFileName(opfsRef(name));
+      return opfsRef(name);
+    } catch (err) {
+      if (await this.#canUseOpfsHandles()) {
+        await this.#db.registerFileHandle(name, handle, this.#duckdb.DuckDBDataProtocol.BROWSER_FSACCESS, true);
+      } else {
+        // Nothing left but memory. Bounded by the device, and no longer the normal case.
+        console.warn('[duckdb] OPFS registration by name failed; falling back to an in-memory buffer', err);
+        await this.#db.registerFileBuffer(name, bytes);
+      }
+      // Both fallbacks register under the PLAIN name, so the reference differs by route.
+      // Returning it is what keeps the caller from having to know which route was taken.
+      return name;
     }
   }
 
@@ -413,11 +424,13 @@ export class DuckDBManager {
     return {
       // One write() call == one row group (rowGroupSize huge so it isn't re-split).
       writeRowGroup: (columnData) => pw.write({ columnData, rowGroupSize: 1_000_000_000 }),
+      // Returns the REFERENCE DuckDB will answer to, not the byte count — the caller
+      // needs it for `read_parquet`, and it is `opfs://<name>` whenever registration by
+      // name succeeded (see {@link opfsRef}). Nothing used the byte count.
       finalize: async (name) => {
         pw.finish();
         const bytes = new Uint8Array(bw.getBuffer());
-        await this.registerParquetFile(name, bytes);
-        return bytes.byteLength;
+        return this.registerParquetFile(name, bytes);
       },
     };
   }
@@ -425,9 +438,15 @@ export class DuckDBManager {
   /** Drop a file registered via {@link registerParquetFile}; optionally delete the
    * backing OPFS file too (otherwise it persists for a later session to re-register). */
   async dropRegisteredFile(name, { removeFromOpfs = false } = {}) {
-    try { await this.#db.dropFile(name); } catch { /* best-effort */ }
+    // `name` may be either spelling: the reference `registerParquetFile` returned
+    // (`opfs://x` when registered by name) or the plain OPFS file name. Drop both from
+    // DuckDB — whichever was not used is a harmless no-op — and always strip the prefix
+    // before touching OPFS, which knows nothing about it.
+    const plain = String(name ?? '').replace(/^opfs:\/\//, '');
+    try { await this.#db.dropFile(opfsRef(plain)); } catch { /* best-effort */ }
+    try { await this.#db.dropFile(plain); } catch { /* best-effort */ }
     if (removeFromOpfs) {
-      try { const root = await navigator.storage.getDirectory(); await root.removeEntry(name); } catch { /* best-effort */ }
+      try { const root = await navigator.storage.getDirectory(); await root.removeEntry(plain); } catch { /* best-effort */ }
     }
   }
 
@@ -663,6 +682,33 @@ export class DuckDBManager {
  * @param {string} name
  * @returns {string}
  */
+/**
+ * How DuckDB refers to an OPFS file we have registered.
+ *
+ * Registration by NAME is the only route that works everywhere. `registerFileHandle`
+ * posts a `FileSystemFileHandle` to the worker and WebKit refuses to clone it
+ * (`DataCloneError`), which is why `registerParquetFile` used to fall back to
+ * `registerFileBuffer` on iOS — loading the whole Parquet into memory, so the
+ * "out-of-core" path was nothing of the kind on the one platform least able to afford it.
+ *
+ * `registerOPFSFileName` takes a string; the worker calls
+ * `navigator.storage.getDirectory()` and opens its own sync access handle, so nothing
+ * crosses the boundary. Measured 2026-11-18 on BOTH an iPhone (iOS 18.7, where
+ * `opfsHandlesToWorker` is false) and Chromium desktop (where it is true): registered and
+ * read back identically. One path, not two.
+ *
+ * The cost is that the registered key — and therefore the string SQL must use — carries
+ * the prefix. Everything in the app keeps the plain OPFS file name; this is applied at
+ * the DuckDB boundary and nowhere else.
+ *
+ * @param {string} name - the plain OPFS file name
+ * @returns {string} e.g. `opfs://ct_wide_3.parquet`
+ */
+export function opfsRef(name) {
+  const s = String(name ?? '');
+  return s.startsWith('opfs://') ? s : `opfs://${s}`;
+}
+
 export function quoteIdent(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
 }
