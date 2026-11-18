@@ -7,8 +7,8 @@
  * College Scorecard's MERGED2025_26_PP.csv is 3,379 columns wide. Exactly 19 of them
  * are genuinely text. The reader typed **13** as numeric.
  *
- * The other 3,347 are numbers carrying one of two sentinels — "NA" (8.0M values) and
- * "PS" (1.3M) — and the rule "numeric iff every non-empty value parses as finite" is
+ * The other 3,347 are numbers carrying one of two sentinels — "NA" (15.7M values) and
+ * "PS" (2.6M) — and the rule "numeric iff every non-empty value parses as finite" is
  * all-or-nothing, so one "NA" in 6,272 rows makes the whole column a string. Typed as
  * strings they cannot be analysed at all, and they cost 322 MiB of DuckDB string slots
  * against 163 MiB as doubles, inside a database that (separately) could not spill.
@@ -154,7 +154,7 @@ test('a column needing five different codes is not a numeric column', async () =
 });
 
 test('a column that is ALL code is numeric and entirely missing', async () => {
-  // 2,665 columns of the owner's file are this: withheld or unreported for every
+  // 2,652 columns of the owner's file are this: withheld or unreported for every
   // institution. The host said "NA means missing", so the column is a numeric variable
   // with no data — not a text column full of the word "NA".
   const r = await run('a,b\n1,NA\n2,NA\n', { answer: () => ['NA'] });

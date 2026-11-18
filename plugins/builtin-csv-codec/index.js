@@ -67,11 +67,14 @@ const READ_CHUNK = 1 << 22; // 4 MiB per random-access read
 //
 // College Scorecard's MERGED2025_26_PP.csv is 3,379 columns, of which exactly 19 are
 // genuinely text. The other 3,360 are numbers — but only 13 of them TYPE as numeric,
-// because the all-or-nothing rule below is defeated by two sentinels: "NA" (8.0M
-// values, recovers 2,843 columns on its own) and "PS" (1.3M, 414 on its own). Neither
+// because the all-or-nothing rule below is defeated by two sentinels: "NA" (15.7M
+// values, recovers 2,843 columns on its own) and "PS" (2.6M, 414 on its own). Neither
 // alone is enough; together they recover 3,347. Measured on the owner's file,
 // 2026-11-18 — and note the documented spelling "PrivacySuppressed" appears ZERO times
 // in that release, so a hard-coded list from the docs would have fixed nothing.
+//
+// Worth knowing when reading those counts: only 708 of the 3,379 columns hold any data
+// at all. 2,652 are withheld or unreported for every single institution.
 //
 // Typed as strings, those 3,347 variables cannot be analysed at all, and they cost
 // 322 MiB of DuckDB string slots against 163 MiB as doubles.
@@ -198,7 +201,7 @@ export async function readCsv(app, { name }) {
     //
     // A column whose values are ALL accepted codes therefore comes out numeric and
     // entirely missing, which is right: the host was asked whether that value means
-    // missing and said yes. 2,665 columns of the owner's file are exactly this — every
+    // missing and said yes. 2,652 columns of the owner's file are exactly this — every
     // institution's figure withheld or unreported for 2025-26. What stops a TEXT column
     // being swept up this way is that its values can never be proposed in the first
     // place (see `hasNumber` in {@link proposeMissingCodes}), not a rule here.
@@ -302,7 +305,7 @@ async function proposeMissingCodes(app, header, blockers, hasNumber) {
 
   // Stage 2 — the arithmetic, over every column the offered codes would actually
   // recover. That includes columns with no number in them at all, whose values are ALL
-  // codes: 2,665 of the owner's columns are withheld for every institution, and they
+  // codes: 2,652 of the owner's columns are withheld for every institution, and they
   // become numeric-and-entirely-missing the moment the code is ticked. Counting only
   // stage 1's columns would have told the user 695 where the answer is 3,347.
   const byValue = new Map(); // value -> {value, values, columns}
