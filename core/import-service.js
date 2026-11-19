@@ -120,7 +120,7 @@ import { looksLikeZip as looksLikeZipBytes } from './plugin-package.js';
  *          combos?: Array<{codes: string[], columns: number}>, omitted?: number}} proposal
  * @returns {?object}
  */
-export function missingCodesPrompt(fileName, proposal) {
+export function missingCodesPrompt(fileName, proposal, { files = 1, selected = null } = {}) {
   const candidates = proposal?.candidates ?? [];
   if (!candidates.length) return null;
   const n = (x) => Number(x).toLocaleString();
@@ -141,14 +141,18 @@ export function missingCodesPrompt(fileName, proposal) {
   }));
   return {
     title: 'Missing-value codes',
-    hint: `These values appear in “${fileName}” where numbers are expected, and look like `
+    // Naming one file while governing four would be a quiet lie, so it says which.
+    hint: `These values appear in ${files > 1 ? `“${fileName}” and the other ${files - 1} file${files === 2 ? '' : 's'}` : `“${fileName}”`} where numbers are expected, and look like `
       + `missing-value codes. Ticked, they are read as missing${all ? `, which makes ${n(all)} more columns numeric` : ''}`
       + '. Unticked, they stay text — and so does every column containing them. '
       + 'Cancel imports everything as text.'
       + (proposal?.omitted ? ` (${n(proposal.omitted)} rarer values are not listed.)` : ''),
     items,
     multiple: true,
-    selected: items.map((i) => i.value), // pre-selected: the detector proposes, you dispose
+    // Pre-selected: the detector proposes, you dispose. On a later file in the same
+    // import, `selected` carries what was already agreed so an existing answer is not
+    // silently dropped by a prompt that only appeared because of a NEW code.
+    selected: Array.isArray(selected) ? selected : items.map((i) => i.value),
     okLabel: 'Import',
   };
 }
@@ -205,40 +209,69 @@ export class ImportService {
   }
 
   /**
-   * Ask which recurring non-numeric values mean "missing", and return the accepted ones.
+   * Ask which recurring non-numeric values mean "missing", ONCE per import rather than
+   * once per file.
    *
-   * ## Why there is a question here at all
+   * ## Why once
    *
-   * College Scorecard's MERGED2025_26_PP.csv is 3,379 columns of which 19 are genuinely
-   * text — and the reader typed THIRTEEN as numeric, because the rule is all-or-nothing
-   * and two sentinels ("NA", "PS") defeat it. 3,347 numeric variables arrived as strings,
-   * unanalysable. The codes are DETECTED rather than hard-coded because the spelling the
-   * Scorecard docs use, "PrivacySuppressed", appears nowhere in that release.
+   * Selecting four Scorecard years produced four identical prompts — tedious, but that is
+   * not the reason this changed. Stacked sources are combined with `UNION ALL BY NAME`,
+   * and DuckDB resolves a column that is DOUBLE in one source and VARCHAR in another by
+   * casting to the common supertype: VARCHAR. So ticking the codes on files 1-2 and
+   * declining on file 3 silently reverts every recovered column to text across the WHOLE
+   * dataset — including the rows where they were accepted. No error, just the original
+   * mistyping back over all 27,252 rows.
    *
-   * Pre-selected and never applied invisibly: the detector proposes, the user disposes.
+   * Carrying one answer across the import makes that impossible by construction, which is
+   * better than making it unlikely.
    *
-   * ## Cancel imports as text
+   * ## Why it can still ask again
    *
-   * `selectFromList` resolves null on cancel, and that is read as "no codes" — the import
-   * proceeds with the old typing rather than aborting. The first pass has already read
-   * the whole file by this point, so throwing it away is the more annoying answer, and
-   * the hint says plainly which it is.
+   * Files genuinely differ — one of the owner's four offered a single code where the
+   * others offered two — so "ask once and reuse" would be wrong for a file that
+   * introduces a code nobody has been asked about. It is therefore asked again only for
+   * values not yet offered, with what was already accepted pre-ticked and kept. A file
+   * whose candidates are all old reuses the answer in silence.
    *
    * @param {string} fileName
-   * @param {{candidates?: Array<{value: string, values: number, columns: number}>,
-   *          combos?: Array<{codes: string[], columns: number}>, omitted?: number}} proposal
+   * @param {object} proposal - `{candidates, combos, omitted}` from the codec
+   * @param {{accepted: Set<string>, offered: Set<string>, files: number}} run - per-import state
    * @returns {Promise<string[]>}
    */
-  async #askMissingCodes(fileName, proposal) {
-    const opts = missingCodesPrompt(fileName, proposal);
-    if (!opts || !this.#ui?.selectFromList) return [];
+  async #askMissingCodes(fileName, proposal, run) {
+    const candidates = proposal?.candidates ?? [];
+    const fresh = candidates.filter((c) => !run.offered.has(c.value));
+    if (!fresh.length) {
+      // Nothing new to decide. Reuse so the stack stays consistently typed.
+      if (candidates.length) {
+        debug('import', 'missing codes reused', { file: fileName, accepted: run.accepted.size });
+      }
+      return [...run.accepted];
+    }
+
+    const opts = missingCodesPrompt(fileName, proposal, {
+      // Say so when the answer governs more than the file being named.
+      files: run.files,
+      // Previously accepted codes stay ticked; newly-found ones are proposed as usual.
+      selected: candidates.map((c) => c.value).filter((v) => run.accepted.has(v) || !run.offered.has(v)),
+    });
+    if (!opts || !this.#ui?.selectFromList) return [...run.accepted];
+
     const chosen = await this.#ui.selectFromList(opts);
+    for (const c of candidates) run.offered.add(c.value);
+    // Cancel keeps what was already agreed rather than retracting it mid-import.
+    if (Array.isArray(chosen)) {
+      run.accepted.clear();
+      for (const v of chosen) if (typeof v === 'string') run.accepted.add(v);
+    }
     debug('import', 'missing codes', {
+      file: fileName,
       offered: opts.items.length,
-      accepted: chosen?.length ?? 0,
+      fresh: fresh.length,
+      accepted: run.accepted.size,
       cancelled: chosen == null,
     });
-    return Array.isArray(chosen) ? chosen : [];
+    return [...run.accepted];
   }
 
   /**
@@ -680,6 +713,9 @@ export class ImportService {
    */
   async #importCodecFiles(spec, files, mode, id) {
     let committed = 0;
+    // One answer for the whole selection: see `#askMissingCodes`. Stacked sources are
+    // UNIONed BY NAME, so an inconsistent answer across files silently retypes the lot.
+    const codeRun = { accepted: new Set(), offered: new Set(), files: files.length };
     for (const file of files) {
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
@@ -698,7 +734,7 @@ export class ImportService {
         reader.onProgress?.((done, total) => progress(done, total));
         // Same reason, and it must be the same side of begin(): the codec asks during
         // pass 1, because the answer decides the types it declares IN begin().
-        reader.onMissingCodes?.((proposal) => this.#askMissingCodes(file.name, proposal));
+        reader.onMissingCodes?.((proposal) => this.#askMissingCodes(file.name, proposal, codeRun));
         const head = await reader.begin();
         const tick = (columns) => {
           const k = Object.keys(columns)[0];
