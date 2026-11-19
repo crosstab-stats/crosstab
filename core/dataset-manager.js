@@ -834,6 +834,10 @@ export class DatasetManager {
     return this.#target().wouldExceedTableBudget(variables, rowCount);
   }
 
+  get canStreamOutOfCore() {
+    return this.#target().canStreamOutOfCore;
+  }
+
   loadStreaming(o) {
     return this.#target().loadStreaming(o);
   }

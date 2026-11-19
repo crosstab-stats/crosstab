@@ -561,6 +561,13 @@ export class DataStore {
     return this.#duckdb.wouldExceedTableBudget(variables, rowCount);
   }
 
+  /** Whether the ingest can stream out of core here — false on WebKit. Exposed so the
+   * import can LOG it: two round trips were spent reasoning about this value when
+   * printing it would have settled the question immediately. */
+  get canStreamOutOfCore() {
+    return this.#duckdb.canStreamOutOfCore;
+  }
+
   /**
    * Load a **very wide** file as a *wide source*: a single streaming pass encodes
    * the data — in JS, outside DuckDB — to one Parquet **file** on OPFS (carrying a

@@ -104,6 +104,7 @@ import { passphraseFor } from './at-rest.js';
  */
 
 import { escapeHtml } from './text.js';
+import { estimateTableBytes } from './duckdb-manager.js';
 import { debug, recordError } from './debug.js';
 import { looksLikeZip as looksLikeZipBytes } from './plugin-package.js';
 
@@ -718,11 +719,17 @@ export class ImportService {
         // worse than the crash it was meant to prevent.
         const overBudget = !head.wide && await this.#data.wouldExceedTableBudget(head.variables, head.rowCount);
         const wide = head.wide || overBudget;
+        // Everything the decision was made FROM, not just what it decided. Two runs were
+        // spent reasoning about `canStream` from the outside when printing it would have
+        // ended the question — a log line that reports a verdict without its inputs
+        // invites exactly that.
         debug('import', 'route', {
           wide,
           declaredWide: head.wide,
           overBudget,
           loadedMiB: Math.round((this.#data.loadedTableBytes ?? 0) / 1048576),
+          estMiB: Math.round(estimateTableBytes(head.variables, head.rowCount) / 1048576),
+          canStream: this.#data.canStreamOutOfCore,
         });
         if (wide) {
           await this.#data.loadWide({
