@@ -95,6 +95,27 @@ bottom; they are the project's memory and are not summarised away.
       final table at once. The phase markers pinned it: `[data] ingest finishing` was the
       last line the dying process wrote.
 
+      **PARITY REACHED, verified on the device 2026-11-19.** Four Scorecard years imported
+      back-to-back on an iPhone (iOS 18.7), every one routed wide, every one saved:
+
+          route {wide:true, overBudget:true, estMiB:163..168, canStream:false}
+          read finished x4 — 2.9s, 2.7s, 3.2s, 3.4s
+
+      `loadedMiB` stays 0 across all four because wide sources are OPFS Parquet that DuckDB
+      only reads, so the tenth import behaves like the first. The phone now does what the
+      desktop does.
+
+      **AN UNCONTROLLED OBSERVATION WORTH CHASING.** Those 2.9s compare against 28s for the
+      same 6,272-row file on the desktop (table path, build 01:45 PM) and 46s for a wide one
+      on the old buffered writer. That is ~10x, and there is a plausible mechanism — the old
+      `ByteWriter` doubles its ArrayBuffer and memcpys the whole thing on each growth, so an
+      80 MiB encode pays repeated large copies plus GC pressure, which the streaming path
+      does not. But it is NOT a controlled comparison: different device, different build,
+      and for the first two a different code path. **Measure desktop on the current build
+      before believing any of it.** If the wide path really is faster as well as bounded,
+      `TABLE_BYTE_BUDGET` (384 MiB) deserves re-asking rather than defending — e85f8e4
+      rejected width-routing on a measurement that predates the streaming writer.
+
       **WHAT IS STILL NOT FIXED ON MOBILE.** Only the wide-file READ path went through
       `registerParquetFile`. The streaming out-of-core INGEST (`beginStreamIngest`)
       registers each OPFS part with `registerFileHandle` and then has DuckDB `COPY … TO`
