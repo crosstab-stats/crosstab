@@ -111,10 +111,22 @@ bottom; they are the project's memory and are not summarised away.
       `registerParquetFile` works: it writes the bytes with `createWritable` on the main
       thread FIRST, then registers.
 
-      So the ingest path needs a different shape on WebKit — e.g. COPY to a buffered file,
-      `copyFileToBuffer`, write to OPFS, register by name — which costs an extra copy and
-      should be measured before being assumed better than the in-memory ingest it replaces.
-      Until then: mobile has out-of-core READS but not out-of-core INGEST.
+      **MEASURED 2026-11-18, and the answer is NO — do not build this.** The probe wrote a
+      placeholder byte so the size gate would pass, registered the file by name, and ran
+      `COPY (…) TO 'opfs://…' (FORMAT parquet)`. The statement executed (it is in the worker
+      log) and the OPFS file stayed at **1 byte**; the read-back failed with "too small to
+      be a Parquet file". The bytes went to the heap. By-name registration gives WebKit
+      **reads only**, so every variant of "stream the ingest out of core on WebKit" is
+      blocked on a primitive that does not exist there — including the COPY-then-
+      `copyFileToBuffer` shape suggested above, which is doubly dead (see below).
+
+      **THE REAL MOBILE CEILING IS OURS, NOT DUCKDB'S.** `loadWide` already works on
+      WebKit because it writes Parquet in **JS** with `createWritable` and never asks
+      DuckDB to write anything. Its limit is that `openParquetWriter` accumulates the whole
+      file in a `ByteWriter` and only then calls `registerParquetFile` — so peak memory is
+      one row group PLUS the entire encoded Parquet. Streaming those bytes to the OPFS
+      writable as row groups complete would remove the last mobile ceiling, needs nothing
+      from duckdb-wasm, and can be tested in node. That is the thing to build.
 
       1. **Fix the OPFS database first** (see the follow-up entry below). Most of the memory
          branches — `isWideDataset`, cell-sized batches, `rowGroupFor`, the cumulative table
@@ -2859,7 +2871,19 @@ this is the index.
   so nothing upstream can bootstrap a NEW OPFS database and dropping `removeEntry` alone
   leaves a first boot buffered. Probably: seed a valid empty DB (open buffered →
   `copyFileToBuffer` → write → reopen), then clean-start by dropping tables instead of
-  deleting the file. Mechanism is written up in `core/duckdb-manager.js`. *(under #98, codec interface / f27c337)*
+  deleting the file. Mechanism is written up in `core/duckdb-manager.js`.
+
+  **2026-11-18, three probe rounds in: the seed is blocked on `copyFileToBuffer`, and it
+  is NOT a naming problem.** Every strategy (attach-copy-detach, open-buffered-path,
+  attach-with-table) reached that call with every statement before it succeeding — and
+  `globFiles` then showed DuckDB holding the file under exactly the name being passed:
+  `crosstab-probe-names.db`, `fileSize: 278529`, `dataProtocol: 0` (a memory buffer,
+  which independently confirms the database is not disk-backed). Copying that name
+  fails; copying `…db.wal` — 1 byte, closed after CHECKPOINT — **succeeds**. So the call
+  works, and what differs is the file being open and non-trivial, not what it is called.
+  The naming theory was mine and it was wrong; do not spend another round on it. If this
+  is picked up: DETACH first, check the file still appears in `globFiles`, and copy it
+  closed. *(under #98, codec interface / f27c337)*
 - **Record the accepted missing-value codes on the import op** so an exported script
   re-applies them instead of re-asking. Op-log replay inside a project is unaffected (it
   restores the stored parquet and never re-runs the codec); it is the `.ctscript`/`.do`
