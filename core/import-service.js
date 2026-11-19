@@ -737,6 +737,7 @@ export class ImportService {
             source: tag,
             variables: head.variables,
             rowCount: head.rowCount,
+            missingCodes: head.missingCodes,
             onProgress: (done) => progress(done, head.rowCount),
             // RETURN onBatch's promise: `drain` awaits the callback, so this is the whole
             // backpressure chain for the streaming Parquet write. Dropping it would let
@@ -747,6 +748,7 @@ export class ImportService {
           await this.#data.loadStreaming({
             mode: fileMode,
             source: tag,
+            missingCodes: head.missingCodes,
             ingest: async (ctx) => {
               // MUST await: begin() is async (it creates the DuckDB ingester); without
               // the await, reader.drain() could deliver the first batch before the

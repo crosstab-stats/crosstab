@@ -218,6 +218,7 @@ function translate(text, D, opts = {}) {
     // that is not a step this translator can honestly write.
     firstSource: null,
     firstImporter: null,
+    firstMissingCodes: [],
     sources: sourceIndex(opts.analyses),
   };
   let statements = 0;
@@ -234,10 +235,16 @@ function translate(text, D, opts = {}) {
       // The quoted name on the first `use`, and the importer that read it. Both come
       // off the line itself: this translator re-parses the real text and has no second
       // channel, which is also why the importer is written into the line.
-      const use = /^#\s*use\s+"((?:[^"\\]|\\.)*)"(?:\s+via\s+([\w.-]+))?/i.exec(line);
+      const use = /^#\s*use\s+"((?:[^"\\]|\\.)*)"(?:\s+via\s+([\w.-]+))?(?:\s+missing\s+(.+))?$/i.exec(line);
       if (use && ctx.firstSource == null) {
         ctx.firstSource = use[1].replace(/\\(.)/g, '$1');
         ctx.firstImporter = use[2] ?? null;
+        // The values the import read as missing, taken off the same line for the same
+        // reason `via` is: this translator re-parses the text and has no second channel.
+        // Without them the open command below reads DIFFERENT data than CrossTab had.
+        ctx.firstMissingCodes = use[3]
+          ? [...use[3].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, '$1'))
+          : [];
       }
       const c = commentThrough(line, D, ctx);
       if (c != null) body.push(c);
@@ -272,7 +279,7 @@ function translate(text, D, opts = {}) {
     // than a placeholder the reader has to find and correct. `read` is null when the
     // extension is one R has no obvious reader for, and then the placeholder and its
     // instruction come back — a line that pretends to work is worse than one that asks.
-    const read = openCommand('r', ctx.firstSource, ctx.firstImporter);
+    const read = openCommand('r', ctx.firstSource, ctx.firstImporter, ctx.firstMissingCodes);
     const pre = read
       ? [
         D.comment('--- 1. Load the data -------------------------------------------------'),
@@ -297,7 +304,7 @@ function translate(text, D, opts = {}) {
     }
   }
 
-  const opensItsOwnData = !!(ctx.firstSource && openCommand(D.id, ctx.firstSource, ctx.firstImporter));
+  const opensItsOwnData = !!(ctx.firstSource && openCommand(D.id, ctx.firstSource, ctx.firstImporter, ctx.firstMissingCodes));
   const head = [
     `Exported from CrossTab — best-effort ${D.label} translation.`,
     `${translated} of ${statements} statement${statements === 1 ? '' : 's'} translated` +
@@ -378,8 +385,8 @@ function commentThrough(line, D, ctx = {}) {
     // In R the preamble has already opened this file, so repeating "open it before
     // running this" underneath the read line would contradict it. The anchor is dropped
     // rather than reworded: the read call above says the same thing, in code.
-    if (D.id === 'r' && name && openCommand('r', name, ctx.firstImporter)) return null;
-    const open = D.id !== 'r' && name ? openCommand(D.id, name, ctx.firstImporter) : null;
+    if (D.id === 'r' && name && openCommand('r', name, ctx.firstImporter, ctx.firstMissingCodes)) return null;
+    const open = D.id !== 'r' && name ? openCommand(D.id, name, ctx.firstImporter, ctx.firstMissingCodes) : null;
     if (open) {
       return `${D.comment(`CrossTab data source: ${src[2]}`)}
 ${open.line}`;
@@ -1724,6 +1731,44 @@ function readerForExt(ext) {
 }
 
 /**
+ * How a dialect says "these strings mean missing".
+ *
+ * Only the TEXT formats take it. A .sav/.dta/.parquet carries its own missing values, and
+ * our codes only ever arise where a format has none — so adding an argument there would
+ * be noise at best and wrong at worst.
+ *
+ * R has the concept exactly: `na.strings` (and `na=` for readxl), one argument, no
+ * follow-up. Stata has nothing on `import delimited`, so the codes have to be undone
+ * afterwards — blank them in every string column, then `destring`, which is what a Stata
+ * user would write by hand and is why it is three lines rather than an option.
+ */
+function missingArgs(dialect, reader, codes) {
+  const list = Array.isArray(codes) ? codes.filter((c) => typeof c === 'string' && c) : [];
+  if (!list.length) return null;
+  const TEXT = new Set(['csvFile', 'tsvFile', 'excel']);
+  if (!TEXT.has(reader)) return null;
+
+  if (dialect === 'r') {
+    const vec = `c(${list.map((c) => `"${c.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(', ')})`;
+    // readxl spells it `na`; read.csv/read.delim spell it `na.strings`.
+    return { arg: reader === 'excel' ? `na = ${vec}` : `na.strings = ${vec}` };
+  }
+  if (dialect === 'stata') {
+    const inlist = list.map((c) => `"${c.replace(/"/g, '""')}"`).join(', ');
+    return {
+      after: [
+        'quietly ds, has(type string)',
+        `foreach v of varlist \`r(varlist)' {`,
+        `    quietly replace \`v' = "" if inlist(\`v', ${inlist})`,
+        '}',
+        'quietly destring, replace',
+      ].join('\n'),
+    };
+  }
+  return null;
+}
+
+/**
  * The command that opens a data file, per dialect.
  *
  * This exists because the exported R script used to begin
@@ -1751,7 +1796,7 @@ function readerForExt(ext) {
  * @returns {?{line: string, note?: string}} the open command, or null when the dialect
  *   cannot open that format natively and the caller should keep its instruction comment
  */
-export function openCommand(dialect, file, importer = null) {
+export function openCommand(dialect, file, importer = null, missingCodes = null) {
   const name = String(file ?? '').trim();
   if (!name) return null;
   const ext = (name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
@@ -1764,16 +1809,26 @@ export function openCommand(dialect, file, importer = null) {
   const q = (s) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   const sq = (s) => `'${s.replace(/'/g, "''")}'`;
 
+  // Fold the codes into whichever shape the dialect wants: an extra argument (R) or
+  // follow-up statements (Stata). Unchanged for a typed format, or when none were
+  // recorded — which is every import before this existed.
+  const withMissing = (cmd) => {
+    const m = missingArgs(dialect, reader, missingCodes);
+    if (!m) return cmd;
+    if (m.arg) return { ...cmd, line: cmd.line.replace(/\)$/, `, ${m.arg})`) };
+    return { ...cmd, line: `${cmd.line}\n${m.after}` };
+  };
+
   if (dialect === 'r') {
     switch (reader) {
-      case 'csvFile': return { line: `d <- read.csv(${q(name)}, stringsAsFactors = FALSE)` };
-      case 'tsvFile': return { line: `d <- read.delim(${q(name)}, stringsAsFactors = FALSE)` };
+      case 'csvFile': return withMissing({ line: `d <- read.csv(${q(name)}, stringsAsFactors = FALSE)` });
+      case 'tsvFile': return withMissing({ line: `d <- read.delim(${q(name)}, stringsAsFactors = FALSE)` });
       case 'sav': return { line: `d <- haven::read_sav(${q(name)})`, note: 'needs: install.packages("haven")' };
       case 'dta': return { line: `d <- haven::read_dta(${q(name)})`, note: 'needs: install.packages("haven")' };
       case 'por': return { line: `d <- haven::read_por(${q(name)})`, note: 'needs: install.packages("haven")' };
       case 'sas': return { line: `d <- haven::read_sas(${q(name)})`, note: 'needs: install.packages("haven")' };
       case 'rds': return { line: `d <- readRDS(${q(name)})` };
-      case 'excel': return { line: `d <- readxl::read_excel(${q(name)})`, note: 'needs: install.packages("readxl")' };
+      case 'excel': return withMissing({ line: `d <- readxl::read_excel(${q(name)})`, note: 'needs: install.packages("readxl")' });
       case 'parquet': return { line: `d <- arrow::read_parquet(${q(name)})`, note: 'needs: install.packages("arrow")' };
       case 'ndjson': return { line: `d <- jsonlite::stream_in(file(${q(name)}))`, note: 'needs: install.packages("jsonlite")' };
       default: return null;
@@ -1782,9 +1837,9 @@ export function openCommand(dialect, file, importer = null) {
   if (dialect === 'stata') {
     switch (reader) {
       case 'dta': return { line: `use ${q(name)}, clear` };
-      case 'csvFile': return { line: `import delimited ${q(name)}, clear` };
-      case 'tsvFile': return { line: `import delimited ${q(name)}, delimiter(tab) clear` };
-      case 'excel': return { line: `import excel ${q(name)}, firstrow clear` };
+      case 'csvFile': return withMissing({ line: `import delimited ${q(name)}, clear` });
+      case 'tsvFile': return withMissing({ line: `import delimited ${q(name)}, delimiter(tab) clear` });
+      case 'excel': return withMissing({ line: `import excel ${q(name)}, firstrow clear` });
       // A .sav needs `usespss` or a conversion; naming a command that may not be
       // installed is worse than the instruction comment the caller already writes.
       default: return null;

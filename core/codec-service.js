@@ -229,7 +229,13 @@ export class CodecService {
       pluginId: spec.pluginId, // whose declared assets loadAsset() may resolve (#119)
       sink: {
         begin: (variables, storageTypes, opts = {}) => {
-          head = { variables, storageTypes, rowCount: opts.rowCount ?? -1, wide: !!opts.wide };
+          head = {
+            variables, storageTypes, rowCount: opts.rowCount ?? -1, wide: !!opts.wide,
+            // What the codec was told to treat as missing. Carried so the import can
+            // RECORD it: a script that re-reads the file without these codes reads
+            // different data, which is the one thing an exported script must not do.
+            missingCodes: Array.isArray(opts.missingCodes) ? opts.missingCodes : [],
+          };
           // The whole shape of the import, in one line, at the moment it is decided.
           // The owner's OOM reproduced with logging ON and left NOTHING in the log,
           // because this path had no instrumentation at all: the route (a DuckDB table

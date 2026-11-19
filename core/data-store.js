@@ -124,6 +124,25 @@ const SOURCE_OPS = new Set(['load', 'append', 'join']);
  * created by the app bootstrap and exposed to plugins (read-mostly) through the
  * {@link DataStore#api} surface.
  */
+/**
+ * The missing-value codes an import applied, normalised for the op log.
+ *
+ * Recorded because an exported script that re-reads the file WITHOUT them reads
+ * different data: `read.csv` leaves "PS" as text, so the 3,347 columns CrossTab typed as
+ * numeric come back as character and every analysis below them runs on something else.
+ * The script-export rule is "emit only what the matching importer can read back", and
+ * without this the import line quietly breaks it.
+ *
+ * Always an array — never undefined — so the op shape does not change depending on
+ * whether anyone was asked.
+ *
+ * @param {unknown} codes
+ * @returns {string[]}
+ */
+function normaliseCodes(codes) {
+  return Array.isArray(codes) ? codes.filter((c) => typeof c === 'string') : [];
+}
+
 export class DataStore {
   /** @type {import('./event-bus.js').EventBus} */
   #bus;
@@ -474,7 +493,7 @@ export class DataStore {
    * @param {(ctx: {begin: Function, batch: Function}) => Promise<void>} opts.ingest
    * @returns {Promise<void>}
    */
-  async loadStreaming({ mode = 'replace', source, origin, importer, ingest }) {
+  async loadStreaming({ mode = 'replace', source, origin, importer, missingCodes, ingest }) {
     const had = this.#hasData();
     const combine = had && mode === 'append' ? 'append' : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
@@ -534,7 +553,8 @@ export class DataStore {
     this.#sourceTables.add(table);
     this.#duckdb.noteTableBytes(table, estimateTableBytes(meta, ingestedRows));
     // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
-    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null, importer: importer ?? null };
+    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null,
+      importer: importer ?? null, missingCodes: normaliseCodes(missingCodes) };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     debug('data', 'rederiving', { rows: ingestedRows, columns: meta.length });
     await this.rederive(this.#loadReason(combine, had));
@@ -595,7 +615,7 @@ export class DataStore {
    *   - Stream the whole file once, calling `onBatch` per batch of rows (all columns).
    * @returns {Promise<void>}
    */
-  async loadWide({ mode = 'replace', source, origin, importer, rowGroupRows = 0, variables, rowCount, onProgress, stream }) {
+  async loadWide({ mode = 'replace', source, origin, importer, missingCodes, rowGroupRows = 0, variables, rowCount, onProgress, stream }) {
     if (!Array.isArray(variables) || variables.length === 0) {
       throw new Error('loadWide: variables (the file catalog) are required');
     }
@@ -688,6 +708,7 @@ export class DataStore {
       label: source ?? null,
       origin: origin ?? null,
       importer: importer ?? null,
+      missingCodes: normaliseCodes(missingCodes),
     };
     this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
     await this.rederive(this.#loadReason(combine, had));
@@ -1801,7 +1822,8 @@ export class DataStore {
       if (SOURCE_OPS.has(type)) {
         // `origin` rides the save: a project reopened next year should still say which
         // file it was built from, which is the entire point of recording it.
-        op.src = { meta: src.meta.map((m) => ({ ...m })), label: src.label ?? null, origin: src.origin ?? null, importer: src.importer ?? null };
+        op.src = { meta: src.meta.map((m) => ({ ...m })), label: src.label ?? null, origin: src.origin ?? null,
+          importer: src.importer ?? null, missingCodes: normaliseCodes(src.missingCodes) };
         if (src.wide) {
           op.src.wide = true;
           op.src.rowidBase = src.rowidBase;
@@ -1846,7 +1868,8 @@ export class DataStore {
       if (op.reads?.length) env.reads = op.reads;
       if (SOURCE_OPS.has(op.type)) {
         const s = op.payload.src;
-        const src = { meta: s.meta.map((m) => ({ ...m })), label: s.label ?? null, origin: s.origin ?? null, importer: s.importer ?? null };
+        const src = { meta: s.meta.map((m) => ({ ...m })), label: s.label ?? null, origin: s.origin ?? null,
+          importer: s.importer ?? null, missingCodes: normaliseCodes(s.missingCodes) };
         if (s.wide) { src.wide = true; src.rowidBase = s.rowidBase; }
         if (liveSrcIds.has(op.id)) {
           // Byte sidecar is keyed by the STABLE op id (not a positional index), so a

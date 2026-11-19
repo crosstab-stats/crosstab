@@ -16,6 +16,7 @@
  *   Data sources (READ-ONLY anchors — data isn't embedded in text, so these are
  *   emitted as comments and ignored on parse; edit them via File ▸ import / History):
  *     # use "Label"        # append "Label"        # join "Label" on key
+ *       …optionally ` via <importer>` and ` missing "CODE", "CODE"`
  *     # edit row N: col = value          (a manual cell override)
  *   Editable data transforms:
  *     compute NAME [as TYPE] = EXPR            (EXPR is a DuckDB scalar expression)
@@ -170,11 +171,11 @@ export function timeline(applied, analyses = [], order = null) {
 function opToLines(op) {
   switch (op.type) {
     case 'load':
-      return [`# use ${str(srcLabel(op))}${srcVia(op)}`];
+      return [`# use ${str(srcLabel(op))}${srcVia(op)}${srcMissing(op)}`];
     case 'append':
-      return [`# append ${str(srcLabel(op))}${srcVia(op)}`];
+      return [`# append ${str(srcLabel(op))}${srcVia(op)}${srcMissing(op)}`];
     case 'join':
-      return [`# join ${str(srcLabel(op))}${op.joinKey ? ` on ${ident(String(op.joinKey))}` : ''}${srcVia(op)}`];
+      return [`# join ${str(srcLabel(op))}${op.joinKey ? ` on ${ident(String(op.joinKey))}` : ''}${srcVia(op)}${srcMissing(op)}`];
     case 'setCell':
       return [`set cell row ${op.row != null ? op.row + 1 : 1} ${ident(op.column)} = ${val(op.value)}`];
     case 'computeVar':
@@ -233,6 +234,26 @@ function srcLabel(op) {
 function srcVia(op) {
   const id = op.src?.importer;
   return id ? ` via ${String(id)}` : '';
+}
+
+/**
+ * ` missing "NA", "PS"` — the values this import read as missing.
+ *
+ * In the line for the same reason `via` is: the script exporter re-parses this text and
+ * has no second channel. And it needs this one. An exported R script opens the file with
+ * `read.csv(...)`, which leaves "PS" as text — so without the codes the 3,347 columns
+ * CrossTab typed as numeric come back as character and every analysis below runs on
+ * different data. A script that reproduces nothing is the thing #176 exists to prevent.
+ *
+ * Quoted, because these ARE values rather than identifiers: a code can be anything the
+ * file put in a numeric column, including one with a space in it.
+ *
+ * Omitted entirely when empty, so the overwhelmingly common import is unchanged.
+ */
+function srcMissing(op) {
+  const codes = op.src?.missingCodes;
+  if (!Array.isArray(codes) || !codes.length) return '';
+  return ` missing ${codes.map((c) => str(String(c))).join(', ')}`;
 }
 
 function typeSuffix(varType) {
