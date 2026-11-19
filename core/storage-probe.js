@@ -32,6 +32,7 @@
 
 import { debug } from './debug.js';
 import { getAssets } from './assets.js';
+import { opfsRef } from './duckdb-manager.js';
 
 /** Rows written before CHECKPOINT. Enough that a disk-backed file cannot be 0 bytes,
  * small enough that a buffered one cannot OOM the probe. */
@@ -349,6 +350,131 @@ async function probeOpfsByName(duckdb) {
   return out;
 }
 
+/**
+ * Can DuckDB WRITE to an OPFS file it was given by name?
+ *
+ * The question that decides whether an out-of-core ingest is buildable on WebKit.
+ * Reading by name is settled — it works on both platforms. Writing is not, and the
+ * reason is the size gate: by-name registration only registers a file that ALREADY HAS
+ * BYTES, so a fresh, empty Parquet part is skipped, buffered in the heap, and `COPY … TO`
+ * writes to memory. That is precisely what the out-of-core ingest exists to avoid.
+ *
+ * The candidate trick is to defeat the gate rather than the API: write one placeholder
+ * byte with `createWritable` (which WebKit does support from the main thread), register
+ * the now-non-empty file by name, and let `COPY` truncate and overwrite it. The protocol-3
+ * handlers in the bundle do implement truncate and write, so this is plausible — and
+ * plausible is exactly the standard that has cost the owner four round trips today.
+ *
+ * Decisive either way: if the OPFS file grows past the placeholder AND reads back with
+ * the right row count, WebKit can write out of core and `beginStreamIngest` can be
+ * rebuilt on it. If it stays one byte, the bytes went to the heap and it cannot.
+ */
+async function probeOpfsWrite(duckdb) {
+  const name = 'crosstab-probe-write.parquet';
+  const out = { case: 'opfs-by-name-write' };
+  let inst = null;
+  let step = 'start';
+  const at = (s) => { step = s; };
+  try {
+    at('placeholder');
+    // One byte, so the registration gate has something to measure.
+    await opfsWrite(name, new Uint8Array([0]));
+    out.sizeBeforeCopy = await opfsSize(name);
+    at('instance');
+    inst = await makeInstance(duckdb);
+    await inst.db.open({ accessMode: duckdb.DuckDBAccessMode.READ_WRITE });
+    at('register');
+    await inst.db.registerOPFSFileName(opfsRef(name));
+    const conn = await inst.db.connect();
+    at('copy');
+    await conn.query(
+      `COPY (SELECT i, i * 2 AS j, ('v' || i) AS s FROM range(${PROBE_ROWS}) t(i)) `
+      + `TO '${opfsRef(name)}' (FORMAT parquet)`,
+    );
+    at('measure');
+    out.sizeAfterCopy = await opfsSize(name);
+    // The whole question: did the bytes reach OPFS, or the heap?
+    out.wroteToOpfs = (out.sizeAfterCopy ?? 0) > 1024;
+    at('readback');
+    const rows = await conn.query(`SELECT count(*) AS n FROM read_parquet('${opfsRef(name)}')`);
+    out.rowsRead = jsonSafe(rows.toArray().map((r) => r.toJSON()));
+    await conn.close();
+    at('done');
+  } catch (err) {
+    out.failedAt = step;
+    out.error = describeError(err);
+    out.workerLog = (inst?.logs ?? []).slice(-8);
+  } finally {
+    if (inst) {
+      await inst.db.terminate().catch(() => {});
+      inst.worker.terminate();
+    }
+    await opfsDelete(name);
+  }
+  debug('probe', 'case:opfs-by-name-write', out);
+  return out;
+}
+
+/**
+ * What does DuckDB actually CALL its files?
+ *
+ * The other open thread. Every seed strategy died at `copyFileToBuffer` with each SQL
+ * statement before it succeeding, which points at the name rather than the operation —
+ * and we have already seen DuckDB normalise `opfs://x` to `opfs:/x` in its own log. If
+ * the file it created is held under a spelling other than the one passed to ATTACH, the
+ * copy is simply asking for something that is not there.
+ *
+ * `globFiles` reads the registry directly, so this stops being a guess.
+ */
+async function probeFileNames(duckdb) {
+  const attached = 'crosstab-probe-names.db';
+  const out = { case: 'file-names' };
+  let inst = null;
+  try {
+    await opfsDelete(attached);
+    inst = await makeInstance(duckdb);
+    await inst.db.open({ accessMode: duckdb.DuckDBAccessMode.READ_WRITE });
+    const conn = await inst.db.connect();
+    out.before = jsonSafe(await inst.db.globFiles('*'));
+    await conn.query(`ATTACH '${attached}' AS seed`);
+    await conn.query('CREATE TABLE seed.t (i INTEGER)');
+    await conn.query('CHECKPOINT seed');
+    // The names DuckDB holds AFTER creating the thing we then fail to copy.
+    out.after = jsonSafe(await inst.db.globFiles('*'));
+    // And try the copy against each name it reports, rather than the one we assumed.
+    out.copyAttempts = [];
+    const names = [attached, opfsRef(attached), `${attached}.wal`];
+    try {
+      for (const f of (JSON.parse(out.after) ?? [])) {
+        const n = f?.fileName ?? f?.name ?? null;
+        if (n && !names.includes(n)) names.push(n);
+      }
+    } catch { /* the list is diagnostic either way */ }
+    for (const n of names) {
+      try {
+        const bytes = await inst.db.copyFileToBuffer(n);
+        out.copyAttempts.push({ name: n, bytes: bytes?.length ?? 0 });
+      } catch (err) {
+        out.copyAttempts.push({ name: n, error: describeError(err).slice(0, 160) });
+      }
+    }
+    await conn.query('DETACH seed').catch(() => {});
+    await conn.close();
+  } catch (err) {
+    out.error = describeError(err);
+    out.workerLog = (inst?.logs ?? []).slice(-8);
+  } finally {
+    if (inst) {
+      await inst.db.terminate().catch(() => {});
+      inst.worker.terminate();
+    }
+    await opfsDelete(attached);
+    await opfsDelete(`${attached}.wal`);
+  }
+  debug('probe', 'case:file-names', out);
+  return out;
+}
+
 /** Which self-reporting APIs this duckdb build actually answers. Useful beyond this
  * probe: the table budget in data-store.js is an ESTIMATE only because none of these
  * was known to work. */
@@ -440,6 +566,10 @@ export async function probeStorage() {
   // seeding fails, which would mean iOS gets out-of-core READS even without a disk-backed
   // database. Worth knowing separately rather than folding into one verdict.
   report.cases.push(await probeOpfsByName(duckdb));
+  // The two that decide what gets built next: whether WebKit can WRITE out of core, and
+  // what DuckDB calls the file every seed attempt failed to copy.
+  report.cases.push(await probeOpfsWrite(duckdb));
+  report.cases.push(await probeFileNames(duckdb));
 
   try {
     report.introspection = await probeIntrospection(duckdb);
@@ -460,7 +590,11 @@ export async function probeStorage() {
           .map((a) => `${a.strategy}@${a.failedAt ?? 'ok'}`).join(', ') || seeded?.failedAt || '?'})`;
   // Reported as two findings, not one. They fail independently, and conflating them is
   // how "it does not work on mobile" turns into "mobile gets the slow path" by default.
-  report.verdict = `database: ${db} | opfs-by-name: ${byName?.readable ? 'READS — out-of-core by name works here' : `no (${byName?.failedAt ?? '?'})`}`;
+  const write = report.cases.find((c) => c.case === 'opfs-by-name-write');
+  report.verdict = `database: ${db}`
+    + ` | by-name READ: ${byName?.readable ? 'yes' : `no (${byName?.failedAt ?? '?'})`}`
+    // The one that decides whether an out-of-core ingest is buildable on WebKit.
+    + ` | by-name WRITE: ${write?.wroteToOpfs ? 'YES — the ingest can be rebuilt on this' : `no (${write?.failedAt ?? 'bytes went to the heap'})`}`;
   debug('probe', 'verdict', { verdict: report.verdict });
   return report;
 }
