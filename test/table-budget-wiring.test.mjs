@@ -30,7 +30,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const { DuckDBManager, estimateTableBytes, TABLE_BYTE_BUDGET } =
+const { DuckDBManager, estimateTableBytes, exceedsTableBudget, TABLE_BYTE_BUDGET } =
   await import('../core/duckdb-manager.js');
 const { stripComments } = await import('../core/plugin-modules.js');
 
@@ -70,16 +70,35 @@ test('re-noting a table replaces rather than doubles it', () => {
 });
 
 test('the three Scorecard years reproduce the real decision', () => {
-  // The exact sequence that FATAL-ed, now answered from one shared instance.
+  // The sequence that FATAL-ed, answered from one shared instance. The DECISION is the
+  // pure function here, with the capability supplied: a DuckDBManager that has never
+  // initialised cannot know what the platform can do, and the next test is about what it
+  // does with that.
   const db = new DuckDBManager();
-  assert.equal(db.wouldExceedTableBudget(SCORECARD, 6272), false, 'first: a table');
+  const over = (rows) => exceedsTableBudget(db.loadedTableBytes, SCORECARD, rows, true);
+
+  assert.equal(over(6272), false, 'first: a table');
   db.noteTableBytes('ct_src_1', estimateTableBytes(SCORECARD, 6272));
 
-  assert.equal(db.wouldExceedTableBudget(SCORECARD, 6430), false, 'second: still a table');
+  assert.equal(over(6430), false, 'second: still a table');
   db.noteTableBytes('ct_src_2', estimateTableBytes(SCORECARD, 6430));
 
-  assert.equal(db.wouldExceedTableBudget(SCORECARD, 7766), true, 'third: OUT OF CORE');
+  assert.equal(over(7766), true, 'third: OUT OF CORE');
   assert.ok(db.loadedTableBytes > 0, `and the total is not zero (was ${db.loadedTableBytes})`);
+});
+
+test('an uninitialised instance is CONSERVATIVE, not optimistic', async () => {
+  // Nothing here can reach a real DuckDB, so the capability stays unknown — which is
+  // exactly the state the first import found it in, and where the previous version read
+  // `null !== false`, decided the platform could stream, and let an iPhone build the
+  // table that killed it. Unknown must mean "assume it cannot".
+  const db = new DuckDBManager();
+  assert.equal(db.canStreamOutOfCore, null, 'unknown');
+  assert.equal(await db.wouldExceedTableBudget(SCORECARD, 6272), true,
+    'one Scorecard year goes out of core when we cannot confirm the platform streams');
+  const survey = Array.from({ length: 40 }, () => ({ type: 'numeric' }));
+  assert.equal(await db.wouldExceedTableBudget(survey, 100000), false,
+    'but being conservative must not drag ordinary data onto the slow path');
 });
 
 test('the instance passes its streaming capability into the budget', () => {
@@ -87,10 +106,25 @@ test('the instance passes its streaming capability into the budget', () => {
   // synchronous and the first import's routing depends on it, which is why the
   // capability is probed during init rather than on first ingest.
   const src = stripComments(readFileSync('core/duckdb-manager.js', 'utf8'));
-  assert.match(src, /exceedsTableBudget\(this\.loadedTableBytes, variables, rowCount, this\.#opfsHandleOk !== false\)/,
-    'the capability reaches the budget');
+  assert.match(src, /exceedsTableBudget\(this\.loadedTableBytes, variables, rowCount, this\.#opfsHandleOk === true\)/,
+    'the capability reaches the budget, and UNKNOWN counts as cannot-stream');
   assert.match(src, /await this\.#canUseOpfsHandles\(\)/,
-    'and is probed during init, before any routing decision');
+    'it is probed during init');
+  // The bug this replaces: the decision read the capability while it was still null,
+  // because the first import routes BEFORE anything has touched DuckDB. `null !== false`
+  // was true, the desktop budget applied, and the iPhone built the table that killed it.
+  assert.match(src, /async wouldExceedTableBudget\(variables, rowCount\) \{[\s\S]*?await this\.#ensureReady\(\)/,
+    'and the decision AWAITS readiness, so the answer exists when it is read');
+});
+
+test('every link in the budget chain awaits', () => {
+  // An un-awaited async call here returns a Promise, which is truthy — so forgetting
+  // one would route EVERYTHING out of core and look like a performance bug rather than
+  // a wiring bug. Worth pinning at each hop.
+  const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
+  assert.match(ds, /async wouldExceedTableBudget\(/, 'DataStore is async');
+  const imp = stripComments(readFileSync('core/import-service.js', 'utf8'));
+  assert.match(imp, /await this\.#data\.wouldExceedTableBudget\(/, 'and the import awaits it');
 });
 
 test('garbage byte counts cannot poison the total', () => {

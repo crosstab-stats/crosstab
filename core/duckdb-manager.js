@@ -99,8 +99,17 @@ export class DuckDBManager {
    * @param {number} rowCount
    * @returns {boolean}
    */
-  wouldExceedTableBudget(variables, rowCount) {
-    return exceedsTableBudget(this.loadedTableBytes, variables, rowCount, this.#opfsHandleOk !== false);
+  async wouldExceedTableBudget(variables, rowCount) {
+    // AWAITS readiness, which is the whole point. The capability is probed during init,
+    // and the first import decides its route BEFORE anything has touched DuckDB — so the
+    // first version read `#opfsHandleOk` while it was still null, `null !== false` was
+    // true, the desktop budget applied, and an iPhone built the table that killed it.
+    // The decision cannot be synchronous, because the fact it depends on is not.
+    try { await this.#ensureReady(); } catch { /* fall through: unknown is handled below */ }
+    // `=== true`, not `!== false`: unknown counts as cannot-stream. A device we failed to
+    // probe is not a device we may assume the best of, and the cost of being wrong that
+    // way is a slower import rather than a dead tab.
+    return exceedsTableBudget(this.loadedTableBytes, variables, rowCount, this.#opfsHandleOk === true);
   }
 
   /** Whether this browser can stream an ingest out of core. False on WebKit, where

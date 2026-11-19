@@ -557,7 +557,7 @@ export class DataStore {
    * @param {number} rowCount
    * @returns {boolean}
    */
-  wouldExceedTableBudget(variables, rowCount) {
+  async wouldExceedTableBudget(variables, rowCount) {
     return this.#duckdb.wouldExceedTableBudget(variables, rowCount);
   }
 

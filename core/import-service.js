@@ -716,7 +716,7 @@ export class ImportService {
         // for three imports running and the third FATAL-ed exactly as it had before the
         // budget existed. A guard that quietly neutralises the feature it guards is
         // worse than the crash it was meant to prevent.
-        const overBudget = !head.wide && this.#data.wouldExceedTableBudget(head.variables, head.rowCount);
+        const overBudget = !head.wide && await this.#data.wouldExceedTableBudget(head.variables, head.rowCount);
         const wide = head.wide || overBudget;
         debug('import', 'route', {
           wide,
