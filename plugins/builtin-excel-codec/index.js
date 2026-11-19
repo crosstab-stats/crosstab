@@ -1,32 +1,54 @@
 /**
  * @file plugins/builtin-excel-codec/index.js
- * Excel (.xlsx/.xls/.xlsm/.xlsb) as a format codec (#98) — read + write — via SheetJS.
+ * Excel (.xlsx/.xls/.xlsm/.xlsb) as a format codec (#98) — read + write.
  *
- * Unlike the CSV/ReadStat codecs this does NOT stream: a spreadsheet is an inherently
- * bounded format (≤ ~1,048,576 rows, and practically far smaller) and SheetJS builds
- * the whole workbook in memory anyway. So read decodes the whole file then emits rows
- * to the host ingest in batches (the commit stays memory-bounded through DuckDB), and
- * write pulls all rows, builds one worksheet, and emits the `.xlsx` bytes in one chunk.
+ * ## Reading streams; the format decides which reader
  *
- * SheetJS is a host-vetted shared library fetched via `app.codec.loadAsset('xlsx')`
- * (the sandbox has `connect-src 'none'` and can't fetch it itself) and blob-imported.
+ * An .xlsx/.xlsm is a zip of XML, so it CAN be read a chunk at a time, and is: the host's
+ * `core/xlsx-stream.js` inflates one sheet part through `DecompressionStream` and scans
+ * rows out of it. Measured on a College Scorecard year converted to .xlsx (3,379 × 6,272):
+ * 13–20 MiB of live heap for a 54 MiB slice of it, against SheetJS's 2,578 MiB for the
+ * same slice — SheetJS materialises every cell as an object, and the old code then built
+ * an array-of-arrays from that and pivoted THAT into columns, four copies alive at once.
+ * Extrapolated, the full file needed about 7.6 GiB against a renderer cap near 4.
  *
- * Read type handling mirrors the CSV codec: a column is numeric only if every non-empty
- * value is a real number; everything else (text, booleans, dates) becomes a string
- * column. `cellDates: true` turns date cells into JS `Date`s, carried as ISO text
- * (consistent with the engine's Bridge-A temporal convention). Write emits raw values
- * (numbers as numbers, everything else as text; missing → empty cell) so a file
- * round-trips — the same "raw values, not labels" contract the CSV codec uses.
+ * .xls (BIFF, an OLE compound file) and .xlsb (binary sheet parts) are not XML and have
+ * no streaming path, so they still go through SheetJS. They are the legacy formats, where
+ * a file big enough to matter is rare — .xls caps at 65,536 rows by construction.
  *
- * Multi-sheet workbooks: a single-sheet workbook imports straight through; a
- * multi-sheet workbook prompts with a checklist of sheets (row×col hints, first
- * sheet pre-checked) so summary/codebook sheets can be skipped. Selected sheets are
- * **split into separate datasets** — one per sheet — because workbook sheets are
- * usually heterogeneous (data + codebook + summary), so pooling/row-stacking them
- * would be wrong; joining is a deliberate keyed operation the existing Merge feature
- * owns. The first selected sheet streams through the host ingest as the primary
- * dataset (the codec must emit a schema); each additional sheet is created as its
- * own named dataset via `app.data.create`. Export writes a single sheet.
+ * This file therefore holds TWO readers. The alternative was an asterisk on the format
+ * picker saying "Excel: small files only", which the owner declined: *"Lack of parity
+ * isn't defensible for me when we have a path to parity."* Both readers end at the same
+ * place — `begin()` then cell-bounded `batch()` calls — so what the host ingests, the
+ * type rule it applies, and the missing-code prompt are identical either way.
+ *
+ * Writing still builds the workbook whole via SheetJS: it has no streaming writer, and an
+ * export is bounded by what is already in the dataset.
+ *
+ * ## Dependencies
+ *
+ * Both are **declared assets**, fetched by the host and blob-imported here (the sandbox
+ * has `connect-src 'none'` and can't fetch anything itself): `xlsx-stream` is a
+ * same-origin sibling path to the host's own module, `xlsx` is the host-vetted SheetJS
+ * build. An .xlsx no longer fetches SheetJS at all.
+ *
+ * ## Sheets, types and missing values
+ *
+ * Read type handling is the shared rule (`createTypeScan`): a column is numeric only if
+ * every non-empty value is a real number — a genuine JS number, not a string that parses
+ * as one, so a text cell reading "01234" stays a ZIP code. Date cells are carried as ISO
+ * text (the engine's Bridge-A temporal convention). Recurring non-numeric values are
+ * offered to the host as candidate missing codes, asked once per file.
+ *
+ * Multi-sheet workbooks: a single-sheet workbook imports straight through; a multi-sheet
+ * workbook prompts with a checklist of sheets (row×col hints, first sheet pre-checked) so
+ * summary/codebook sheets can be skipped. Selected sheets are **split into separate
+ * datasets** — one per sheet — because workbook sheets are usually heterogeneous (data +
+ * codebook + summary), so pooling/row-stacking them would be wrong; joining is a
+ * deliberate keyed operation the existing Merge feature owns. The first selected sheet
+ * streams through the host ingest as the primary dataset (the codec must emit a schema);
+ * each additional sheet is created as its own named dataset via `app.data.create`, which
+ * takes columns and so is still built whole. Export writes a single sheet.
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
@@ -35,7 +57,7 @@ const { uniqueName, createTypeScan } = globalThis.ctStd;
 export const manifest = {
   id: 'builtin-excel-codec',
   name: 'Excel codec',
-  version: '2', // #91 freshness marker: bumped when export was added
+  version: '3', // #91 freshness marker: bumped when .xlsx reading became streaming
   apiVersion: '0.1.0',
   category: 'Data',
   keywords: ['excel', 'xlsx', 'xls', 'spreadsheet', 'workbook', 'sheetjs', 'file'],
@@ -51,6 +73,13 @@ export const manifest = {
       needs: ['builtin-excel-codec'],
       seeAlso: ['import-data', 'export-data'],
     },
+  ],
+  // The streaming .xlsx reader is the HOST's (core/xlsx-stream.js), reached as a declared
+  // asset: a same-origin sibling path, fetched as text and blob-imported in the sandbox.
+  // That is why that module imports nothing — a blob URL has no base to resolve against.
+  // SheetJS is still here for .xls/.xlsb, and is no longer fetched at all for an .xlsx.
+  assets: [
+    { name: 'xlsx-stream', path: '../../core/xlsx-stream.js', kind: 'text' },
   ],
   rPackages: [],
   howto:
@@ -78,14 +107,261 @@ const EMIT_CELLS = 1_000_000;
 
 // --- read --------------------------------------------------------------------
 
-/** Decode an Excel workbook: parse with SheetJS, choose which sheet(s) to import,
- * and split them into datasets — the first streams through the host ingest (the
- * primary), each additional sheet becomes its own dataset via `app.data.create`.
- * Each sheet: first row = header, per-column type inference, rows in batches. */
+/**
+ * Decode an Excel workbook.
+ *
+ * Two readers, chosen by what the file actually is:
+ *
+ *  - **.xlsx/.xlsm** — the host's streaming reader (`core/xlsx-stream.js`, loaded as a
+ *    declared asset). An OOXML workbook is a zip of XML, so the sheet can be inflated
+ *    and scanned a chunk at a time. Measured on a Scorecard year converted to .xlsx:
+ *    13–20 MiB of live heap for a 54 MiB file, against SheetJS's 2,578 MiB for the same
+ *    file and an extrapolated 7.6 GiB for the full one.
+ *  - **.xls/.xlsb** — SheetJS. BIFF and the binary sheet parts are not XML and cannot be
+ *    scanned this way. They are also the legacy formats, where a file big enough to
+ *    matter is rare: .xls caps at 65,536 rows by construction.
+ *
+ * The streaming path reads the sheet TWICE — once to decide column types, once to emit.
+ * The alternative is holding every cell to decide types from, which is the thing being
+ * fixed; a second inflate costs CPU, and CPU is not what runs out.
+ */
 export async function readXlsx(app, { name }) {
   const size = await app.codec.size();
   const bytes = await readAll(app, size);
 
+  const ooxml = await openStreaming(app, bytes);
+  if (ooxml) return readStreaming(app, ooxml, name);
+  return readWithSheetJs(app, bytes, name);
+}
+
+/**
+ * Open the file with the streaming reader, or return null if it is not a format the
+ * reader handles (so the caller falls back to SheetJS).
+ *
+ * The detection is deliberately structural and cheap — zip magic, a workbook part, and
+ * sheet parts that are `.xml` rather than `.bin`. Only that much is guarded: once a file
+ * IS an OOXML workbook, a failure reading it is a bug in the reader and must surface as
+ * an error, not quietly re-route to the path that needs 7.6 GiB.
+ */
+async function openStreaming(app, bytes) {
+  let mod;
+  let wb;
+  let sheets;
+  try {
+    // "PK" — not a zip, so .xls (BIFF/OLE compound).
+    if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) return null;
+    mod = await importAsset(await app.codec.loadAsset('xlsx-stream'));
+    wb = mod.openWorkbook(bytes);
+    if (!wb.workbookEntry) return null;
+    sheets = await mod.listSheets(wb);
+    if (!sheets.length) return null;
+    if (sheets.some((s) => !/\.xml$/i.test(s.entry.name))) return null; // .xlsb: binary parts
+  } catch {
+    return null; // not something this reader recognises
+  }
+  // Past detection: anything from here is a real failure and is allowed to throw.
+  return {
+    mod,
+    sheets,
+    sharedStrings: await mod.readSharedStrings(wb.sharedStringsEntry),
+    dateStyles: await mod.readDateStyles(wb.stylesEntry),
+  };
+}
+
+/** A row with nothing in it. SheetJS's `blankrows: false` drops these, which means a
+ * blank row in the middle shifts every row after it — so dropping them is part of the
+ * contract, not a tidy-up. */
+const blankRow = (v) => !v || v.every((x) => x === null || x === undefined || x === '');
+
+/** Stream one sheet's rows, dropping blank rows and treating the first surviving row as
+ * the header. `onRow` therefore gets dense data rows. Returns the header row. */
+async function eachDataRow(ooxml, sheet, onRow) {
+  let header = null;
+  await ooxml.mod.streamSheetRows(sheet.entry, {
+    sharedStrings: ooxml.sharedStrings,
+    dateStyles: ooxml.dateStyles,
+    onRow: (values) => {
+      if (blankRow(values)) return undefined;
+      if (header === null) { header = values; return undefined; }
+      return onRow(values);
+    },
+  });
+  return header ?? [];
+}
+
+/** Read an .xlsx by streaming it. */
+async function readStreaming(app, ooxml, fileName) {
+  const items = [];
+  for (const sh of ooxml.sheets) {
+    // eslint-disable-next-line no-await-in-loop -- a few tabs, a few hundred bytes each.
+    const dim = await ooxml.mod.readSheetDimension(sh.entry);
+    items.push({
+      value: sh.name,
+      label: dim ? `${sh.name}  (${dim.rows.toLocaleString()} rows × ${dim.cols} cols)` : sh.name,
+    });
+  }
+  const chosen = await chooseSheets(app, items, fileName);
+  if (chosen == null) throw new Error('Excel import cancelled');
+  if (!chosen.length) throw new Error('Excel: no sheets selected');
+
+  const byName = new Map(ooxml.sheets.map((s) => [s.name, s]));
+  const primary = byName.get(chosen[0]);
+
+  // Pass 1 — types, header and row count, holding nothing but the scan's own tallies.
+  const scan = createTypeScan({ numeric: EXCEL_NUMERIC });
+  let rowCount = 0;
+  const headerRow = await eachDataRow(ooxml, primary, (values) => {
+    rowCount += 1;
+    scan.observeRow(values);
+  });
+
+  // Ask the host which recurring values mean "missing" — the NA/PS problem. Asked once,
+  // from the primary sheet's proposal, and applied to every chosen sheet: a missing-value
+  // code is a convention of the file, not of a tab within it.
+  const accepted = typeof app.codec.missingCodes === 'function'
+    ? await app.codec.missingCodes(scan.proposal())
+    : [];
+  const codes = Array.isArray(accepted) ? accepted.filter((v) => typeof v === 'string') : [];
+  const decided = scan.decide(codes);
+
+  const width = Math.max(headerRow.length, decided.isNumeric.length);
+  const schema = buildSchema(headerRow, width, decided);
+  if (!schema.variables.length) throw new Error('Excel: the selected sheet(s) have no columns');
+
+  // Pass 2 — emit. The row count is known from pass 1, so the progress bar gets a
+  // denominator rather than counting up towards nothing.
+  await app.codec.begin(schema.variables, schema.storageTypes, { rowCount, missingCodes: codes });
+  const emit = batcher(app, schema, decided);
+  await eachDataRow(ooxml, primary, (values) => emit.row(values));
+  await emit.finish();
+
+  // Additional chosen sheets → each its own new dataset (split, not pooled/joined:
+  // workbook tabs are usually heterogeneous, so row-stacking them would be wrong).
+  //
+  // These are built WHOLE in memory, because `app.data.create` takes columns and has no
+  // streaming form. A second WIDE sheet in one workbook would still hit the old ceiling;
+  // the primary sheet — which is what a data file is — does not. Recorded in TODO.md
+  // rather than papered over.
+  for (const nm of chosen.slice(1)) {
+    const sheet = byName.get(nm);
+    if (!sheet) continue;
+    if (!app.data || typeof app.data.create !== 'function') {
+      throw new Error('Excel: cannot create extra sheet datasets (app.data.create unavailable)');
+    }
+    // eslint-disable-next-line no-await-in-loop -- sequential, to avoid racing the engine.
+    const built = await collectSheet(ooxml, sheet, codes);
+    if (!built.variables.length) continue;
+    // eslint-disable-next-line no-await-in-loop
+    await app.data.create({ name: nm, variables: built.variables, columns: built.columns, activate: false });
+  }
+}
+
+/**
+ * Accumulate rows into cell-bounded batches and hand them to the host ingest.
+ *
+ * Values per batch, not ROWS. A fixed row count is fine at ten columns and fatal at three
+ * thousand: the width decides what a batch costs, which is how the CSV reader came to hand
+ * DuckDB one batch of 21 million cells and OOM at 3.1 GiB (owner, 2026-11-17).
+ */
+function batcher(app, schema, decided) {
+  const { variables, storageTypes } = schema;
+  const n = variables.length;
+  const perBatch = Math.max(1, Math.floor(EMIT_CELLS / Math.max(1, n)));
+  const numeric = variables.map((v) => storageTypes[v.name] === 'numeric');
+  let cols = variables.map(() => []);
+  let held = 0;
+
+  const flush = async () => {
+    if (!held) return;
+    const chunk = {};
+    for (let c = 0; c < n; c++) {
+      const nm = variables[c].name;
+      if (numeric[c]) {
+        const a = new Float64Array(held);
+        for (let i = 0; i < held; i++) a[i] = cols[c][i];
+        chunk[nm] = a;
+      } else {
+        chunk[nm] = cols[c];
+      }
+    }
+    cols = variables.map(() => []);
+    held = 0;
+    await app.codec.batch(chunk);
+  };
+
+  return {
+    row(values) {
+      for (let c = 0; c < n; c++) {
+        const cell = values[c];
+        const v = cell === undefined || cell === '' ? null : cell ?? null;
+        if (numeric[c]) cols[c].push(decided.isMissing(v) ? NaN : Number(v));
+        else cols[c].push(decided.isMissing(v) ? null : cellToString(v));
+      }
+      held += 1;
+      return held >= perBatch ? flush() : undefined;
+    },
+    finish: flush,
+  };
+}
+
+/** Variables, storage types and unique names from a header row and a type decision. */
+function buildSchema(headerRow, width, decided) {
+  const variables = [];
+  const storageTypes = {};
+  const used = {};
+  for (let c = 0; c < width; c++) {
+    const h = headerRow[c];
+    const base = h === null || h === undefined || String(h).trim() === '' ? `V${c + 1}` : String(h).trim();
+    const nm = uniqueName(base, used);
+    used[nm] = true;
+    const numeric = !!decided.isNumeric[c];
+    variables.push({
+      name: nm,
+      type: numeric ? 'numeric' : 'string',
+      measurementLevel: numeric ? 'scale' : 'nominal',
+    });
+    storageTypes[nm] = numeric ? 'numeric' : 'string';
+  }
+  return { variables, storageTypes };
+}
+
+/** A whole sheet as columns, for the `app.data.create` path (extra sheets). Two passes,
+ * same as the primary, but the result is retained rather than emitted. */
+async function collectSheet(ooxml, sheet, codes) {
+  const scan = createTypeScan({ numeric: EXCEL_NUMERIC });
+  const headerRow = await eachDataRow(ooxml, sheet, (v) => scan.observeRow(v));
+  const decided = scan.decide(codes);
+  const width = Math.max(headerRow.length, decided.isNumeric.length);
+  const schema = buildSchema(headerRow, width, decided);
+
+  const raw = schema.variables.map(() => []);
+  await eachDataRow(ooxml, sheet, (values) => {
+    for (let c = 0; c < schema.variables.length; c++) {
+      const cell = values[c];
+      raw[c].push(cell === undefined || cell === '' ? null : cell ?? null);
+    }
+  });
+
+  const columns = {};
+  for (let c = 0; c < schema.variables.length; c++) {
+    const nm = schema.variables[c].name;
+    if (schema.storageTypes[nm] === 'numeric') {
+      const a = new Float64Array(raw[c].length);
+      for (let i = 0; i < a.length; i++) a[i] = decided.isMissing(raw[c][i]) ? NaN : Number(raw[c][i]);
+      columns[nm] = a;
+    } else {
+      columns[nm] = raw[c].map((v) => (decided.isMissing(v) ? null : cellToString(v)));
+    }
+  }
+  return { variables: schema.variables, storageTypes: schema.storageTypes, columns };
+}
+
+// --- read: the SheetJS path (.xls, .xlsb) ------------------------------------
+
+/** Read a legacy workbook with SheetJS: parse the whole thing, pivot to columns, emit.
+ * Memory is proportional to the cell count — which is why this is no longer the path an
+ * .xlsx takes, and is acceptable for the formats that have no other. */
+async function readWithSheetJs(app, bytes, name) {
   const XLSX = await importAsset(await app.codec.loadAsset('xlsx'));
   // cellDates → date cells become JS Date (carried as ISO text below). Don't parse
   // formulas' cached errors into throws; SheetJS yields them as strings.
@@ -94,54 +370,43 @@ export async function readXlsx(app, { name }) {
   const sheetNames = wb.SheetNames || [];
   if (!sheetNames.length) throw new Error('Excel: the workbook has no sheets');
 
-  const chosen = await chooseSheets(app, XLSX, wb, sheetNames, name);
+  const items = sheetNames.map((sn) => {
+    const { rows, cols } = sheetDims(XLSX, wb.Sheets[sn]);
+    return { value: sn, label: `${sn}  (${rows.toLocaleString()} rows × ${cols} cols)` };
+  });
+  const chosen = await chooseSheets(app, items, name);
   if (chosen == null) throw new Error('Excel import cancelled');
   if (!chosen.length) throw new Error('Excel: no sheets selected');
 
-  // Type the sheets, asking the host which recurring values mean "missing" (#the NA/PS
-  // problem — a Scorecard year typed 211 of 3,379 columns numeric here against the CSV
-  // reader's 3,360, because this rule was a COPY of that one and only one got fixed).
-  //
-  // Asked ONCE, from the primary sheet's proposal, and applied to every chosen sheet: a
-  // missing-value code is a convention of the file, not of a tab within it. A workbook
-  // whose sheets use different codes would need a prompt each, which is worse than this
-  // is wrong.
   const aoas = chosen.map((sn) => sheetAoa(XLSX, wb.Sheets[sn]));
-  const scans = aoas.map((aoa) => scanSheet(aoa));
+  const scans = aoas.map((aoa) => scanAoa(aoa));
   const accepted = typeof app.codec.missingCodes === 'function' && scans.length
     ? await app.codec.missingCodes(scans[0].proposal())
     : [];
   const codes = Array.isArray(accepted) ? accepted.filter((v) => typeof v === 'string') : [];
 
-  // Build each chosen sheet's columns; drop any that turn out to have no columns.
   const built = chosen
     .map((sn, i) => ({ sheet: sn, ...buildColumns(aoas[i], scans[i].decide(codes)) }))
     .filter((b) => b.variables.length);
   if (!built.length) throw new Error('Excel: the selected sheet(s) have no columns');
 
-  // First chosen sheet → stream through the host ingest as the primary dataset
-  // (the codec contract requires emitting a schema via begin()).
   const primary = built[0];
   const total = primary.columns[primary.variables[0].name].length;
-  // The row count is known here, so the progress bar can show a denominator rather
-  // than counting up towards nothing.
   await app.codec.begin(primary.variables, primary.storageTypes, { rowCount: total, missingCodes: codes });
   const perBatch = Math.max(1, Math.floor(EMIT_CELLS / Math.max(1, primary.variables.length)));
   for (let off = 0; off < total; off += perBatch) {
     const chunk = {};
     for (const v of primary.variables) chunk[v.name] = primary.columns[v.name].slice(off, off + perBatch);
+    // eslint-disable-next-line no-await-in-loop -- backpressure: one batch at a time.
     await app.codec.batch(chunk);
   }
 
-  // Additional chosen sheets → each its own new dataset (split, not pooled/joined).
-  // activate:false so focus stays on the primary import. If app.data.create isn't
-  // available for some reason, surface it rather than silently dropping sheets.
   for (let i = 1; i < built.length; i++) {
     const b = built[i];
     if (!app.data || typeof app.data.create !== 'function') {
       throw new Error('Excel: cannot create extra sheet datasets (app.data.create unavailable)');
     }
-    // eslint-disable-next-line no-await-in-loop -- create sequentially to avoid racing the engine.
+    // eslint-disable-next-line no-await-in-loop -- sequential, to avoid racing the engine.
     await app.data.create({ name: b.sheet, variables: b.variables, columns: b.columns, activate: false });
   }
 }
@@ -150,22 +415,17 @@ export async function readXlsx(app, { name }) {
  * checklist (first sheet pre-checked; summary/codebook sheets can be unticked),
  * falling back to the first sheet if the UI service isn't available here. Returns
  * the chosen sheet names, `[]` if none picked, or `null` if cancelled. */
-async function chooseSheets(app, XLSX, wb, sheetNames, fileName) {
-  if (sheetNames.length === 1) return [sheetNames[0]];
-  if (!app.ui || typeof app.ui.selectFromList !== 'function') return [sheetNames[0]];
-  const items = sheetNames.map((sn) => {
-    const { rows, cols } = sheetDims(XLSX, wb.Sheets[sn]);
-    return { value: sn, label: `${sn}  (${rows.toLocaleString()} rows × ${cols} cols)` };
-  });
-  const chosen = await app.ui.selectFromList({
+async function chooseSheets(app, items, fileName) {
+  if (items.length === 1) return [items[0].value];
+  if (!app.ui || typeof app.ui.selectFromList !== 'function') return [items[0].value];
+  return app.ui.selectFromList({
     title: 'Choose sheets to import',
-    hint: `“${fileName || 'Workbook'}” has ${sheetNames.length} sheets. Each selected sheet becomes its own dataset — skip summary/codebook sheets you don’t need.`,
+    hint: `“${fileName || 'Workbook'}” has ${items.length} sheets. Each selected sheet becomes its own dataset — skip summary/codebook sheets you don’t need.`,
     items,
     multiple: true,
     okLabel: 'Import',
-    selected: [sheetNames[0]], // first sheet pre-checked
+    selected: [items[0].value], // first sheet pre-checked
   });
-  return chosen; // array of names, [] if none, or null if cancelled
 }
 
 /** Header:1 array-of-arrays for a worksheet: raw JS types (numbers as numbers,
@@ -202,64 +462,39 @@ async function readAll(app, size) {
 
 /** Turn an array-of-arrays (row 0 = header) into {variables, storageTypes, columns}:
  * numeric columns as Float64Array (NaN for missing), everything else as string
- * arrays (null for missing). */
+ * arrays (null for missing). The SheetJS path only — the streaming path never builds
+ * an array-of-arrays in the first place. */
 function buildColumns(aoa, decision = null) {
   if (!aoa.length) return { variables: [], storageTypes: {}, columns: {} };
 
   const headerRow = aoa[0] || [];
   const width = aoa.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
-  const header = [];
-  for (let c = 0; c < width; c++) {
-    const h = headerRow[c];
-    header.push(h === null || h === undefined || String(h).trim() === '' ? `V${c + 1}` : String(h).trim());
-  }
+  const decided = decision ?? scanAoa(aoa).decide([]);
+  const schema = buildSchema(headerRow, width, decided);
 
-  // Collect raw cell values per column (missing → null).
-  const raw = header.map(() => []);
-  for (let r = 1; r < aoa.length; r++) {
-    const row = aoa[r] || [];
-    for (let c = 0; c < width; c++) {
-      const cell = row[c];
-      raw[c].push(cell === undefined || cell === '' ? null : cell ?? null);
-    }
-  }
-
-  // The typing rule is `createTypeScan`'s, shared with every codec that infers types
-  // from values. `decision` is what it concluded; a caller that has not run one gets a
-  // fresh scan with no accepted codes, which is the old behaviour exactly.
-  const decided = decision ?? scanSheet(aoa).decide([]);
-  const variables = [];
-  const storageTypes = {};
   const columns = {};
-  const used = {};
   for (let c = 0; c < width; c++) {
-    const nm = uniqueName(header[c], used);
-    used[nm] = true;
-    const values = raw[c];
-    if (decided.isNumeric[c]) {
-      variables.push({ name: nm, type: 'numeric', measurementLevel: 'scale' });
-      storageTypes[nm] = 'numeric';
-      const a = new Float64Array(values.length);
-      for (let i = 0; i < values.length; i++) a[i] = decided.isMissing(values[i]) ? NaN : Number(values[i]);
-      columns[nm] = a;
-    } else {
-      variables.push({ name: nm, type: 'string', measurementLevel: 'nominal' });
-      storageTypes[nm] = 'string';
-      // A value the host called missing is missing here too, even though the column
-      // stayed text — the same rule the CSV reader applies.
-      columns[nm] = values.map((v) => (decided.isMissing(v) ? null : cellToString(v)));
+    const nm = schema.variables[c].name;
+    const isNum = schema.storageTypes[nm] === 'numeric';
+    const out = isNum ? new Float64Array(Math.max(0, aoa.length - 1)) : [];
+    for (let r = 1; r < aoa.length; r++) {
+      const cell = (aoa[r] || [])[c];
+      const v = cell === undefined || cell === '' ? null : cell ?? null;
+      if (isNum) out[r - 1] = decided.isMissing(v) ? NaN : Number(v);
+      else out.push(decided.isMissing(v) ? null : cellToString(v));
     }
+    columns[nm] = out;
   }
-  return { variables, storageTypes, columns };
+  return { variables: schema.variables, storageTypes: schema.storageTypes, columns };
 }
 
-/** A spreadsheet cell is a number only when SheetJS handed back a real one. A text cell
- * reading "01234" is a ZIP code, and parsing it would drop the leading zero — which is
- * why this rule differs from the CSV reader's and is passed in rather than assumed. */
+/** A spreadsheet cell is a number only when the reader handed back a real one. A text
+ * cell reading "01234" is a ZIP code, and parsing it would drop the leading zero — which
+ * is why this rule differs from the CSV reader's and is passed in rather than assumed. */
 const EXCEL_NUMERIC = (v) => typeof v === 'number' && Number.isFinite(v);
 
-/** Run the shared type scan over a sheet's rows (row 0 is the header). */
-function scanSheet(aoa) {
+/** Run the shared type scan over an array-of-arrays (row 0 is the header). */
+function scanAoa(aoa) {
   const width = aoa.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
   const scan = createTypeScan({ columns: width, numeric: EXCEL_NUMERIC });
   for (let r = 1; r < aoa.length; r++) scan.observeRow(aoa[r] || []);

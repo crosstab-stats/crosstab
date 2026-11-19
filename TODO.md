@@ -32,13 +32,16 @@ bottom; they are the project's memory and are not summarised away.
       |---|---|---|---|
       | CSV | yes | yes | streams |
       | readstat | yes | no | whole file |
-      | Excel | **no** | **no** | whole file |
+      | Excel | **no** | yes | streams (.xlsx; .xls/.xlsb whole, having no streaming form) |
       | NDJSON | no | no | streams |
       | Parquet | no | no | streams |
 
-      Three of five do not route; four of five do not detect codes. The Excel codec's own comment
-      says its typing "mirrors the CSV codec" — and that mirroring is exactly why fixing CSV's
-      3,347-mistyped-columns bug (e2a3b77) left Excel untouched.
+      Three of five do not route; three of five do not detect codes. The Excel codec's own comment
+      said its typing "mirrors the CSV codec" — and that mirroring is exactly why fixing CSV's
+      3,347-mistyped-columns bug (e2a3b77) left Excel untouched. (Excel's own two columns were
+      fixed on 2026-11-18, by moving the typing rule into the shared `createTypeScan` and giving
+      .xlsx a streaming reader; it still does not ROUTE on width. That the table needed editing
+      per-codec is the argument for hoisting, not against it.)
 
       **A codec's job should be: bytes → raw columns.** That is the part that genuinely differs
       per format. The plan, in order:
@@ -215,41 +218,21 @@ bottom; they are the project's memory and are not summarised away.
       skipping as an optimisation where the format allows it. That also collapses the second read
       verb back into one.
 
-- [ ] **The Excel codec still has the bug `af31a0e` deleted from CSV — measured 2026-11-18.** The
-      owner asked what would happen importing Scorecard years as .xlsx. Measured, by running the
-      SHIPPED `readXlsx` over real converted files rather than guessing:
+- [ ] **An EXTRA sheet of a multi-sheet workbook is still built whole — `app.data.create` has no
+      streaming form (2026-11-18).** The Excel codec streams the primary sheet through the host
+      ingest, but every additional selected sheet goes through `app.data.create({variables,
+      columns})`, which takes finished columns. So a workbook whose SECOND tab is 3,379 columns
+      wide hits the ceiling the primary sheet no longer does.
 
-      | rows | cells | peak RSS |
-      |---|---|---|
-      | 500 | 1.7M | 735 MiB |
-      | 1,000 | 3.4M | 1,322 MiB |
-      | 2,000 | 6.8M | 2,578 MiB |
+      Not urgent and not papered over: a workbook's extra tabs are normally a codebook or a
+      summary, and the wide-data case is the first sheet. But the asymmetry is real, and it is
+      the same shape as the first-class-plugin-data gap — creating a dataset is only expressible
+      as "here are all the columns", while importing into one is expressible as a stream.
 
-      Dead linear at ~1.23 MiB/row, so the real 6,272-row file needs **≈7.6 GiB** — against a
-      Chrome renderer cap near 4 GiB, and against the ~519 MiB the CSV codec uses for that exact
-      file. **One** file dies, not five, and it dies in the JS heap before DuckDB sees a row.
-      (Writing is no better: 4,000 rows never finished in 15 minutes where 2,000 took 21s.)
-
-      **Cause:** `readAll` → `XLSX.read` → `sheetAoa` → `buildColumns` — the bytes, the parsed
-      workbook, the array-of-arrays and the pivoted columns all alive at once. Verbatim the shape
-      af31a0e removed from CSV. Also confirmed in the same runs: `wide: undefined` (Excel never
-      routes out-of-core) and 211 numeric / 3,168 string (the NA/PS mistyping, in full).
-
-      **Owner's call, 2026-11-18: a streaming reader, not a size cap** — *"I'd hate for the file
-      type selector to have an asterisk next to excel claiming 'only for small files'."*
-
-      **Feasible without a new dependency.** `core/zip.js` already inflates with the browser-native
-      `DecompressionStream('deflate-raw')`; it merely collects the output today. So: stream the
-      entry through it and scan `xl/worksheets/sheetN.xml` incrementally — the cell XML is
-      extremely regular (`<c r="A1" t="s"><v>3</v></c>`), so a narrow scanner beats a general SAX
-      parser. The one thing that must be held whole is `xl/sharedStrings.xml`, since cells index
-      into it; that is bounded by DISTINCT strings, not cells, and for data like this (numbers
-      plus a handful of repeated codes) it is small. A text-heavy workbook is the case to design
-      for, not this one.
-
-      Dropping the AoA and pivoting straight into column buffers is worth doing regardless — it
-      removes two of the four live copies — but it roughly halves 7.6 GiB, which is not enough on
-      its own. Streaming is the actual fix.
+      The fix is a streaming form of dataset creation (begin/batch against a NEW dataset rather
+      than the active one), which the codec would then use for every sheet including the first,
+      deleting the two-path split in `readStreaming`. Worth doing when something else needs it;
+      the Parquet and ReadStat codecs would use it the same way for multi-table sources.
 
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
@@ -2990,6 +2973,70 @@ the entry. So the index decays in exactly the cases it exists for. It stays, bec
 missing line is worse, but it is to be read as "look here", never as "this is open".
 
 ## Completed
+
+- [x] **Excel `.xlsx` import streams — DONE 2026-11-18 (the bug `af31a0e` deleted from CSV).** The
+      owner asked what would happen importing Scorecard years as .xlsx. Measured, by running the
+      SHIPPED `readXlsx` over real converted files rather than guessing:
+
+      | rows | cells | peak RSS |
+      |---|---|---|
+      | 500 | 1.7M | 735 MiB |
+      | 1,000 | 3.4M | 1,322 MiB |
+      | 2,000 | 6.8M | 2,578 MiB |
+
+      Dead linear at ~1.23 MiB/row, so the real 6,272-row file needed **≈7.6 GiB** — against a
+      Chrome renderer cap near 4 GiB, and against the ~519 MiB the CSV codec uses for that exact
+      file. **One** file died, not five, and it died in the JS heap before DuckDB saw a row.
+
+      **Cause:** `readAll` → `XLSX.read` → `sheetAoa` → `buildColumns` — the bytes, the parsed
+      workbook, the array-of-arrays and the pivoted columns all alive at once. Verbatim the shape
+      af31a0e removed from CSV. Also confirmed in the same runs: `wide: undefined` (Excel never
+      routed out-of-core) and 211 numeric / 3,168 string (the NA/PS mistyping, in full).
+
+      **Owner's call, 2026-11-18: a streaming reader, not a size cap** — *"I'd hate for the file
+      type selector to have an asterisk next to excel claiming 'only for small files'."*
+
+      **Built:** `core/xlsx-stream.js`. An .xlsx is a zip of XML, so one sheet part is inflated
+      through the browser's own `DecompressionStream('deflate-raw')` and scanned a chunk at a
+      time — no new dependency. The codec reads it in two passes (types, then emit); a second
+      inflate costs CPU, and CPU is not what runs out. Two things are necessarily held whole and
+      both are bounded by something other than the cell count: the shared-string table (bounded by
+      DISTINCT strings) and the style→number-format map. `.xls`/`.xlsb` are not XML and still go
+      through SheetJS, which is now fetched only for those.
+
+      **Measured after, same file:**
+
+      | | before (SheetJS) | after (streaming) |
+      |---|---|---|
+      | 2,000-row peak | 2,578 MiB | **13–20 MiB live heap** |
+      | hard heap cap it survives | — | **160 MiB** |
+      | full file, extrapolated | ≈7.6 GiB | flat |
+
+      Bounded, not merely smaller: peak live heap is the same 13–20 MiB at 500, 1,000 and 2,000
+      rows, and it completes under `--max-old-space-size=160` on a 54 MiB file. (Peak RSS looked
+      linear — 115/169/253 MiB — which was GC laziness plus the file bytes, not retention. The
+      heap cap is what distinguishes the two, and it was worth running: the FIRST version of the
+      reader collected every row into a `pending` array before delivering any, to keep the scanner
+      synchronous while `onRow` was async. That measured 788 MiB on a 2,000-row sheet and was
+      caught only because the number was taken rather than assumed.)
+
+      **Verified end to end in the browser**, through File ▸ Import data… ▸ Excel on the real
+      converted file: NA (4,821,310 values in 2,735 columns) and PS (837,566 in 504) detected and
+      offered, 2,000 rows imported, renderer peak 69 MiB, project autosaved. Typing came out
+      **3,360 numeric / 19 string — identical to what the CSV codec produces on the same data**,
+      and ZIP stayed text (leading zeros intact).
+
+      Tests: `test/xlsx-streaming.test.mjs` (the reader) and `test/excel-codec-streaming.test.mjs`
+      (routing + equivalence), with `test/xlsx-fixture.mjs` building real zips by hand — the suite
+      has no network, so SheetJS cannot be the thing that produces the test files. Equivalence
+      against the real SheetJS was measured out-of-tree, cell for cell, including the awkward
+      cases: rich-text runs, sparse rows, blank rows (`blankrows: false` DROPS them, which shifts
+      every row after), inline vs shared strings, booleans, formula results and errors, and dates.
+      Dates deserve a note: a date is a number PLUS a style that says so, and the epoch is kept
+      flat at 1899-12-30 even though that is a day behind what Excel DISPLAYS for serials under
+      61 (Excel's calendar contains 1900-02-29, which never existed). Measured against real
+      SheetJS, serial 1 reads back as 1899-12-31 there too — "correcting" it would shift dates in
+      files that import fine today.
 
 The record of what shipped and why. Kept in full, in the original sections.
 
