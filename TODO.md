@@ -105,6 +105,30 @@ bottom; they are the project's memory and are not summarised away.
       only reads, so the tenth import behaves like the first. The phone now does what the
       desktop does.
 
+      **MEASURED ON DESKTOP, 2026-11-19 — the controlled version of the observation below.**
+      Same machine, same build, same file, fresh page per run (both from an identical 83 MiB
+      baseline), driving `loadStreaming` and `loadWide` directly so the CSV parse is common
+      to both:
+
+          table : 24.6 s, peak JS heap 277 MiB
+          wide  : 12.9 s, peak JS heap 417 MiB
+
+      So the wide path is **1.9x faster at 1.5x the heap peak**. e85f8e4's heap finding
+      REPRODUCES exactly (it measured 178 vs 121 MiB — the same ~1.5x ratio); what has moved
+      is speed, which it measured at only 1.19x in parquet's favour against 1.9x now. The
+      streaming writer removing the buffer-doubling memcpys is the obvious candidate and is
+      not proven.
+
+      **This is a trade-off, not a clear win, so the budget is NOT re-tuned on it.** Lowering
+      `TABLE_BYTE_BUDGET` would make desktop imports about twice as fast and stop them
+      accumulating toward the checkpoint ceiling, at the cost of ~140 MiB more transient JS
+      heap per import. That is the owner's call, not a tuning detail: it trades a resource
+      that is plentiful on a laptop and scarce on a phone — though note the phone already
+      takes the wide path for anything over 64 MiB and handled four in a row.
+
+      **The 10x from the phone did NOT reproduce** and should be treated as a device
+      difference (iPhone single-core against this desktop), not a property of the change.
+
       **AN UNCONTROLLED OBSERVATION WORTH CHASING.** Those 2.9s compare against 28s for the
       same 6,272-row file on the desktop (table path, build 01:45 PM) and 46s for a wide one
       on the old buffered writer. That is ~10x, and there is a plausible mechanism — the old
