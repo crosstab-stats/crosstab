@@ -79,10 +79,29 @@ bottom; they are the project's memory and are not summarised away.
       `registerParquetFile` uses it everywhere and the handle route is a fallback nothing
       normal takes.
 
-      **WHAT IS STILL NOT FIXED ON MOBILE, and it is half the story.** Only the wide-file
-      READ path went through `registerParquetFile`. The streaming out-of-core INGEST
-      (`beginStreamIngest`) registers each OPFS part with `registerFileHandle` and then has
-      DuckDB `COPY … TO` it — so on WebKit it still falls back to the in-memory ingest.
+      **MOBILE IMPORT NOW WORKS — verified on the device, 2026-11-18.** A 3,379 × 6,272
+      Scorecard CSV imports on an iPhone (iOS 18.7) where it previously killed the PWA
+      outright. The route line says why:
+
+          route {wide:true, overBudget:true, estMiB:163, canStream:false}
+
+      `canStream:false` selects the 64 MiB in-memory budget, 163 MiB exceeds it, and the
+      import goes out of core through `loadWide` — Parquet written in JS a row group at a
+      time, registered BY NAME, which is the one OPFS route WebKit supports. The estimate
+      also validates: 163 MiB in the app against 162.6 measured in node.
+
+      What killed it before was `#beginMemoryIngest`'s
+      `CREATE TABLE … row_number() OVER () … FROM tmp`, which holds the temp table and the
+      final table at once. The phase markers pinned it: `[data] ingest finishing` was the
+      last line the dying process wrote.
+
+      **WHAT IS STILL NOT FIXED ON MOBILE.** Only the wide-file READ path went through
+      `registerParquetFile`. The streaming out-of-core INGEST (`beginStreamIngest`)
+      registers each OPFS part with `registerFileHandle` and then has DuckDB `COPY … TO`
+      it — so on WebKit it still falls back to the in-memory ingest. The budget now routes
+      around that rather than into it, which is a diversion and not a repair: a dataset
+      too big for the in-memory ingest AND too big for the wide path has nowhere to go on
+      a phone. Nobody has found that case yet.
 
       And it cannot simply switch to by-name, because of an asymmetry worth stating plainly:
       **by-name registration is gated on the file already having bytes** (the same
