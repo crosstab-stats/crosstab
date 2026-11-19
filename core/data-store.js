@@ -618,7 +618,9 @@ export class DataStore {
 
     const columns = variables.map((v) => ({ name: v.name, type: v.type === 'string' ? 'string' : 'numeric' }));
     columns.push({ name: CT_ROW, type: 'numeric' });
-    const writer = await this.#duckdb.openParquetWriter(columns);
+    // With the name, the writer streams each row group straight to OPFS instead of
+    // accumulating the whole Parquet — which is what makes this path survive on a phone.
+    const writer = await this.#duckdb.openParquetWriter(columns, { name: file });
 
     // Accumulate the stream into row-group-sized column buffers, flush each as one
     // Parquet row group, then reset — so peak JS memory is one row group, not the
@@ -632,7 +634,7 @@ export class DataStore {
     let acc = freshAcc();
     let accRows = 0;
     let rowBase = 0;
-    const flush = () => {
+    const flush = async () => {
       if (accRows === 0) return;
       const columnData = variables.map((v) => ({
         name: v.name,
@@ -643,6 +645,9 @@ export class DataStore {
       writer.writeRowGroup(columnData);
       acc = freshAcc();
       accRows = 0;
+      // Push the encoded row group to OPFS and free the buffer. Awaited, so peak is one
+      // row group rather than the whole file — and so the write cannot race the next one.
+      await writer.drain();
     };
 
     try {
@@ -658,14 +663,19 @@ export class DataStore {
         for (let k = 0; k < n; k++) rowIdx.push(rowBase + k);
         rowBase += n;
         accRows += n;
-        if (accRows >= groupRows) flush();
+        // RETURNED, not called and dropped: the producer awaits this, which is what keeps
+        // one row group in flight instead of all of them.
+        const wait = accRows >= groupRows ? flush() : undefined;
         onProgress?.(rowBase, rowCount);
+        return wait;
       });
-      flush();
+      await flush();
       // The reference, from the registration — `opfs://<name>` on the by-name route.
       file = await writer.finalize(file);
       this.#wideFiles.add(file);
     } catch (err) {
+      // Close the writable first, or the half-written file stays locked by it.
+      try { await writer.abort?.(); } catch { /* best-effort */ }
       try { await this.#duckdb.dropRegisteredFile(file, { removeFromOpfs: true }); } catch { /* best-effort */ }
       throw err;
     }

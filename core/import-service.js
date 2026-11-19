@@ -738,7 +738,10 @@ export class ImportService {
             variables: head.variables,
             rowCount: head.rowCount,
             onProgress: (done) => progress(done, head.rowCount),
-            stream: (onBatch) => reader.drain((columns) => { tick(columns); onBatch(columns); }),
+            // RETURN onBatch's promise: `drain` awaits the callback, so this is the whole
+            // backpressure chain for the streaming Parquet write. Dropping it would let
+            // every row group's OPFS write race, which is the bug this path exists to avoid.
+            stream: (onBatch) => reader.drain((columns) => { tick(columns); return onBatch(columns); }),
           });
         } else {
           await this.#data.loadStreaming({

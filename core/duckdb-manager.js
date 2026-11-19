@@ -458,7 +458,7 @@ export class DuckDBManager {
    *   `finalize` resolves to the DuckDB REFERENCE for the file (`opfs://<name>` on the
    *   by-name route), which is what `read_parquet` must be given.
    */
-  async openParquetWriter(columns) {
+  async openParquetWriter(columns, { name = null } = {}) {
     if (!this.#parquetWriter) this.#parquetWriter = await import(/* @vite-ignore */ getAssets().hyparquetWriterUrl);
     const W = this.#parquetWriter;
     const schema = [{ name: 'root', num_children: columns.length }];
@@ -474,18 +474,103 @@ export class DuckDBManager {
     // range (the wide grid's windowed scroll, #128). The footer grows modestly, but
     // pruning is the larger win on ultra-wide files.
     const pw = new W.ParquetWriter({ writer: bw, schema, statistics: true });
+
+    // With a `name`, the encoded bytes go STRAIGHT TO OPFS a row group at a time and the
+    // whole file is never held. Without one, the old behaviour: accumulate and hand over
+    // a buffer.
+    const sink = name ? await this.#openOpfsSink(name) : null;
+
+    /**
+     * Push what has been encoded so far to the sink and reset the buffer.
+     *
+     * `ByteWriter` keeps two counters, and the difference is the whole trick: `offset` is
+     * the total ever written and `index` is the position within the current buffer. Every
+     * file position in the Parquet metadata comes from `offset` — verified by reading
+     * parquet-writer.js, column.js, indexes.js and metadata.js, where the only `.index`
+     * occurrences are `Array.indexOf`. So resetting `index` after draining is invisible
+     * to the format. Upstream's own node `fileWriter` does exactly this.
+     *
+     * Measured before it was written: 400 columns x 20,000 rows, buffered vs streamed,
+     * produced byte-identical files (29,178,336 bytes each) with peak buffer 27.8 MiB vs
+     * 2.9 MiB.
+     *
+     * The slice COPIES, which matters: the write is async and the buffer is reused the
+     * moment this returns.
+     */
+    const drain = async () => {
+      if (!sink || bw.index === 0) return;
+      const chunk = new Uint8Array(bw.buffer.slice(0, bw.index));
+      bw.index = 0;
+      await sink.write(chunk);
+    };
+
     return {
       // One write() call == one row group (rowGroupSize huge so it isn't re-split).
       writeRowGroup: (columnData) => pw.write({ columnData, rowGroupSize: 1_000_000_000 }),
+      // Caller awaits this between row groups; a no-op when there is no sink.
+      drain,
       // Returns the REFERENCE DuckDB will answer to, not the byte count — the caller
       // needs it for `read_parquet`, and it is `opfs://<name>` whenever registration by
       // name succeeded (see {@link opfsRef}). Nothing used the byte count.
-      finalize: async (name) => {
-        pw.finish();
+      finalize: async (fallbackName) => {
+        pw.finish(); // writes the footer into the buffer
+        if (sink) {
+          await drain();
+          await sink.close();
+          return this.#registerWrittenParquet(name);
+        }
         const bytes = new Uint8Array(bw.getBuffer());
-        return this.registerParquetFile(name, bytes);
+        return this.registerParquetFile(fallbackName ?? name, bytes);
       },
+      /** Give up without leaving a half-written file holding a writable open. */
+      abort: async () => { if (sink) await sink.abort(); },
     };
+  }
+
+  /**
+   * A writable over an OPFS file, for the streaming Parquet path.
+   *
+   * `createWritable` is the main-thread OPFS write API and works on WebKit, which is the
+   * entire reason this path exists there: DuckDB cannot write to OPFS on WebKit at all
+   * (measured — a COPY to a registered `opfs://` file left it at one byte), so the bytes
+   * have to come from us.
+   *
+   * @param {string} name - plain OPFS file name
+   */
+  async #openOpfsSink(name) {
+    const root = await navigator.storage.getDirectory();
+    const handle = await root.getFileHandle(opfsName(name), { create: true });
+    const writable = await handle.createWritable(); // truncates an existing file
+    let written = 0;
+    return {
+      write: async (chunk) => { await writable.write(chunk); written += chunk.length; },
+      close: async () => { await writable.close(); return written; },
+      abort: async () => { try { await writable.abort(); } catch { /* best-effort */ } },
+    };
+  }
+
+  /**
+   * Register a Parquet file that is ALREADY on OPFS, without reading it back.
+   *
+   * The point of the streaming path: the bytes were never in memory and must not be put
+   * there now. By-name registration is measured working on both Chromium and WebKit, and
+   * the size gate is satisfied for free because the file has just been written.
+   *
+   * @param {string} name
+   * @returns {Promise<string>} the reference for `read_parquet`
+   */
+  async #registerWrittenParquet(name) {
+    await this.#ensureReady();
+    try {
+      await this.#db.registerOPFSFileName(opfsRef(name));
+      return opfsRef(name);
+    } catch (err) {
+      // Unlucky path only: this spends the memory the streaming write just saved, so it
+      // is never the normal route.
+      console.warn('[duckdb] by-name registration failed for a written Parquet; reading it back', err);
+      const bytes = await this.readOpfsFile(name);
+      return this.registerParquetFile(name, bytes);
+    }
   }
 
   /** Drop a file registered via {@link registerParquetFile}; optionally delete the
