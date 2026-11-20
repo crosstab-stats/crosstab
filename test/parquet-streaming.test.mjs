@@ -152,7 +152,10 @@ test('the ingest awaits the drain, and the producer awaits the ingest', () => {
 
   // The chain continues through the one `load`, which awaits every batch...
   const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
-  assert.match(ds, /await stream\(async \(columns\) => \{\s*await ingest\.batch\(columns\);/,
+  // Matched on the PROPERTY, not the parameter name: the callback must await the batch.
+  // The first version of this pinned `async (columns)` and broke the moment the parameter
+  // was renamed, which tests nothing anyone cares about.
+  assert.match(ds, /await stream\(async \([^)]*\) => \{[\s\S]{0,120}?await ingest\.batch\(/,
     'DataStore#load drops the batch promise');
 
   // ...and back to the codec reader, which must return it rather than discarding it.

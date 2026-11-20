@@ -5,9 +5,10 @@
  * Its sibling (`import-origin.test.mjs`) checks what the surfaces PRINT given an op that
  * already carries an origin. This checks the half those tests have to assume: that
  * `loadDataset` actually puts it there, and that a save-and-reopen brings it back. Those
- * are three separate code paths — `#createSource`, `exportState`, `restoreState` — and a
- * field threaded through two of three is a field that vanishes the first time someone
- * closes a project.
+ * are three separate code paths — the ingest, `exportState`, `restoreState` — and a field
+ * threaded through two of three is a field that vanishes the first time someone closes a
+ * project. (The ingest half became `DataStore#load` on 2026-11-20, when the five ways
+ * into the engine became one; the property is unchanged.)
  *
  * ## Why a stub engine rather than DuckDB
  *
@@ -39,6 +40,23 @@ function stubEngine() {
   const sql = [];
   return {
     sql,
+    // --- the ingest surface `DataStore#load` touches -------------------------------
+    //
+    // Added 2026-11-20: `loadDataset({columns})` no longer hands DuckDB one Arrow table,
+    // it slices into batches through the shared ingest. The stub's own promise above —
+    // "if the load path grows a new engine call, this fails rather than silently passing"
+    // — is what caught it, which is the stub working rather than the stub being wrong.
+    //
+    // Dumb on purpose. A `planIngest` here that computed a real verdict would let a
+    // routing bug pass as long as the stub shared it.
+    async planIngest(variables, rowCount, { declaredWide = false } = {}) {
+      sql.push(`planIngest ${variables.length}x${rowCount}`);
+      return { wide: !!declaredWide, overBudget: false, estBytes: 0, canStream: true, loadedBytes: 0 };
+    },
+    noteTableBytes(table, bytes) { sql.push(`noteTableBytes ${table} ${bytes}`); },
+    forgetTable(table) { sql.push(`forgetTable ${table}`); },
+    get loadedTableBytes() { return 0; },
+    get canStreamOutOfCore() { return true; },
     async replaceTable(table, cols) { sql.push(`replaceTable ${table}`); this.cols = cols; },
     async replaceTableFromParquet(table) { sql.push(`replaceTableFromParquet ${table}`); },
     async query(text) {
@@ -56,7 +74,16 @@ function stubEngine() {
     async registerParquetFile() {},
     async dropRegisteredFile() {},
     async openParquetWriter() { return { write: async () => {}, close: async () => {} }; },
-    async beginStreamIngest() { return { batch: async () => {}, finish: async () => {} }; },
+    async beginStreamIngest(table) {
+      sql.push(`beginStreamIngest ${table}`);
+      // `addBatch`, which is what the ingester's interface is actually called. The stub
+      // said `batch` and nothing had ever called it through this file, so the wrong name
+      // sat here unexercised until `loadDataset` started streaming.
+      return {
+        addBatch: async (cols) => { this.cols = { ...(this.cols ?? {}), ...cols }; },
+        finish: async () => { sql.push(`finish ${table}`); },
+      };
+    },
     async cleanupStreamIngest() {},
   };
 }

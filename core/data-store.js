@@ -75,6 +75,15 @@ const ROWID_COL = '__ct_rid';
  * trip exactly. (Ids are also passed as digit strings, never parsed to float.) */
 const ROWID_STRIDE = 1_000_000_000;
 
+/** Values per batch when the host has to slice an already-materialised payload.
+ *
+ * The same million the delimited, spreadsheet and JSON-lines readers each arrived at
+ * separately (see `ingestTable` in plugin-stdlib, which carries the measurement). Nothing
+ * crosses a postMessage boundary here — the columns are already host-side — so the figure
+ * is about what Arrow and the IPC stream hold per batch rather than about a clone, but a
+ * second number would only invite the two to drift. */
+const INGEST_CELLS = 1_000_000;
+
 /** Per-row sequential index baked into a **wide source**'s Parquet file (assigned
  * in import order). The stable row id is derived from it; it also gives reads a
  * cheap ordering key. Internal; never surfaced as a variable. */
@@ -350,17 +359,83 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async loadDataset({ variables, columns, parquet, mode = 'replace', source, origin, importer, joinKey, aliases, joinType, producedBy }) {
-    const had = this.#hasData();
-    const combine = had && (mode === 'append' || mode === 'join') ? mode : 'replace';
-    if (combine === 'replace') await this.#pruneDeadSources(); // the new `load` IS the reset
-    const src = await this.#createSource({ variables, columns, parquet, source, origin, importer });
-    this.#addSourceOp(combine === 'replace' ? 'load' : combine === 'join' ? 'join' : 'append', src, {
-      joinKey,
-      aliases,
-      joinType,
-      producedBy,
+    if (parquet) {
+      // Still the one-shot path: bytes, not columns. Folded into `load` separately,
+      // because what that needs is a Parquet front door rather than a slicer.
+      const had = this.#hasData();
+      const combine = had && (mode === 'append' || mode === 'join') ? mode : 'replace';
+      if (combine === 'replace') await this.#pruneDeadSources();
+      const src = await this.#createSource({ variables, parquet, source, origin, importer });
+      this.#addSourceOp(combine === 'replace' ? 'load' : combine === 'join' ? 'join' : 'append', src, {
+        joinKey, aliases, joinType, producedBy,
+      });
+      await this.rederive(this.#loadReason(combine, had));
+      return;
+    }
+    const cols = columns ?? {};
+    const lengths = variables.map((v) => (cols[v.name] ?? []).length);
+    const rowCount = lengths.length ? lengths[0] : 0;
+    if (lengths.some((len) => len !== rowCount)) {
+      throw new Error('DataStore: all columns must have equal length');
+    }
+    await this.load({
+      mode, variables, rowCount, source, origin, importer, producedBy, joinKey, aliases, joinType,
+      stream: (batch) => this.#streamWholeColumns(variables, cols, rowCount, batch),
     });
-    await this.rederive(this.#loadReason(combine, had));
+  }
+
+  /**
+   * Feed already-materialised columns to the one `load` in host-sized batches.
+   *
+   * ## Why this exists rather than one `replaceTable` call
+   *
+   * This is the shape `app.data.create` has — a plugin, a demo seed, or a reverse bridge
+   * from Run R script hands over whole columns — and it used to go straight to DuckDB as
+   * a single Arrow table: `tableFromArrays` → `tableToIPC` → one `insertArrowFromIPCStream`.
+   * So the *entire* dataset existed as Arrow buffers, again as one contiguous IPC byte
+   * array, and again in the wasm heap, all at once, with no budget check and no entry in
+   * the table accounting.
+   *
+   * The owner put the distinction correctly: a caller that builds a whole table in its own
+   * JS heap is spending its own memory, and that is its business. What cannot happen is
+   * that table reaching the ENGINE in one piece, because the ceiling there is the
+   * checkpoint and its failure is fatal to the whole database. Slicing fixes exactly that
+   * half: the Arrow/IPC/wasm copies become one batch each instead of one dataset each, and
+   * the ingest is accounted for like any other.
+   *
+   * Coercion is per batch for the same reason. `coerceColumn` makes a typed copy of every
+   * column, and doing it up front meant a second full copy of the dataset before a byte
+   * reached DuckDB; doing it per slice means a second copy of one batch.
+   *
+   * Batched by CELLS rather than rows, because width is what decides what a batch costs —
+   * 50,000 rows is 500,000 values at ten columns and 165 million at 3,300.
+   *
+   * @param {VariableMeta[]} variables
+   * @param {Object<string, ArrayLike>} cols
+   * @param {number} rowCount
+   * @param {(columns: object) => Promise<void>} batch
+   */
+  async #streamWholeColumns(variables, cols, rowCount, batch) {
+    if (rowCount === 0) {
+      // An empty dataset still needs its schema to reach the engine, so send one empty
+      // batch rather than nothing: the ingest creates the table on its first batch.
+      await batch(Object.fromEntries(variables.map((v) => [v.name, coerceColumn(v, [])])));
+      return;
+    }
+    const width = Math.max(1, variables.length);
+    const perBatch = Math.max(1, Math.min(rowCount, Math.floor(INGEST_CELLS / width)));
+    for (let off = 0; off < rowCount; off += perBatch) {
+      const end = Math.min(rowCount, off + perBatch);
+      const slice = {};
+      for (const v of variables) {
+        const raw = cols[v.name] ?? [];
+        // `subarray`/`slice` first so `coerceColumn` walks one batch, not the dataset.
+        const part = typeof raw.subarray === 'function' ? raw.subarray(off, end) : Array.prototype.slice.call(raw, off, end);
+        slice[v.name] = coerceColumn(v, part);
+      }
+      // eslint-disable-next-line no-await-in-loop -- one batch in flight, by design
+      await batch(slice);
+    }
   }
 
   /** The DATA_CHANGED reason for a source load. A `replace` that *destroyed* existing
@@ -507,7 +582,9 @@ export class DataStore {
    * row group in flight instead of all of them.
    *
    * @param {Object} opts
-   * @param {'replace'|'append'} [opts.mode='replace']
+   * @param {'replace'|'append'|'join'} [opts.mode='replace'] - `replace` resets to a
+   *   single base source; `append` stacks rows (UNION ALL BY NAME); `join` adds the
+   *   incoming columns by matching a key.
    * @param {VariableMeta[]} opts.variables - column metadata, in order
    * @param {Object<string, string>} [opts.storageTypes] - name → 'numeric'|'string';
    *   derived from `variables` when absent
@@ -526,17 +603,54 @@ export class DataStore {
   async load({
     mode = 'replace', variables, storageTypes, rowCount = -1, declaredWide = false,
     rowGroupRows = 0, source, origin, importer, missingCodes, producedBy, stream, onProgress,
+    joinKey, aliases, joinType,
   }) {
     if (!Array.isArray(variables) || variables.length === 0) {
       throw new Error('load: variables are required');
     }
     const had = this.#hasData();
-    const combine = had && mode === 'append' ? 'append' : 'replace';
+    const combine = had && (mode === 'append' || mode === 'join') ? mode : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
 
-    const types = storageTypes ?? Object.fromEntries(
-      variables.map((v) => [v.name, v.type === 'string' ? 'string' : 'numeric']),
-    );
+    // THE INGRESS FOR COLUMN NAMES — and it is here now because the comment that used to
+    // say "every route that puts data in a dataset comes through this function" was in
+    // `#createSource`, which is the route a FILE IMPORT does not take. Codec-delivered
+    // names were never cleaned at all; the claim was true of one route in five.
+    //
+    // Only the unrepresentable goes: a NUL (which R cannot hold, and which reached its
+    // parser as a raw byte) and a lone surrogate (which survives JSON, IndexedDB and a
+    // sync hop, then silently becomes U+FFFD the first time anything UTF-8 encodes it, so
+    // two peers end up holding different values with nothing reporting a problem). A name
+    // is otherwise taken exactly as the source gave it — bounding or slugging it here
+    // would rename people's columns to suit us.
+    const renamed = [];
+    const clean = variables.map((v) => {
+      const safe = safeText(v.name);
+      if (safe !== v.name) renamed.push([v.name, safe]);
+      return { ...v, name: safe };
+    });
+    if (renamed.length) {
+      // Not silent. A column whose name changed under the user is exactly the kind of
+      // thing that is impossible to diagnose later, and a NUL in a header means the file
+      // is damaged — worth saying so even when the import succeeds.
+      console.warn('[data] column names carried characters that cannot be stored, and were cleaned:',
+        renamed.map(([from, to]) => `${JSON.stringify(from)} -> ${JSON.stringify(to)}`).join(', '));
+    }
+    variables = clean; // eslint-disable-line no-param-reassign -- cleaned, same order
+
+    const types = storageTypes
+      ? Object.fromEntries(Object.entries(storageTypes).map(([k, t]) => [safeText(k), t]))
+      : Object.fromEntries(variables.map((v) => [v.name, v.type === 'string' ? 'string' : 'numeric']));
+    // A batch arrives keyed by the names the PRODUCER used, so when cleaning changed one
+    // the keys have to be translated on the way past. Key aliasing only — no data is
+    // copied — and skipped entirely when nothing changed, which is every normal file.
+    const rekey = renamed.length
+      ? (columns) => {
+        const out = {};
+        for (const k of Object.keys(columns)) out[safeText(k)] = columns[k];
+        return out;
+      }
+      : (columns) => columns;
     // One decision, from the data AND from what the engine already holds — and AWAITED,
     // because whether this browser can stream out of core is probed during init and the
     // first import routes before anything has touched DuckDB. Reading that capability
@@ -574,7 +688,8 @@ export class DataStore {
     let done = 0;
     let out;
     try {
-      await stream(async (columns) => {
+      await stream(async (raw) => {
+        const columns = rekey(raw);
         await ingest.batch(columns);
         const first = Object.keys(columns)[0];
         done += first ? columns[first].length : 0;
@@ -608,7 +723,8 @@ export class DataStore {
     src.importer = importer ?? null;
     src.missingCodes = normaliseCodes(missingCodes);
 
-    this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src, { producedBy });
+    const opType = combine === 'replace' ? 'load' : combine;
+    this.#addSourceOp(opType, src, { producedBy, joinKey, aliases, joinType });
     debug('data', 'rederiving', { rows: out.rows, columns: meta.length, wide: route.wide });
     await this.rederive(this.#loadReason(combine, had));
     debug('data', 'source ready', route.wide ? { file: out.file } : { table });
