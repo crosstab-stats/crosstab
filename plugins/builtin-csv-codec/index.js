@@ -16,7 +16,7 @@
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { uniqueName, isWideDataset, createTypeScan } = globalThis.ctStd;
+const { ingestTable } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-csv-codec',
@@ -46,22 +46,8 @@ export const manifest = {
   ],
 };
 
-const WRITE_BATCH = 50_000;
-// Values per ingest batch; rows-per-batch is derived from the file's width.
-//
-// Sized for the platform that is tight, not the one this is developed on. A batch
-// crosses the sandbox boundary by postMessage, and iOS/Safari REFUSES the transfer
-// list across an opaque-origin iframe (#91) — so there every batch is CLONED, and the
-// transient peak is the batch twice over. At a million values that is 8 MiB doubled
-// rather than 16.
-//
-// Measured at 3,300 columns, ingest time and JS heap after: 500k -> 11.1s/92 MiB,
-// 1M -> 10.6s/98 MiB, 2M -> 8.7s/121 MiB. The heap figures are one sample each and
-// move with GC timing, so the choice rests on the clone above rather than on them;
-// what the timings do show is that the cost of a smaller batch lands on WIDE files,
-// where a batch is few rows and the per-column overhead is paid more often.
-const EMIT_CELLS = 1_000_000;
 const READ_CHUNK = 1 << 22; // 4 MiB per random-access read
+const WRITE_BATCH = 50_000; // rows per output flush on export
 
 // --- missing-value codes (the "NA"/"PS" problem) -----------------------------
 //
@@ -92,9 +78,22 @@ const READ_CHUNK = 1 << 22; // 4 MiB per random-access read
 // --- read --------------------------------------------------------------------
 
 /**
- * Decode a delimited file into the dataset, in two streaming passes.
+ * Decode a delimited file into the dataset.
  *
- * ## Why two passes, and why neither holds the file
+ * ## What is left here, and what moved
+ *
+ * All of it, once: this reader used to own the typing rule, the missing-code detection,
+ * the unique-naming, the width routing, the cell-sized batching and the two-pass
+ * orchestration. Every one of those is a property of tabular data or of our storage
+ * rather than of comma-separated text, and every one of them was therefore re-implemented
+ * — differently — by the other codecs. They now live in `ingestTable` (plugin-stdlib),
+ * which no codec reimplements.
+ *
+ * What is genuinely CSV is what remains: the delimiter, RFC-4180 quoting, and reading the
+ * source in chunks without ever holding the file. `scan` is handed to `ingestTable` and
+ * called twice, which is why it was written to take an `onRow` that may return a promise.
+ *
+ * ## Why two passes, for the reader coming here from the parse
  *
  * This used to read the whole file, decode it to one JS string, tokenise that into an
  * array of arrays of STRINGS, pivot those into per-column arrays, and only then emit —
@@ -107,154 +106,22 @@ const READ_CHUNK = 1 << 22; // 4 MiB per random-access read
  * — owner, 2026-11-17. The spinner froze too, because the tokeniser never yielded: the
  * one visible sign of life was blocked by the work it was meant to be reporting.
  *
- * So the parse streams, and the cost of streaming is that a column's TYPE is not known
- * until its last value has been seen. The old code could decide after the fact because
- * it had every value in hand. Rather than weaken that rule — "numeric iff every
- * non-empty value parses as finite", which is what makes a column with one "N/A" stay a
- * string — the file is read twice:
+ * The cost of streaming is that a column's TYPE is not known until its last value has
+ * been seen, so the file is read twice rather than weakening the rule — see `ingestTable`,
+ * which owns that decision now. Re-reading is cheap: the source is a File on disk, already
+ * being read in chunks.
  *
- *   1. count the rows and watch each column for a non-numeric value. Holds one boolean
- *      and one counter per column, and NO cells.
- *   2. re-read, converting each row straight into the output buffers and emitting a
- *      batch whenever enough CELLS have accumulated.
- *
- * Re-reading is cheap — the source is a File on disk, already being read in chunks —
- * and it buys exact typing with bounded memory.
- *
- * ## Batching by cells rather than rows
- *
- * A fixed 50,000-row batch is fine at 10 columns and fatal at 3,300: it is the width
- * that decides how much a batch costs. The batch is therefore sized in VALUES, so a
- * wide file sends more, smaller batches and a narrow one still sends few, large ones.
- * (`builtin-readstat-codec` reached the same conclusion for the same reason.)
+ * `dropSingleEmptyRow` is the one genuinely delimited-text quirk that had to travel with
+ * the hoist: a file ending in a newline tokenises to a final row of one empty field, and
+ * that is not a row. No other format can produce it, so no other format inherits it.
  */
 export async function readCsv(app, { name }) {
   const size = await app.codec.size();
   const delimiter = /\.tsv$/i.test(name || '') ? '\t' : ',';
-
-  // --- pass 1: the header, the row count, and which columns are numeric ---------
-  //
-  // The typing RULE is not here. `createTypeScan` is the host's, shared by every codec
-  // that has to infer types from text — this reader's only job is to hand it rows.
-  let header = null;
-  let rowCount = 0;
-  let typeScan = null;
-  await scan(app, size, delimiter, (row) => {
-    if (!header) {
-      header = row.map((h, i) => h.trim() || `V${i + 1}`);
-      typeScan = createTypeScan({ columns: header.length });
-      return undefined;
-    }
-    if (row.length === 1 && row[0] === '') return undefined; // blank trailing line
-    rowCount += 1;
-    typeScan.observeRow(row);
-    return undefined;
-  }, (rows) => app.codec.progress(rows, -1));
-  if (!header || !header.length) throw new Error('CSV: no columns found');
-
-  // Which recurring non-numeric values mean "missing"? The host decides (and records
-  // the answer against the import); an empty set reproduces the old typing exactly.
-  const accepted = await askMissingCodes(app, typeScan);
-  const { isNumeric, isMissing } = typeScan.decide(accepted);
-
-  const used = {};
-  const variables = [];
-  const storageTypes = {};
-  const isNum = [];
-  for (let c = 0; c < header.length; c++) {
-    const nm = uniqueName(header[c], used);
-    used[nm] = true;
-    const num = !!isNumeric[c];
-    isNum.push(num);
-    variables.push({ name: nm, type: num ? 'numeric' : 'string', measurementLevel: num ? 'scale' : 'nominal' });
-    storageTypes[nm] = num ? 'numeric' : 'string';
-  }
-
-  // --- pass 2: fill and emit ----------------------------------------------------
-  // A dataset too big for a DuckDB table goes to the out-of-core ingest instead — the
-  // host writes Parquet and queries that. readstat has routed on this rule for a while
-  // and the CSV reader did not, so a huge CSV built a table however big it was.
-  //
-  // The rule is about SIZE. Routing on WIDTH was tried and dropped: measured at 3,300
-  // columns the parquet path cost MORE (178 MiB of JS heap against 121), because it
-  // accumulates a whole row group in JS. See `isWideDataset`.
-  const wide = isWideDataset(variables.length, rowCount);
-  // `missingCodes` travels with the schema so the ingest — and anything reading the
-  // dataset's provenance later — can say WHY a column is numeric (#output-outlives).
-  await app.codec.begin(variables, storageTypes, { rowCount, wide, missingCodes: [...accepted] });
-  const width = variables.length;
-  const perBatch = Math.max(1, Math.min(rowCount || 1, Math.floor(EMIT_CELLS / Math.max(1, width))));
-  let buf = newBuffers(variables, isNum, perBatch);
-  let fill = 0;
-  let emitted = 0;
-  let first = true;
-
-  const flush = async () => {
-    if (!fill) return;
-    await app.codec.batch(sliceBuffers(buf, variables, isNum, fill));
-    emitted += fill;
-    fill = 0;
-    buf = newBuffers(variables, isNum, perBatch);
-  };
-
-  await scan(app, size, delimiter, (row) => {
-    if (first) { first = false; return undefined; } // header
-    if (row.length === 1 && row[0] === '') return undefined;
-    for (let c = 0; c < width; c++) {
-      const v = c < row.length ? row[c] : '';
-      const col = buf[c];
-      // `isMissing` is the scan's, so "which values count as missing" is decided in one
-      // place and applied identically by every codec — including in a column that stayed
-      // text, since the host ticked "NA means missing in this file", not "…in the columns
-      // it happened to rescue".
-      const missing = isMissing(v);
-      if (isNum[c]) col[fill] = missing ? NaN : Number(v);
-      else col[fill] = missing ? null : v;
-    }
-    fill += 1;
-    // The promise is the signal: `scan` awaits it, so the next row lands in a fresh
-    // buffer rather than past the end of a full one.
-    return fill >= perBatch ? flush() : undefined;
-  }, () => app.codec.progress(emitted + fill, rowCount));
-  await flush();
-}
-
-/**
- * Ask the host which recurring non-numeric values should count as missing.
- *
- * Thin on purpose: the detection and the arithmetic are `createTypeScan`'s, shared with
- * every other codec that infers types from text. All that is left here is the call.
- *
- * Returns the empty set when the host does not implement the verb — an older host, or
- * the test harness — which reproduces the old typing byte for byte. The host is asked
- * even when there is nothing to propose, because a REPLAYED import carries the codes
- * accepted the first time and must apply them whether or not this file revision still
- * proposes them.
- *
- * @param {object} app
- * @param {{proposal: () => object}} typeScan
- * @returns {Promise<Set<string>>}
- */
-async function askMissingCodes(app, typeScan) {
-  if (typeof app.codec.missingCodes !== 'function') return new Set();
-  const answer = await app.codec.missingCodes(typeScan.proposal());
-  // Anything the host names is honoured even if it was not offered: a recorded import
-  // may legitimately carry codes from a different revision of the file.
-  return new Set(Array.isArray(answer) ? answer.filter((v) => typeof v === 'string') : []);
-}
-
-/** Column buffers for one batch: Float64Array for numeric, plain array for string. */
-function newBuffers(variables, isNum, n) {
-  return variables.map((_v, c) => (isNum[c] ? new Float64Array(n) : new Array(n)));
-}
-
-/** The filled prefix of each buffer, keyed by variable name. */
-function sliceBuffers(buf, variables, isNum, n) {
-  const out = {};
-  for (let c = 0; c < variables.length; c++) {
-    out[variables[c].name] = isNum[c] ? buf[c].subarray(0, n) : buf[c].slice(0, n);
-  }
-  return out;
+  await ingestTable(app, {
+    dropSingleEmptyRow: true,
+    scanRows: (onRow, ctx) => scan(app, size, delimiter, onRow, ctx.tick),
+  });
 }
 
 /**

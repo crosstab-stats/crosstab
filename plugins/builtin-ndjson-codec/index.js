@@ -44,71 +44,105 @@ export const manifest = {
   ],
 };
 
+/** The host's shared helpers (core/plugin-stdlib.js). */
+const { ingestTable } = globalThis.ctStd;
+
 const READ_CHUNK = 1 << 20; // 1 MiB source reads
-// Values per ingest batch, not rows: an object with three thousand keys costs three
-// thousand times what one with three keys does, and a fixed row count cannot know that.
-// `perBatch` is derived once the first object reveals the width.
-const READ_CELLS = 1_000_000;
-const READ_BATCH_MAX = 10_000; // ...and never more rows than this, however narrow
 const WRITE_BATCH = 10_000; // rows per output flush
 
 /**
- * Decode an NDJSON file into the dataset, streaming. Columns are inferred from the
- * first object's keys (numbers → numeric, everything else → string); later rows
- * are coerced to that schema (extra keys ignored, missing → null). The source is
- * read in chunks and split into lines, so the whole file is never held at once.
+ * Decode an NDJSON file into the dataset, streaming.
+ *
+ * ## What this reader got wrong, and why it was structural
+ *
+ * It inferred the schema from the FIRST object alone — `typeof row[k] === 'number'` on
+ * one record decided the column for the whole file — and then coerced every later row to
+ * that guess. One string in the first record and a column of ten million numbers imported
+ * as text; one number in the first record and every later `"N/A"` became `NaN` silently.
+ * It also detected no missing-value codes and never routed a large file out of core, so a
+ * multi-gigabyte JSON-lines file built a DuckDB table however big it was.
+ *
+ * None of that was carelessness, and that is the point: typing, code detection and width
+ * routing are properties of tabular data and of our storage, not of newline-delimited
+ * JSON, and asking each codec to re-implement them is what produced five codecs with five
+ * different subsets of the behaviour right. They now live in `ingestTable`
+ * (plugin-stdlib), and this reader does the one thing that is genuinely about this format:
+ * turn bytes into rows of raw values.
+ *
+ * So it now gets exact typing over every record, the `NA`/`PS` missing-code pass, the
+ * cell-sized batching, and the out-of-core route — for free, and identically to every
+ * other reader.
+ *
+ * ## The two things this format needs that a delimited file does not
+ *
+ * **There is no header row**, so the columns are only known once every record has been
+ * seen: a key may first appear in the last object in the file. `keyOrder` is therefore
+ * built during pass 1 (first appearance wins, which keeps the column order of a
+ * well-formed file) and handed over afterwards as the header. Pass 2 re-reads with the
+ * order already complete, so every row is full width.
+ *
+ * **The values are real JS values**, not text, so the typing rule is `typeof v ===
+ * 'number'` rather than "parses as a finite number". Without that, `Number(true)` is 1
+ * and a column of booleans would import as numeric — and a JSON `true` is not 1.
  */
 export async function readNdjson(app, _info) {
   const size = await app.codec.size();
+  // First appearance wins, and it is shared between the two passes deliberately: pass 2
+  // must position values exactly as pass 1 typed them.
+  const keyOrder = [];
+  const index = new Map();
+
+  await ingestTable(app, {
+    header: () => keyOrder,
+    // JSON carries its own types. Anything that is not a number is text, including a
+    // boolean and including `null` (which the shared missing rule catches first anyway).
+    numeric: (v) => typeof v === 'number',
+    scanRows: (onRow, ctx) => scan(app, size, (obj) => {
+      if (ctx.pass === 1) {
+        for (const k of Object.keys(obj)) {
+          if (!index.has(k)) { index.set(k, keyOrder.length); keyOrder.push(k); }
+        }
+      }
+      // Positioned by the shared key order, not by this object's own key order — two
+      // records may list the same fields in a different order, and JSON says that is the
+      // same object.
+      const row = new Array(keyOrder.length);
+      for (const k of Object.keys(obj)) {
+        const at = index.get(k);
+        if (at !== undefined) row[at] = obj[k];
+      }
+      return onRow(row);
+    }, ctx.tick),
+  });
+}
+
+/**
+ * Read the source in chunks, split it into lines, and hand each parsed object to `onObj`.
+ *
+ * Called twice (see `ingestTable`), so it holds no state across calls beyond what it is
+ * given. Malformed lines and non-object values are skipped — identically on both passes,
+ * which is what makes the two passes agree.
+ *
+ * `onObj` may return a promise, awaited before the next line is parsed: that is how a
+ * filled batch stops the parse rather than overrunning its buffers.
+ */
+async function scan(app, size, onObj, onTick) {
   const decoder = new TextDecoder();
   let offset = 0;
   let partial = '';
-  let rows = [];
-  let columns = null;
-  let types = null;
-  let began = false;
-
-  let perBatch = READ_BATCH_MAX;
-  const begin = async (row) => {
-    columns = Object.keys(row);
-    types = {};
-    for (const c of columns) types[c] = typeof row[c] === 'number' ? 'numeric' : 'string';
-    const variables = columns.map((c) => ({ name: c, type: types[c] }));
-    await app.codec.begin(variables, types);
-    perBatch = Math.max(1, Math.min(READ_BATCH_MAX, Math.floor(READ_CELLS / Math.max(1, variables.length))));
-    began = true;
-  };
-
-  const flush = async () => {
-    if (!rows.length) return;
-    const out = {};
-    for (const c of columns) {
-      if (types[c] === 'numeric') {
-        const a = new Float64Array(rows.length);
-        for (let i = 0; i < rows.length; i++) { const v = rows[i][c]; a[i] = typeof v === 'number' ? v : NaN; }
-        out[c] = a;
-      } else {
-        const a = new Array(rows.length);
-        for (let i = 0; i < rows.length; i++) { const v = rows[i][c]; a[i] = v == null ? null : String(v); }
-        out[c] = a;
-      }
-    }
-    await app.codec.batch(out);
-    rows = [];
-  };
 
   const handleLine = async (line) => {
-    const s = line.trim();
-    if (!s) return;
+    const t = line.trim();
+    if (!t) return;
     let obj;
-    try { obj = JSON.parse(s); } catch { return; } // skip malformed lines
+    try { obj = JSON.parse(t); } catch { return; } // skip malformed lines
     if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) return;
-    if (!began) await begin(obj);
-    rows.push(obj);
-    if (rows.length >= perBatch) await flush();
+    const wait = onObj(obj);
+    if (wait) await wait;
   };
 
   while (offset < size) {
+    // eslint-disable-next-line no-await-in-loop -- sequential by nature
     const u8 = await app.codec.read(offset, Math.min(READ_CHUNK, size - offset));
     if (!u8.length) break;
     offset += u8.length;
@@ -117,14 +151,14 @@ export async function readNdjson(app, _info) {
     while ((nl = partial.indexOf('\n')) >= 0) {
       const line = partial.slice(0, nl);
       partial = partial.slice(nl + 1);
+      // eslint-disable-next-line no-await-in-loop -- a batch may have flushed
       await handleLine(line);
     }
+    onTick();
   }
   partial += decoder.decode();
   if (partial) await handleLine(partial);
-  // Empty/headerless file still needs a schema so the host creates a (empty) table.
-  if (!began) await app.codec.begin([], {});
-  await flush();
+  onTick();
 }
 
 /**

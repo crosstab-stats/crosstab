@@ -1378,6 +1378,240 @@ export function createTypeScan({ columns = 0, numeric = (v) => Number.isFinite(N
   };
 }
 
+/**
+ * Import a table of RAW values: the host's typing rule, code detection, naming, width
+ * routing and batching, applied once, for every format that does not carry its own types.
+ *
+ * ## What this exists to delete
+ *
+ * The codec protocol was asking every plugin to re-implement host policy, and each got a
+ * different subset right (2026-11-18 audit): three of five codecs did not route on width,
+ * three of five did not detect missing-value codes. That is not an accident of care. A
+ * typing rule, what "missing" means, how big a batch should be and when a dataset is too
+ * big for a table are properties of TABULAR DATA and of OUR storage — none of them is a
+ * property of a file format. The Excel codec's own comment said its typing "mirrored the
+ * CSV codec", and that mirroring is exactly why fixing CSV's 3,347-mistyped-column bug
+ * (e2a3b77) left Excel typing 211 of the same 3,379 columns differently.
+ *
+ * So a codec's job is reduced to the part that genuinely differs: **bytes → raw rows.**
+ * Everything after that is here.
+ *
+ * ## Why it lives in the stdlib rather than behind a new protocol verb
+ *
+ * It has to call the codec's parser twice (see below), and a function cannot cross the
+ * postMessage boundary — so a host-side verb would have to invert the whole read loop and
+ * stream raw cells back out through the sandbox wall, which is more protocol, not less.
+ * This module is host-authored, host-versioned code that runs INSIDE the sandbox; putting
+ * it here means ONE implementation that no codec reimplements, which is the actual goal,
+ * and the protocol gets smaller instead of larger.
+ *
+ * ## Why two passes
+ *
+ * A column's type is not known until its last value has been seen: "numeric iff every
+ * non-empty value parses as finite" is what keeps a column with one `N/A` in it a string.
+ * The old readers could decide after the fact because they held every cell; a streaming
+ * reader cannot, so it reads the source twice rather than weaken the rule. Re-reading a
+ * local file is cheap. Holding 21 million JS strings is not.
+ *
+ * `scanRows` is therefore called twice and MUST produce the same rows both times. It gets
+ * `(onRow, ctx)`:
+ *   - `onRow(values)` takes one row as an array of raw values, and may return a promise —
+ *     await it before parsing the next row. Pass 2 returns one exactly when a batch filled
+ *     up, and that await is what keeps a batch at its size. (It is also the bug that was
+ *     found the hard way: flushing at CHUNK boundaries instead overran the buffers, and
+ *     because a Float64Array silently ignores a write past its end while a plain Array
+ *     grows, the numeric and string columns of one batch came out DIFFERENT LENGTHS.)
+ *   - `ctx.pass` is 1 or 2, for a codec that can skip work on one of them.
+ *   - `ctx.tick()` reports progress; call it per source chunk, not per row.
+ *
+ * @param {object} app - the plugin's app bridge
+ * @param {object} spec
+ * @param {(onRow: (values: any[]) => (void|Promise<void>), ctx: {pass: 1|2, tick: () => void})
+ *          => Promise<void>} spec.scanRows - the codec's parser, callable twice
+ * @param {string[]|'first-row'|(() => string[])} [spec.header] - column names.
+ *   `'first-row'` (the default) consumes the first row of each pass as the header; a
+ *   function is called after pass 1, for a format whose columns are only known by then.
+ * @param {(v: any) => boolean} [spec.numeric] - does this raw value count as a number?
+ *   Defaults to the text rule; a format that hands over real JS values should pass its own
+ *   (see {@link createTypeScan}).
+ * @param {number} [spec.rowCount] - if the format knows it without counting.
+ * @param {boolean} [spec.dropSingleEmptyRow] - treat a one-value row whose value is `''`
+ *   as not a row. The trailing-newline quirk of delimited text; off by default so no other
+ *   format inherits it.
+ * @param {number} [spec.emitCells] - values per batch. A fixed ROW count is fine at ten
+ *   columns and fatal at 3,300 — it is the width that decides what a batch costs. The
+ *   default is the 1,000,000 that the delimited, spreadsheet and JSON-lines readers had
+ *   each arrived at separately; there is now one of it.
+ * @returns {Promise<{variables: object[], rowCount: number, wide: boolean,
+ *                    missingCodes: string[]}>} what was handed to `begin`
+ */
+export async function ingestTable(app, {
+  scanRows,
+  header = 'first-row',
+  numeric,
+  rowCount = null,
+  dropSingleEmptyRow = false,
+  // ## Why a million values, measured rather than picked
+  //
+  // Sized for the platform that is tight, not the one this is developed on. A batch
+  // crosses the sandbox boundary by postMessage, and iOS/Safari REFUSES the transfer list
+  // across an opaque-origin iframe (#91) — so there every batch is CLONED, and the
+  // transient peak is the batch twice over. At a million values that is 8 MiB doubled
+  // rather than 16.
+  //
+  // Measured at 3,300 columns, ingest time and JS heap after: 500k -> 11.1s/92 MiB,
+  // 1M -> 10.6s/98 MiB, 2M -> 8.7s/121 MiB. The heap figures are one sample each and move
+  // with GC timing, so the choice rests on the clone above rather than on them; what the
+  // timings do show is that the cost of a smaller batch lands on WIDE files, where a batch
+  // is few rows and the per-column overhead is paid more often.
+  //
+  // (Moved here from the delimited reader, which is where it was measured. The JSON-lines
+  // reader independently capped batches at 10,000 ROWS as well, which at three columns
+  // meant 30,000 values — far more conservative than anything the measurement supports.
+  // The cap is gone; one value, in one place, with the reasoning attached to it.)
+  emitCells = 1_000_000,
+} = {}) {
+  const fromFirstRow = header === 'first-row';
+  const numericOpt = numeric ? { numeric } : {};
+  const skip = (values) => dropSingleEmptyRow && values.length === 1 && values[0] === '';
+
+  // --- pass 1: names, row count, and which columns are numeric -------------------
+  //
+  // The scan is created with the width when the width is known up front, and widened from
+  // the rows when it is not. That distinction is not cosmetic: `proposal()` walks every
+  // column it knows about, so a scan told the header width ignores the extra cells of a
+  // ragged row rather than letting them propose missing codes — which is what the
+  // delimited reader has always done.
+  let names = Array.isArray(header) ? header.slice() : null;
+  let scan = names ? createTypeScan({ columns: names.length, ...numericOpt }) : null;
+  if (!scan && !fromFirstRow) scan = createTypeScan({ columns: 0, ...numericOpt });
+  let rows = 0;
+  let seenHeader = false;
+
+  await scanRows((values) => {
+    if (fromFirstRow && !seenHeader) {
+      seenHeader = true;
+      names = values.map((h, i) => String(h ?? '').trim() || `V${i + 1}`);
+      scan = createTypeScan({ columns: names.length, ...numericOpt });
+      return undefined;
+    }
+    if (skip(values)) return undefined;
+    rows += 1;
+    scan.observeRow(values);
+    return undefined;
+  }, { pass: 1, tick: () => app.codec.progress(rows, -1) });
+
+  if (typeof header === 'function') names = header();
+  if (!names || !names.length) throw new Error('import: no columns found');
+  const total = rowCount == null ? rows : rowCount;
+
+  // Which recurring non-numeric values mean "missing"? The host decides, and records the
+  // answer against the import so a replay re-applies it rather than re-asking.
+  const accepted = await askMissingCodes(app, scan);
+  const { isNumeric, isMissing } = scan.decide(accepted);
+
+  // --- the schema ---------------------------------------------------------------
+  const used = {};
+  const variables = [];
+  const storageTypes = {};
+  const isNum = [];
+  for (let c = 0; c < names.length; c++) {
+    const nm = uniqueName(names[c], used);
+    used[nm] = true;
+    const num = !!isNumeric[c];
+    isNum.push(num);
+    variables.push({ name: nm, type: num ? 'numeric' : 'string', measurementLevel: num ? 'scale' : 'nominal' });
+    storageTypes[nm] = num ? 'numeric' : 'string';
+  }
+
+  // A dataset too big for a DuckDB table goes to the out-of-core ingest instead — the host
+  // writes Parquet and queries that. This is the decision three of five codecs were not
+  // making, so a huge NDJSON file built a table however big it was.
+  const wide = isWideDataset(variables.length, total);
+  // `missingCodes` travels with the schema so the ingest — and anything reading the
+  // dataset's provenance later — can say WHY a column is numeric.
+  const opts = { rowCount: total, wide, missingCodes: [...accepted] };
+  await app.codec.begin(variables, storageTypes, opts);
+
+  // --- pass 2: fill and emit ----------------------------------------------------
+  const width = variables.length;
+  const perBatch = Math.max(1, Math.min(total || 1, Math.floor(emitCells / Math.max(1, width))));
+  let buf = newBuffers(width, isNum, perBatch);
+  let fill = 0;
+  let emitted = 0;
+  seenHeader = false;
+
+  const flush = async () => {
+    if (!fill) return;
+    await app.codec.batch(sliceBuffers(buf, variables, isNum, fill));
+    emitted += fill;
+    fill = 0;
+    buf = newBuffers(width, isNum, perBatch);
+  };
+
+  await scanRows((values) => {
+    if (fromFirstRow && !seenHeader) { seenHeader = true; return undefined; }
+    if (skip(values)) return undefined;
+    for (let c = 0; c < width; c++) {
+      const v = c < values.length ? values[c] : '';
+      // `isMissing` is the scan's, so "which values count as missing" is decided in one
+      // place and applied identically by every format — including in a column that stayed
+      // text, since the host ticked "NA means missing in this file", not "…in the columns
+      // it happened to rescue".
+      const missing = isMissing(v);
+      if (isNum[c]) buf[c][fill] = missing ? NaN : Number(v);
+      // A string column holds strings. Delimited text hands over strings already, so the
+      // typeof guard makes this free there; a format that hands over real JS values (a
+      // boolean in JSON, a date in a spreadsheet) would otherwise put a non-string into a
+      // string column, which the old JSON reader did `String()` for by hand.
+      else if (missing) buf[c][fill] = null;
+      else buf[c][fill] = typeof v === 'string' ? v : String(v);
+    }
+    fill += 1;
+    return fill >= perBatch ? flush() : undefined;
+  }, { pass: 2, tick: () => app.codec.progress(emitted + fill, total) });
+  await flush();
+
+  return { variables, rowCount: total, wide, missingCodes: opts.missingCodes };
+}
+
+/**
+ * Ask the host which recurring non-numeric values should count as missing.
+ *
+ * Returns the empty set when the host does not implement the verb — an older host, or a
+ * test harness — which reproduces untouched typing byte for byte. The host is asked even
+ * when there is nothing to propose, because a REPLAYED import carries the codes accepted
+ * the first time and must apply them whether or not this revision of the file still
+ * proposes them.
+ *
+ * @param {object} app
+ * @param {{proposal: () => object}} typeScan
+ * @returns {Promise<Set<string>>}
+ */
+export async function askMissingCodes(app, typeScan) {
+  if (typeof app.codec?.missingCodes !== 'function') return new Set();
+  const answer = await app.codec.missingCodes(typeScan.proposal());
+  // Anything the host names is honoured even if it was not offered: a recorded import may
+  // legitimately carry codes from a different revision of the file.
+  return new Set(Array.isArray(answer) ? answer.filter((v) => typeof v === 'string') : []);
+}
+
+/** Column buffers for one batch: Float64Array for numeric, plain array for string. */
+function newBuffers(width, isNum, n) {
+  const out = new Array(width);
+  for (let c = 0; c < width; c++) out[c] = isNum[c] ? new Float64Array(n) : new Array(n);
+  return out;
+}
+
+/** The filled prefix of each buffer, keyed by variable name. */
+function sliceBuffers(buf, variables, isNum, n) {
+  const out = {};
+  for (let c = 0; c < variables.length; c++) {
+    out[variables[c].name] = isNum[c] ? buf[c].subarray(0, n) : buf[c].slice(0, n);
+  }
+  return out;
+}
+
 export function isWideDataset(varCount, rowCount) {
   const cols = Number(varCount) || 0;
   // An unknown row count is assumed substantial: guessing small is the guess that

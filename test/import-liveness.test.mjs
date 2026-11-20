@@ -92,9 +92,13 @@ test('the CSV reader streams: it never materialises the file or the cells', () =
   assert.ok(!/async function readAll\(/.test(src), 'still reads the whole file');
   assert.ok(!/function tokenize\(text/.test(src), 'still tokenises a whole-file string');
   assert.ok(!/const rows = tokenize/.test(src), 'still builds an array of rows of strings');
-  // ...and the two things it must do instead.
+  // ...and the two things it must do instead. The second used to be `assert.match(src,
+  // /EMIT_CELLS/)`, which stopped being the right place to look when the batching moved
+  // into the shared ingest — so it asks that the reader DELEGATES, and the test below
+  // asks whether the thing it delegates to batches by cells. Checking the codec for a
+  // constant it no longer owns would have passed forever by accident.
   assert.match(src, /decoder\.decode\(u8, \{ stream: true \}\)/, 'decode incrementally');
-  assert.match(src, /EMIT_CELLS/, 'batch by cells');
+  assert.match(src, /ingestTable\(/, 'roll its own ingest instead of the shared one');
 });
 
 test('the CSV reader yields, so the spinner can turn', () => {
@@ -113,10 +117,18 @@ test('every codec can report progress, and the ones with a long silent pass do',
   const broker = readFileSync('core/plugin-broker.js', 'utf8');
   assert.match(broker, /dispatch\['codec\.progress'\]/);
 
-  // CSV is the one with a pass that produces no batches at all — it is counting rows,
-  // which is what the progress is about — so it must report from inside that pass.
-  const csv = code(readFileSync('plugins/builtin-csv-codec/index.js', 'utf8'));
-  assert.match(csv, /app\.codec\.progress\(/);
+  // The pass that produces no batches at all — it is counting rows, which is what the
+  // progress is about — must still report from inside itself. That reporting is now the
+  // shared ingest's, and what each codec owes is a call to `ctx.tick` per source CHUNK:
+  // a codec that never ticks goes silent through its counting pass, which is exactly the
+  // stretch that looked like a hang.
+  const std = code(readFileSync('core/plugin-stdlib.js', 'utf8'));
+  assert.match(std, /app\.codec\.progress\(rows, -1\)/, 'the counting pass cannot report');
+  assert.match(std, /app\.codec\.progress\(emitted \+ fill, total\)/, 'the emit pass cannot report');
+  for (const name of ['builtin-csv-codec', 'builtin-ndjson-codec']) {
+    const src = code(readFileSync(`plugins/${name}/index.js`, 'utf8'));
+    assert.match(src, /ctx\.tick/, `${name} never ticks, so its scan is silent`);
+  }
 });
 
 test('the host relays a codec report, including before the schema is known', () => {
@@ -213,12 +225,31 @@ test('a row group is sized by cells, so the wide path is bounded too', async () 
   assert.ok(rowGroupFor(100000) >= 256);
 });
 
-test('both codecs route on the SAME rule', async () => {
-  // Two copies of a routing decision send the same file down different paths depending
-  // on which reader opened it. readstat had the only copy and CSV had none.
-  for (const name of ['builtin-csv-codec', 'builtin-readstat-codec']) {
-    const src = readFileSync(`plugins/${name}/index.js`, 'utf8');
-    assert.match(src, /isWideDataset/, `${name} does not use the shared rule`);
-    assert.ok(!/Math\.ceil\(\(varCount \* rows\)/.test(code(src)), `${name} still has its own copy`);
+test('every codec routes on the SAME rule, or on nothing of its own', async () => {
+  // Two copies of a routing decision send the same file down different paths depending on
+  // which reader opened it. readstat had the only copy, CSV had none, and the 2026-11-18
+  // audit found three of five codecs making no routing decision at all.
+  //
+  // There are now two legitimate ways to have one: call `isWideDataset`, or hand the rows
+  // to `ingestTable`, which calls it. What is never legitimate is a third copy of the
+  // arithmetic — so that is what this asserts the absence of, for EVERY codec rather than
+  // the two that once had a stake in it.
+  const std = code(readFileSync('core/plugin-stdlib.js', 'utf8'));
+  assert.match(std, /const wide = isWideDataset\(/, 'the shared ingest does not route');
+  for (const [name, src] of codecs()) {
+    const body = code(src);
+    assert.ok(
+      !/Math\.ceil\(\(\w+ \* \w+\) \/ 4_?0{6}\)/.test(body),
+      `${name} has its own copy of the width rule`,
+    );
+  }
+  // And the readers that infer their types from raw values must go through the shared
+  // ingest, which is what makes the typing, the missing-code pass and the routing one
+  // thing rather than five. A format that carries real types (Parquet, readstat) declares
+  // them instead and is not listed.
+  for (const name of ['builtin-csv-codec', 'builtin-ndjson-codec']) {
+    const src = code(readFileSync(`plugins/${name}/index.js`, 'utf8'));
+    assert.match(src, /ingestTable\(/, `${name} does not use the shared ingest`);
+    assert.ok(!/createTypeScan\(/.test(src), `${name} still drives its own type scan`);
   }
 });
