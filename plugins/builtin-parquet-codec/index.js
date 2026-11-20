@@ -76,6 +76,102 @@ function sourceBuffer(app, size) {
   };
 }
 
+/**
+ * The column types a Parquet file DECLARES, from its footer — or null when the footer
+ * cannot answer and the values have to be sniffed instead.
+ *
+ * ## Why this is not read off the spec
+ *
+ * Parquet's footer gives a physical type plus an optional `converted_type` (the old
+ * annotation) or `logical_type` (the new one), and what matters here is not what those
+ * MEAN but what hyparquet hands back for each of them — because that is what the ingest
+ * has to store. The two differ in ways that cannot be guessed:
+ *
+ *  - `DATE`, `TIMESTAMP_*` and a bare `INT96` arrive as **Date objects**, not numbers.
+ *  - `JSON`, `GEOMETRY` and `GEOGRAPHY` arrive as **parsed JS values** — so `String(v)`
+ *    on one gives `[object Object]`, which is why `toText` had to learn about objects.
+ *  - `DECIMAL` arrives as a **number**, already divided by its scale, whatever its
+ *    physical type (INT32, INT64 or a byte array).
+ *  - `TIME_MILLIS` is NOT converted at all and arrives as a raw INT32 — milliseconds
+ *    past midnight, i.e. a number.
+ *  - `UINT_64` arrives as **BigInt**; `UINT_32` as a number.
+ *
+ * Verified by writing real Parquet files and reading them back (hyparquet 1.33.1,
+ * hyparquet-writer 0.16.1) for the common types, and read out of hyparquet's own
+ * conversion function for the rest. Writing this from the Parquet spec alone would have
+ * typed every timestamp column as numeric.
+ *
+ * ## Why it can return null
+ *
+ * `metadata.schema` is a flat, pre-order list whose first element is the root and whose
+ * leaves are the columns. For a flat file — which is what this reader supports, and what
+ * every file written by pandas, R-arrow or DuckDB from a data frame is — the leaf names
+ * are unique and are exactly the keys `parquetReadObjects` produces. A NESTED file breaks
+ * both of those, so rather than guess at a flattening this hands back null and lets the
+ * caller sniff, which is what it did for every file before this.
+ *
+ * Exported — unlike everything else here that is not a codec verb — because the mapping
+ * is the part worth testing exhaustively and it is PURE: a table of schema elements in,
+ * a table of types out, no library, no network, no bytes. The round trip against real
+ * Parquet files is what proves the mapping matches hyparquet's behaviour, and that needs
+ * the pinned CDN modules; this is what proves the mapping itself, offline, always.
+ *
+ * @param {object} metadata - from `parquetMetadataAsync`
+ * @returns {?{names: string[], types: Object<string, 'numeric'|'string'>}}
+ */
+export function schemaTypes(metadata) {
+  const schema = metadata?.schema;
+  if (!Array.isArray(schema) || schema.length < 2) return null;
+  const names = [];
+  const types = {};
+  for (let i = 1; i < schema.length; i++) {
+    const el = schema[i];
+    // A group inside the root: nested. Bail rather than invent a flattening.
+    if (Number(el?.num_children ?? 0) > 0) return null;
+    const name = el?.name == null ? null : String(el.name);
+    if (!name || Object.prototype.hasOwnProperty.call(types, name)) return null; // unnamed or a dup
+    names.push(name);
+    types[name] = declaredType(el);
+  }
+  return names.length ? { names, types } : null;
+}
+
+/**
+ * One leaf's CrossTab type, from its physical type and its annotation.
+ *
+ * Ordered the way hyparquet's own converter is ordered, because that is the thing being
+ * mirrored: the first rule that matches decides, and `DECIMAL` has to be tested before
+ * the physical type it rides on.
+ *
+ * @param {{type?: string, converted_type?: string, logical_type?: object}} el
+ * @returns {'numeric'|'string'}
+ */
+export function declaredType(el) {
+  const phys = el?.type ?? '';
+  const conv = el?.converted_type ?? '';
+  const logical = el?.logical_type?.type ?? '';
+
+  // Scaled to a Number by the reader, whatever bytes it was stored in.
+  if (conv === 'DECIMAL' || logical === 'DECIMAL') return 'numeric';
+  // Dates and timestamps arrive as Date objects and are carried as ISO text — the
+  // engine's temporal convention, the same one the spreadsheet reader follows.
+  if (conv === 'DATE' || logical === 'DATE') return 'string';
+  if (conv === 'TIMESTAMP_MILLIS' || conv === 'TIMESTAMP_MICROS' || logical === 'TIMESTAMP') return 'string';
+  if (phys === 'INT96' && !conv) return 'string'; // the legacy timestamp encoding
+  // Parsed JS values: an object in a numeric column would be NaN, and in a string column
+  // `String(v)` would be "[object Object]" — see `toText`.
+  if (conv === 'JSON' || logical === 'JSON') return 'string';
+  if (logical === 'GEOMETRY' || logical === 'GEOGRAPHY' || logical === 'UUID') return 'string';
+  // Text, including a plain BYTE_ARRAY: hyparquet decodes those as UTF-8 by default.
+  if (conv === 'UTF8' || conv === 'ENUM' || logical === 'STRING' || logical === 'ENUM') return 'string';
+  if (phys === 'BYTE_ARRAY') return 'string';
+  // Everything else the reader produces is a number, a BigInt or a boolean — all of which
+  // `toNumber` handles. A FIXED_LEN_BYTE_ARRAY with no annotation is the one exception:
+  // it arrives as raw bytes, which are not a number, so it is text.
+  if (phys === 'FIXED_LEN_BYTE_ARRAY') return 'string';
+  return 'numeric';
+}
+
 /** Is a decoded Parquet value numeric for our purposes? (INT64 comes back BigInt,
  * BOOLEAN as true/false — both map to numbers; BYTE_ARRAY/UTF8 stays text.) */
 function isNumericValue(v) {
@@ -90,7 +186,17 @@ function toNumber(v) {
 }
 function toText(v) {
   if (v == null) return null;
-  if (v instanceof Date) return v.toISOString();
+  // The engine's temporal convention, and the same one the spreadsheet reader follows.
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString();
+  // A JSON, GEOMETRY or GEOGRAPHY column arrives already PARSED, so `String(v)` would
+  // store "[object Object]" for every row. Found by probing what hyparquet actually
+  // returns per type rather than by reading the Parquet spec, which says nothing about it.
+  if (typeof v === 'object' && !(v instanceof Uint8Array)) {
+    try { return JSON.stringify(v); } catch { return String(v); }
+  }
+  // Opaque bytes (a FIXED_LEN_BYTE_ARRAY with no annotation): hex, because `String(bytes)`
+  // gives "1,2,3" and `JSON.stringify` gives an object keyed by index.
+  if (v instanceof Uint8Array) return [...v].map((b) => b.toString(16).padStart(2, '0')).join('');
   return String(v);
 }
 
@@ -109,20 +215,22 @@ function toText(v) {
  * count and the schema, so the decision can be made before a single row group is read.
  * `isWideDataset` is the host's one rule, so this file goes the same way as any other.
  *
- * ## Column types are STILL sniffed from the first row group, and should not be
+ * ## Column types are DECLARED, from the footer
  *
- * `beginFrom` decides each column from the values in the first row group that has any.
- * That is the same shape of bug the JSON Lines reader had — a type decided from a sample
- * and applied to the file — and in a format that carries real types in its footer it is
- * harder to excuse: a column whose first row group happens to be all-null, or all
- * integers before a later group introduces a string, is typed wrong with nothing said.
+ * Which is the "formats that carry real types declare them" half of pulling host policy
+ * out of the codecs. It used to sniff each column from the values in the first row group
+ * that had any — the same shape of bug the JSON Lines reader had, and harder to excuse
+ * here: a column whose first row group happens to be all-null, or all integers before a
+ * later group introduces a string, was typed wrong with nothing said.
  *
- * Not fixed here, deliberately. The right fix is to read `metadata.schema` and declare
- * the types, which is the "formats that carry real types declare them" half of the hoist —
- * and getting it right means handling the logical/converted types (DECIMAL, DATE,
- * TIMESTAMP, STRING, ENUM) and nested groups, against a real file. Guessing at that
- * mapping with no Parquet fixture to check it on would be trading a visible sampling bug
- * for an invisible mis-mapping. Recorded in TODO.md with the mechanism.
+ * The mapping is in `schemaTypes`/`declaredType`, and it was measured rather than read off
+ * the spec, because what matters is not what an annotation MEANS but what hyparquet hands
+ * back for it — `DATE` and `TIMESTAMP_*` arrive as Date objects, `JSON` arrives already
+ * parsed, `DECIMAL` arrives pre-scaled as a Number, and `TIME_MILLIS` is not converted at
+ * all. A mapping written from the spec would have typed every timestamp as numeric.
+ *
+ * A NESTED schema still falls back to sniffing: `schemaTypes` returns null rather than
+ * invent a flattening, and this reader only ever supported flat files.
  */
 export async function readParquet(app, { select } = {}) {
   const hp = await importAsset(await app.codec.loadAsset('hyparquet'));
@@ -149,6 +257,39 @@ export async function readParquet(app, { select } = {}) {
     metadata.num_rows ?? (metadata.row_groups || []).reduce((n, g) => n + Number(g.num_rows ?? 0), 0),
   ) || 0;
 
+  const declare = async () => {
+    await app.codec.begin(
+      columns.map((c) => ({ name: c, type: types[c] })),
+      types,
+      { rowCount, wide: isWideDataset(columns.length, rowCount) },
+    );
+    began = true;
+  };
+
+  // DECLARED, not sniffed — the thing this reader was getting wrong. It used to decide
+  // each column from the values in the first row group that had any, which is the same
+  // shape of bug the JSON-lines reader had, and harder to excuse in a format that carries
+  // real types in its footer: a column whose first row group happens to be all-null, or
+  // all integers before a later group introduces a string, was typed wrong in silence.
+  //
+  // Declaring also means the schema reaches the host BEFORE a single row group is read,
+  // so an empty file keeps its columns instead of arriving as a dataset with none.
+  const declared = schemaTypes(metadata);
+  if (declared) {
+    // The footer lists every column; a selection narrows which of them are read AND which
+    // are declared, or the host would be promised columns that never arrive.
+    columns = wanted === null ? declared.names : declared.names.filter((c) => wanted.has(c));
+    if (!columns.length) throw new Error('Parquet: none of the selected variables are in this file');
+    types = Object.fromEntries(columns.map((c) => [c, declared.types[c]]));
+    await declare();
+  }
+
+  /**
+   * The fallback: infer from the values, for a file whose footer cannot be read flatly —
+   * a NESTED schema, or names that collide once flattened. `schemaTypes` returns null for
+   * those rather than inventing a flattening, and this is what every file got before the
+   * footer was consulted at all.
+   */
   const beginFrom = async (objs) => {
     columns = Object.keys(objs[0] || {});
     types = {};
@@ -163,12 +304,7 @@ export async function readParquet(app, { select } = {}) {
       }
       types[c] = sawValue && numeric ? 'numeric' : 'string';
     }
-    await app.codec.begin(
-      columns.map((c) => ({ name: c, type: types[c] })),
-      types,
-      { rowCount, wide: isWideDataset(columns.length, rowCount) },
-    );
-    began = true;
+    await declare();
   };
 
   const emit = async (objs) => {
@@ -201,7 +337,10 @@ export async function readParquet(app, { select } = {}) {
     }
     rowStart = rowEnd;
   }
-  // No row-group metadata (or all empty): one read of the whole file.
+  // No row-group metadata (or all empty). With a declared schema the columns are already
+  // announced, so this only has to cover the sniffing fallback — and a file that declares
+  // nothing AND yields nothing still needs an empty schema, or the host has no dataset to
+  // create.
   if (!began) {
     const objs = await hp.parquetReadObjects({ file, metadata, ...only });
     if (objs.length) { await beginFrom(objs); await emit(objs); }

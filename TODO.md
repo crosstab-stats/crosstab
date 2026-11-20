@@ -43,13 +43,13 @@ bottom; they are the project's memory and are not summarised away.
       | CSV | via `ingestTable` | via `ingestTable` | — infers |
       | NDJSON | via `ingestTable` | via `ingestTable` | — infers |
       | Excel | via `ingestTable` | via `ingestTable` | — infers |
-      | Parquet | yes (from the footer) | n/a | **no — still sniffs the first row group** |
+      | Parquet | yes (from the footer) | n/a | yes (from the footer, 2026-11-20) |
       | readstat | yes | n/a | yes |
 
       Three of five were not routing and three of five were not detecting codes; now none of
       them is doing either for itself, because `ingestTable` does it once. The two "n/a"s are
       formats that carry real types, where a missing-code pass over text is not the question —
-      and the one remaining **no** is the next thing to do (see below).
+      and there is no **no** left in it.
 
       All five also now declare `catalog`, so "choose which variables to import" is one
       capability offered for every format instead of a second menu entry for one codec.
@@ -280,15 +280,41 @@ bottom; they are the project's memory and are not summarised away.
          took its COLUMNS, from the first object alone, and declared no `wide`. A key that first
          appeared later in the file was dropped entirely.
 
-         *Remaining:* **the other half — formats that carry real types should DECLARE them.**
-         readstat does. **Parquet does not**: `beginFrom` sniffs each column from the values in
-         the first row group that has any, so a column whose first group is all-null, or all
-         integers before a later group introduces a string, is typed wrong silently. The fix is
-         to read `metadata.schema` and declare, and it needs a real Parquet fixture because
-         getting it right means handling the logical/converted types (DECIMAL, DATE, TIMESTAMP,
-         STRING, ENUM) and nested groups — guessing at that mapping would trade a visible
-         sampling bug for an invisible mis-mapping. Its routing gap IS closed (the footer carries
-         the row count, so the decision is free), and it has its first tests.
+         **The other half — formats that carry real types DECLARE them — is now done too
+         (2026-11-20).** readstat always did; Parquet now does. It used to sniff each column
+         from the values in the first row group that had any, so a column whose first group was
+         all-null, or all integers before a later group introduced a string, was typed wrong
+         silently. `schemaTypes`/`declaredType` read `metadata.schema` instead, and the schema
+         now reaches the host BEFORE any row group is read — so an empty file keeps its columns
+         rather than arriving as a dataset with none.
+
+         **The mapping had to be MEASURED, which is why this was deferred and why deferring was
+         right.** What matters is not what a Parquet annotation means but what hyparquet hands
+         back for it, and the two differ in ways the spec does not hint at:
+
+         | footer says | hyparquet returns | so CrossTab stores |
+         |---|---|---|
+         | `INT64` + `TIMESTAMP_MILLIS` | a **Date** | ISO text |
+         | `INT32` + `DATE`, bare `INT96` | a **Date** | ISO text |
+         | `BYTE_ARRAY` + `JSON` | an **already-parsed value** | JSON text |
+         | any physical + `DECIMAL` | a **Number**, pre-scaled | numeric |
+         | `INT32` + `TIME_MILLIS` | a raw **number** (not converted at all) | numeric |
+
+         A mapping written from the Parquet spec would have typed every timestamp numeric —
+         storing an epoch millisecond count with nothing to say it was ever a time — and would
+         have stored `[object Object]` for every row of a JSON column, which `toText` now
+         handles. Verified by writing real Parquet files with the pinned hyparquet-writer and
+         reading them back with the pinned hyparquet, which makes those tests the one place in
+         the suite that would catch a library upgrade changing a conversion.
+
+         A **nested** schema still falls back to sniffing: `schemaTypes` returns null rather
+         than invent a flattening, because this reader only ever supported flat files and a
+         guessed flattening would declare names `parquetReadObjects` never produces.
+
+         The test file has two halves on purpose: the mapping is pure, so it is tested
+         exhaustively offline and always runs (11 tests); the round trip against real bytes
+         needs the pinned CDN modules and skips cleanly without them (8 tests). Checked by
+         running it with `fetch` disabled — 11 pass, 8 skip, 0 fail.
       3. **[~] Move routing wholly to the host — the DUPLICATION is gone; the split remains.**
          No codec computes the width rule any more: three call `ingestTable`, Parquet and
          readstat call `isWideDataset` directly, and a test now asserts that NO codec carries a
