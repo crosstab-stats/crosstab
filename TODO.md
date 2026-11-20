@@ -36,6 +36,21 @@ bottom; they are the project's memory and are not summarised away.
       | NDJSON | no | no | streams |
       | Parquet | no | no | streams |
 
+      **The table above is the 2026-11-18 audit, kept as filed. As of 2026-11-19 it reads:**
+
+      | codec | routes on width | detects missing codes | declares its own types |
+      |---|---|---|---|
+      | CSV | via `ingestTable` | via `ingestTable` | — infers |
+      | NDJSON | via `ingestTable` | via `ingestTable` | — infers |
+      | Excel | via `ingestTable` | via `ingestTable` | — infers |
+      | Parquet | yes (from the footer) | n/a | **no — still sniffs the first row group** |
+      | readstat | yes | n/a | yes |
+
+      Three of five were not routing and three of five were not detecting codes; now none of
+      them is doing either for itself, because `ingestTable` does it once. The two "n/a"s are
+      formats that carry real types, where a missing-code pass over text is not the question —
+      and the one remaining **no** is the next thing to do (see below).
+
       Three of five do not route; three of five do not detect codes. The Excel codec's own comment
       said its typing "mirrors the CSV codec" — and that mirroring is exactly why fixing CSV's
       3,347-mistyped-columns bug (e2a3b77) left Excel untouched. (Excel's own two columns were
@@ -241,16 +256,46 @@ bottom; they are the project's memory and are not summarised away.
          the table budget, width routing and cell-sized batches are the permanent ceiling
          management, and step 4 can be asked whenever someone wants to ask it. The hoist
          (2 and 3) is now the whole of the work.
-      2. **Hoist typing + missing-code detection into the host.** Formats that carry real types
-         (Parquet, readstat) declare them; formats that do not (CSV, Excel, NDJSON) hand over raw
-         values and the host applies ONE typing rule and ONE code-detection pass. Excel and NDJSON
-         get the NA/PS fix for free and the duplicated rule disappears.
-      3. **Move routing wholly to the host.** Codecs report shape in `begin()`; the host decides
-         table vs out-of-core from the file AND from what is already resident. `isWideDataset`
-         leaves plugin code. (The host half already exists — c7265cf — so routing is currently
-         split across two layers, which is worse than either.)
-      4. **Then re-ask** which heuristics still earn their place. Expect the per-file width rule
-         to become unnecessary; do not assume it — re-measure, the numbers are in e85f8e4.
+      2. **[~] Hoist typing + missing-code detection into the host — DONE for the three readers
+         that INFER types (543afa8, 2026-11-19).** `ingestTable` in `core/plugin-stdlib.js` owns
+         the two-pass orchestration, `createTypeScan`, the missing-code ask, unique naming, the
+         blank-name rule, the cell-sized batching and the storage routing. CSV is eight lines of
+         read; NDJSON and Excel went through it unchanged in behaviour (every one of their 16+18
+         existing tests passes). Verified in the running app for all three — File ▸ Import data…
+         with only the OS file dialog stubbed, so the picker, `pickFiles`, the codec service, the
+         sandbox and the DataStore are the real path.
+
+         It lives in the stdlib rather than behind a new protocol verb because it must call the
+         codec's parser TWICE and a function cannot cross postMessage; a host-side verb would
+         have to invert the read loop and stream raw cells back through the sandbox wall, which
+         is more protocol, not less. The stdlib is host-authored and host-versioned code that
+         runs inside the sandbox, so there is one implementation and no codec reimplements it.
+         The protocol got smaller, which was the stated test.
+
+         NDJSON turned out to have three real bugs, all the same bug — it typed the file, and
+         took its COLUMNS, from the first object alone, and declared no `wide`. A key that first
+         appeared later in the file was dropped entirely.
+
+         *Remaining:* **the other half — formats that carry real types should DECLARE them.**
+         readstat does. **Parquet does not**: `beginFrom` sniffs each column from the values in
+         the first row group that has any, so a column whose first group is all-null, or all
+         integers before a later group introduces a string, is typed wrong silently. The fix is
+         to read `metadata.schema` and declare, and it needs a real Parquet fixture because
+         getting it right means handling the logical/converted types (DECIMAL, DATE, TIMESTAMP,
+         STRING, ENUM) and nested groups — guessing at that mapping would trade a visible
+         sampling bug for an invisible mis-mapping. Its routing gap IS closed (the footer carries
+         the row count, so the decision is free), and it has its first tests.
+      3. **[~] Move routing wholly to the host — the DUPLICATION is gone; the split remains.**
+         No codec computes the width rule any more: three call `ingestTable`, Parquet and
+         readstat call `isWideDataset` directly, and a test now asserts that NO codec carries a
+         copy of the arithmetic. What has not happened is the second half of the sentence — the
+         host deciding from the file AND from what is already resident. That second input exists
+         in `wouldExceedTableBudget` (c7265cf) and the two still do not meet, so routing is
+         decided in two places even though the RULE now lives in one.
+      4. **Then re-ask** which heuristics still earn their place. No longer gated: step 1 is
+         struck, so the heap is the permanent ceiling and these are not temporary scaffolding.
+         Expect the per-file width rule to still earn its place for that reason; do not assume
+         it — re-measure, the numbers are in e85f8e4 and the 2026-11-19 desktop comparison above.
 
       The test of whether this read is right: the protocol should get SMALLER, not larger.
 

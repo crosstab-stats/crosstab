@@ -52,7 +52,7 @@
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { uniqueName, createTypeScan } = globalThis.ctStd;
+const { uniqueName, createTypeScan, ingestTable } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-excel-codec',
@@ -98,12 +98,6 @@ export const manifest = {
   ],
 };
 
-// Values per ingest batch, not ROWS. A fixed row count is fine at ten columns and
-// fatal at three thousand: the width decides what a batch costs, which is how the CSV
-// reader came to hand DuckDB one batch of 21 million cells and OOM at 3.1 GiB
-// (owner, 2026-11-17). A sheet that wide is rarer than a CSV that wide, but the
-// arithmetic is identical and so is the fix.
-const EMIT_CELLS = 1_000_000;
 
 // --- read --------------------------------------------------------------------
 
@@ -207,33 +201,23 @@ async function readStreaming(app, ooxml, fileName) {
   const byName = new Map(ooxml.sheets.map((s) => [s.name, s]));
   const primary = byName.get(chosen[0]);
 
-  // Pass 1 — types, header and row count, holding nothing but the scan's own tallies.
-  const scan = createTypeScan({ numeric: EXCEL_NUMERIC });
-  let rowCount = 0;
-  const headerRow = await eachDataRow(ooxml, primary, (values) => {
-    rowCount += 1;
-    scan.observeRow(values);
+  // The primary sheet goes through the shared ingest, which owns the two passes, the
+  // typing, the missing-code ask, the naming, the cell-sized batching and the
+  // table-vs-out-of-core routing. This reader's part is `eachDataRow`: inflate the sheet
+  // part, skip blank rows, take the first non-blank row as the header.
+  //
+  // What it hands over that a delimited reader does not: a cell is a number only when the
+  // reader gave back a real one (EXCEL_NUMERIC), and a Date becomes ISO text rather than
+  // whatever `String(date)` says in the current locale (`toText`).
+  let headerRow = [];
+  const { missingCodes: codes } = await ingestTable(app, {
+    numeric: EXCEL_NUMERIC,
+    toText: cellToString,
+    // Called after pass 1, with the width the data actually reached. A sheet whose rows
+    // run wider than its header keeps those columns; the shared ingest names the blanks.
+    header: (w) => padNames(headerRow, w),
+    scanRows: async (onRow) => { headerRow = await eachDataRow(ooxml, primary, onRow); },
   });
-
-  // Ask the host which recurring values mean "missing" — the NA/PS problem. Asked once,
-  // from the primary sheet's proposal, and applied to every chosen sheet: a missing-value
-  // code is a convention of the file, not of a tab within it.
-  const accepted = typeof app.codec.missingCodes === 'function'
-    ? await app.codec.missingCodes(scan.proposal())
-    : [];
-  const codes = Array.isArray(accepted) ? accepted.filter((v) => typeof v === 'string') : [];
-  const decided = scan.decide(codes);
-
-  const width = Math.max(headerRow.length, decided.isNumeric.length);
-  const schema = buildSchema(headerRow, width, decided);
-  if (!schema.variables.length) throw new Error('Excel: the selected sheet(s) have no columns');
-
-  // Pass 2 — emit. The row count is known from pass 1, so the progress bar gets a
-  // denominator rather than counting up towards nothing.
-  await app.codec.begin(schema.variables, schema.storageTypes, { rowCount, missingCodes: codes });
-  const emit = batcher(app, schema, decided);
-  await eachDataRow(ooxml, primary, (values) => emit.row(values));
-  await emit.finish();
 
   // Additional chosen sheets → each its own new dataset (split, not pooled/joined:
   // workbook tabs are usually heterogeneous, so row-stacking them would be wrong).
@@ -254,54 +238,6 @@ async function readStreaming(app, ooxml, fileName) {
     // eslint-disable-next-line no-await-in-loop
     await app.data.create({ name: nm, variables: built.variables, columns: built.columns, activate: false });
   }
-}
-
-/**
- * Accumulate rows into cell-bounded batches and hand them to the host ingest.
- *
- * Values per batch, not ROWS. A fixed row count is fine at ten columns and fatal at three
- * thousand: the width decides what a batch costs, which is how the CSV reader came to hand
- * DuckDB one batch of 21 million cells and OOM at 3.1 GiB (owner, 2026-11-17).
- */
-function batcher(app, schema, decided) {
-  const { variables, storageTypes } = schema;
-  const n = variables.length;
-  const perBatch = Math.max(1, Math.floor(EMIT_CELLS / Math.max(1, n)));
-  const numeric = variables.map((v) => storageTypes[v.name] === 'numeric');
-  let cols = variables.map(() => []);
-  let held = 0;
-
-  const flush = async () => {
-    if (!held) return;
-    const chunk = {};
-    for (let c = 0; c < n; c++) {
-      const nm = variables[c].name;
-      if (numeric[c]) {
-        const a = new Float64Array(held);
-        for (let i = 0; i < held; i++) a[i] = cols[c][i];
-        chunk[nm] = a;
-      } else {
-        chunk[nm] = cols[c];
-      }
-    }
-    cols = variables.map(() => []);
-    held = 0;
-    await app.codec.batch(chunk);
-  };
-
-  return {
-    row(values) {
-      for (let c = 0; c < n; c++) {
-        const cell = values[c];
-        const v = cell === undefined || cell === '' ? null : cell ?? null;
-        if (numeric[c]) cols[c].push(decided.isMissing(v) ? NaN : Number(v));
-        else cols[c].push(decided.isMissing(v) ? null : cellToString(v));
-      }
-      held += 1;
-      return held >= perBatch ? flush() : undefined;
-    },
-    finish: flush,
-  };
 }
 
 /** Variables, storage types and unique names from a header row and a type decision. */
@@ -379,36 +315,58 @@ async function readWithSheetJs(app, bytes, name) {
   if (!chosen.length) throw new Error('Excel: no sheets selected');
 
   const aoas = chosen.map((sn) => sheetAoa(XLSX, wb.Sheets[sn]));
-  const scans = aoas.map((aoa) => scanAoa(aoa));
-  const accepted = typeof app.codec.missingCodes === 'function' && scans.length
-    ? await app.codec.missingCodes(scans[0].proposal())
-    : [];
-  const codes = Array.isArray(accepted) ? accepted.filter((v) => typeof v === 'string') : [];
+  // The primary is the first chosen sheet that HAS columns, not simply the first chosen
+  // one — an empty tab selected first should not become the dataset. (Preserved
+  // deliberately: the old code filtered the empties out before taking `built[0]`.)
+  const at = aoas.findIndex((aoa) => aoaWidth(aoa) > 0);
+  if (at < 0) throw new Error('Excel: the selected sheet(s) have no columns');
 
-  const built = chosen
-    .map((sn, i) => ({ sheet: sn, ...buildColumns(aoas[i], scans[i].decide(codes)) }))
-    .filter((b) => b.variables.length);
-  if (!built.length) throw new Error('Excel: the selected sheet(s) have no columns');
+  // Same shared ingest as the streaming path — so this format, which cannot stream and
+  // therefore has an array-of-arrays in hand, still gets exactly one typing rule, one
+  // missing-code pass and one storage-routing decision. It used to have its own copies of
+  // all three, which is how it came to type 211 of a file's 3,379 columns differently
+  // from the delimited reader on the same data.
+  const primaryAoa = aoas[at];
+  const { missingCodes: codes } = await ingestTable(app, {
+    numeric: EXCEL_NUMERIC,
+    toText: cellToString,
+    header: (w) => padNames(primaryAoa[0] || [], Math.max(w, aoaWidth(primaryAoa))),
+    rowCount: Math.max(0, primaryAoa.length - 1),
+    scanRows: async (onRow) => {
+      for (let r = 1; r < primaryAoa.length; r++) {
+        // eslint-disable-next-line no-await-in-loop -- a filled batch stops the walk.
+        const wait = onRow(primaryAoa[r] || []);
+        if (wait) await wait; // eslint-disable-line no-await-in-loop
+      }
+    },
+  });
 
-  const primary = built[0];
-  const total = primary.columns[primary.variables[0].name].length;
-  await app.codec.begin(primary.variables, primary.storageTypes, { rowCount: total, missingCodes: codes });
-  const perBatch = Math.max(1, Math.floor(EMIT_CELLS / Math.max(1, primary.variables.length)));
-  for (let off = 0; off < total; off += perBatch) {
-    const chunk = {};
-    for (const v of primary.variables) chunk[v.name] = primary.columns[v.name].slice(off, off + perBatch);
-    // eslint-disable-next-line no-await-in-loop -- backpressure: one batch at a time.
-    await app.codec.batch(chunk);
-  }
-
-  for (let i = 1; i < built.length; i++) {
-    const b = built[i];
+  // The other chosen sheets become their own datasets, with the codes the host accepted
+  // ONCE for the file: a missing-value code is a convention of the workbook, not of a tab
+  // within it.
+  for (let i = 0; i < aoas.length; i++) {
+    if (i === at) continue;
+    const b = { sheet: chosen[i], ...buildColumns(aoas[i], scanAoa(aoas[i]).decide(codes)) };
+    if (!b.variables.length) continue;
     if (!app.data || typeof app.data.create !== 'function') {
       throw new Error('Excel: cannot create extra sheet datasets (app.data.create unavailable)');
     }
     // eslint-disable-next-line no-await-in-loop -- sequential, to avoid racing the engine.
     await app.data.create({ name: b.sheet, variables: b.variables, columns: b.columns, activate: false });
   }
+}
+
+/** A header row padded out to `width`, so columns the header never mentioned still exist.
+ * Blank entries are left blank: naming them is the shared ingest's job, in one place. */
+function padNames(headerRow, width) {
+  const out = (headerRow ?? []).slice();
+  while (out.length < width) out.push('');
+  return out;
+}
+
+/** The widest row in an array-of-arrays, header included. */
+function aoaWidth(aoa) {
+  return (aoa ?? []).reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
 }
 
 /** Choose which sheet(s) to import. One sheet → use it. Several → a multi-select

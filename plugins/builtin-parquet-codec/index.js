@@ -45,6 +45,10 @@ export const manifest = {
   ],
 };
 
+/** The host's shared helpers (core/plugin-stdlib.js). Bound at module scope, as every
+ * other plugin does it — the sandbox assigns the global before importing this module. */
+const { isWideDataset } = globalThis.ctStd;
+
 const WRITE_BATCH = 50_000; // rows per write pass
 
 /** Import a host-provided JS module from its source text (sandbox-safe: blob: is
@@ -91,7 +95,33 @@ function toText(v) {
 
 /**
  * Decode a Parquet file into the dataset, streaming one row group at a time.
- * Column types are inferred from the first row group's values (numeric vs string).
+ *
+ * ## The storage-routing decision, which this reader was not making
+ *
+ * A dataset too big for a DuckDB table has to go out of core — the host writes Parquet
+ * and queries that — and the 2026-11-18 audit found three of five codecs, this one
+ * included, never declaring it. So a multi-gigabyte Parquet file built a table however
+ * big it was, while the same data in a CSV did not, purely because of which reader opened
+ * it.
+ *
+ * It is free here, and that is the part worth noticing: Parquet's footer carries the row
+ * count and the schema, so the decision can be made before a single row group is read.
+ * `isWideDataset` is the host's one rule, so this file goes the same way as any other.
+ *
+ * ## Column types are STILL sniffed from the first row group, and should not be
+ *
+ * `beginFrom` decides each column from the values in the first row group that has any.
+ * That is the same shape of bug the JSON Lines reader had — a type decided from a sample
+ * and applied to the file — and in a format that carries real types in its footer it is
+ * harder to excuse: a column whose first row group happens to be all-null, or all
+ * integers before a later group introduces a string, is typed wrong with nothing said.
+ *
+ * Not fixed here, deliberately. The right fix is to read `metadata.schema` and declare
+ * the types, which is the "formats that carry real types declare them" half of the hoist —
+ * and getting it right means handling the logical/converted types (DECIMAL, DATE,
+ * TIMESTAMP, STRING, ENUM) and nested groups, against a real file. Guessing at that
+ * mapping with no Parquet fixture to check it on would be trading a visible sampling bug
+ * for an invisible mis-mapping. Recorded in TODO.md with the mechanism.
  */
 export async function readParquet(app, _info) {
   const hp = await importAsset(await app.codec.loadAsset('hyparquet'));
@@ -102,6 +132,13 @@ export async function readParquet(app, _info) {
   let began = false;
   let columns = null;
   let types = null;
+
+  // From the footer, before anything is read. `num_rows` is the authority; summing the
+  // row groups is the fallback for a writer that omits it. BigInt either way, so Number()
+  // it before it reaches arithmetic.
+  const rowCount = Number(
+    metadata.num_rows ?? (metadata.row_groups || []).reduce((n, g) => n + Number(g.num_rows ?? 0), 0),
+  ) || 0;
 
   const beginFrom = async (objs) => {
     columns = Object.keys(objs[0] || {});
@@ -117,7 +154,11 @@ export async function readParquet(app, _info) {
       }
       types[c] = sawValue && numeric ? 'numeric' : 'string';
     }
-    await app.codec.begin(columns.map((c) => ({ name: c, type: types[c] })), types);
+    await app.codec.begin(
+      columns.map((c) => ({ name: c, type: types[c] })),
+      types,
+      { rowCount, wide: isWideDataset(columns.length, rowCount) },
+    );
     began = true;
   };
 
@@ -155,7 +196,7 @@ export async function readParquet(app, _info) {
   if (!began) {
     const objs = await hp.parquetReadObjects({ file, metadata });
     if (objs.length) { await beginFrom(objs); await emit(objs); }
-    else await app.codec.begin([], {});
+    else await app.codec.begin([], {}, { rowCount: 0, wide: false });
   }
 }
 

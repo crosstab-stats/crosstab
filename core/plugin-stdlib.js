@@ -1264,7 +1264,7 @@ const MAX_CANDIDATES = 12;
  * @param {object} [opts]
  * @param {number} [opts.columns] - Width, if known; otherwise taken from the first row.
  * @param {(v: any) => boolean} [opts.numeric] - Does this value count as a number?
- * @returns {{observeRow: (values: any[]) => void, rows: () => number,
+ * @returns {{observeRow: (values: any[]) => void, rows: () => number, width: () => number,
  *            proposal: () => object, decide: (accepted: Iterable<string>) => object}}
  */
 export function createTypeScan({ columns = 0, numeric = (v) => Number.isFinite(Number(v)) } = {}) {
@@ -1302,6 +1302,11 @@ export function createTypeScan({ columns = 0, numeric = (v) => Number.isFinite(N
     },
 
     rows: () => rowCount,
+
+    /** Columns observed, which is not always the header's width: a data row wider than
+     * the header widens the scan, and a reader that keeps those extra columns needs to
+     * know how many to name. */
+    width: () => width,
 
     /**
      * What to offer the host, and the arithmetic its dialog needs.
@@ -1428,12 +1433,19 @@ export function createTypeScan({ columns = 0, numeric = (v) => Number.isFinite(N
  * @param {object} spec
  * @param {(onRow: (values: any[]) => (void|Promise<void>), ctx: {pass: 1|2, tick: () => void})
  *          => Promise<void>} spec.scanRows - the codec's parser, callable twice
- * @param {string[]|'first-row'|(() => string[])} [spec.header] - column names.
- *   `'first-row'` (the default) consumes the first row of each pass as the header; a
- *   function is called after pass 1, for a format whose columns are only known by then.
+ * @param {string[]|'first-row'|((width: number) => string[])} [spec.header] - column
+ *   names. `'first-row'` (the default) consumes the first row of each pass as the header;
+ *   a function is called after pass 1 with the width the scan observed, for a format whose
+ *   columns are only known by then (JSON Lines has no header row at all) or whose data
+ *   rows can run wider than its header. A blank or missing name becomes `V<n>` wherever it
+ *   came from — that is naming policy, so it is applied here rather than per reader.
  * @param {(v: any) => boolean} [spec.numeric] - does this raw value count as a number?
  *   Defaults to the text rule; a format that hands over real JS values should pass its own
  *   (see {@link createTypeScan}).
+ * @param {(v: any) => string} [spec.toText] - how a non-missing value becomes text in a
+ *   string column. The default keeps a string as-is and `String()`s anything else; a
+ *   spreadsheet passes its own, because `String(date)` is a locale-dependent sentence and
+ *   an ISO date is what anyone wants back.
  * @param {number} [spec.rowCount] - if the format knows it without counting.
  * @param {boolean} [spec.dropSingleEmptyRow] - treat a one-value row whose value is `''`
  *   as not a row. The trailing-newline quirk of delimited text; off by default so no other
@@ -1449,6 +1461,7 @@ export async function ingestTable(app, {
   scanRows,
   header = 'first-row',
   numeric,
+  toText,
   rowCount = null,
   dropSingleEmptyRow = false,
   // ## Why a million values, measured rather than picked
@@ -1473,6 +1486,7 @@ export async function ingestTable(app, {
 } = {}) {
   const fromFirstRow = header === 'first-row';
   const numericOpt = numeric ? { numeric } : {};
+  const asText = toText ?? ((v) => (typeof v === 'string' ? v : String(v)));
   const skip = (values) => dropSingleEmptyRow && values.length === 1 && values[0] === '';
 
   // --- pass 1: names, row count, and which columns are numeric -------------------
@@ -1491,7 +1505,7 @@ export async function ingestTable(app, {
   await scanRows((values) => {
     if (fromFirstRow && !seenHeader) {
       seenHeader = true;
-      names = values.map((h, i) => String(h ?? '').trim() || `V${i + 1}`);
+      names = values.slice();
       scan = createTypeScan({ columns: names.length, ...numericOpt });
       return undefined;
     }
@@ -1501,7 +1515,9 @@ export async function ingestTable(app, {
     return undefined;
   }, { pass: 1, tick: () => app.codec.progress(rows, -1) });
 
-  if (typeof header === 'function') names = header();
+  // A format whose columns are only known after a full pass gets told how wide the data
+  // actually was, so it can keep columns its header row did not mention.
+  if (typeof header === 'function') names = header(scan ? scan.width() : 0);
   if (!names || !names.length) throw new Error('import: no columns found');
   const total = rowCount == null ? rows : rowCount;
 
@@ -1516,7 +1532,9 @@ export async function ingestTable(app, {
   const storageTypes = {};
   const isNum = [];
   for (let c = 0; c < names.length; c++) {
-    const nm = uniqueName(names[c], used);
+    // Blank, absent, or whitespace -> V<n>. One rule, whichever reader supplied the name.
+    const base = String(names[c] ?? '').trim() || `V${c + 1}`;
+    const nm = uniqueName(base, used);
     used[nm] = true;
     const num = !!isNumeric[c];
     isNum.push(num);
@@ -1565,7 +1583,7 @@ export async function ingestTable(app, {
       // boolean in JSON, a date in a spreadsheet) would otherwise put a non-string into a
       // string column, which the old JSON reader did `String()` for by hand.
       else if (missing) buf[c][fill] = null;
-      else buf[c][fill] = typeof v === 'string' ? v : String(v);
+      else buf[c][fill] = asText(v);
     }
     fill += 1;
     return fill >= perBatch ? flush() : undefined;
