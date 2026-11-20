@@ -41,14 +41,18 @@ const rows = (list) => ({
  * Deliberately dumb about the ROUTE: `planIngest` returns whatever it is told rather than
  * computing a verdict, so a routing bug cannot pass by being shared with the stub.
  */
-function stubEngine({ wide = false } = {}) {
+function stubEngine({ wide = false, hasRowId = false, rowIdMin = 0 } = {}) {
   const batches = [];
   const noted = [];
   const sql = [];
+  const registered = [];
+  const dropped = [];
   return {
     batches,
     noted,
     sql,
+    registered,
+    dropped,
     async planIngest(variables, rowCount, { declaredWide = false } = {}) {
       return { wide: wide || !!declaredWide, overBudget: false, estBytes: 0, canStream: true, loadedBytes: 0 };
     },
@@ -71,16 +75,21 @@ function stubEngine({ wide = false } = {}) {
         abort: async () => {},
       };
     },
-    async dropRegisteredFile() {},
-    async registerParquetFile() {},
+    async dropRegisteredFile(ref) { dropped.push(ref); },
+    async registerParquetFile(name, bytes) {
+      registered.push([name, bytes?.length ?? 0]);
+      return `opfs://${name}`;
+    },
     async replaceTable() {},
-    async replaceTableFromParquet() {},
     async queryToParquet() { return new Uint8Array([1, 2, 3]); },
     async readOpfsFile() { return new Uint8Array([1, 2, 3]); },
     async query(text) {
       sql.push(String(text).replace(/\s+/g, ' ').slice(0, 120));
-      if (/^DESCRIBE/i.test(text)) return rows([]);
-      if (/min\(/i.test(text)) return rows([{ m: 1 }]);
+      // A restored table already carries `__ct_rid`, so the store must RECOVER the
+      // persisted ids rather than mint new ones — see the row-id note on
+      // `#tableFromParquet`.
+      if (/^DESCRIBE/i.test(text)) return hasRowId ? rows([{ column_name: '__ct_rid' }]) : rows([]);
+      if (/min\(/i.test(text)) return rows([{ m: rowIdMin || 1 }]);
       if (/count\(\*\)/i.test(text)) return rows([{ n: 1 }]);
       return rows([]);
     },
@@ -301,4 +310,66 @@ test('and it survives the save-and-reopen a project does', async () => {
   await fresh.restoreState({ ops: saved.ops });
   const op = (fresh.getHistory().applied ?? []).find((o) => o.src);
   assert.deepEqual(op.producedBy, { kind: 'rscript', runId: 'r7' });
+});
+
+// =============================================================================
+// Restore: rehydration, not ingest
+// =============================================================================
+
+test('restored Parquet is read off OPFS, not loaded into the wasm heap', async () => {
+  // It used to `registerFileBuffer` the whole file and build the table beside it, so peak
+  // was the Parquet plus the table at once — on every project open, with no plugin
+  // involved. Registering as an OPFS file means DuckDB reads it off disk instead: the
+  // same by-name route the wide sources already used, which is the one OPFS registration
+  // WebKit accepts.
+  const engine = stubEngine();
+  const store = newStore(engine);
+  await store.loadDataset({
+    variables: [{ name: 'a', type: 'numeric' }],
+    parquet: new Uint8Array([80, 65, 82, 49]),
+    mode: 'replace',
+  });
+  assert.equal(engine.registered.length, 1, 'the bytes were not registered as a file');
+  assert.match(engine.sql.join(' | '), /CREATE OR REPLACE TABLE .*read_parquet/,
+    'the table is not built from the registered file');
+  // ...and the registration is released: once the table exists it owns the data, and a
+  // leftover file would keep a second copy for the rest of the session.
+  assert.equal(engine.dropped.length, 1, 'the registered file was left behind');
+});
+
+test('a restored table is recorded in the budget too', async () => {
+  // Reopening a project materialises one table per source op, and the cumulative budget
+  // saw none of them — so three files each cleared against the running total at IMPORT
+  // time reopened with nothing guarding them, and the next thing the user did got an
+  // answer computed from zero.
+  const engine = stubEngine();
+  await newStore(engine).loadDataset({
+    variables: [{ name: 'a', type: 'numeric' }],
+    parquet: new Uint8Array([80, 65, 82, 49]),
+    mode: 'replace',
+  });
+  assert.equal(engine.noted.length, 1, 'the restored table was not recorded');
+});
+
+test('restore RECOVERS the persisted row ids instead of minting new ones', async () => {
+  // The constraint that stops restore re-deciding the route, and it is not a detail:
+  // every cell edit in the op log addresses its row BY ID. New ids would silently
+  // re-point or orphan every edit the project has recorded. So a restored table keeps
+  // `__ct_rid` and its namespace, which is why a narrow source cannot be rehydrated as a
+  // wide one (the wide route derives ids from a `__ct_row` the saved bytes do not have).
+  const engine = stubEngine({ hasRowId: true, rowIdMin: 3_000_000_001 });
+  const store = newStore(engine);
+  await store.loadDataset({
+    variables: [{ name: 'a', type: 'numeric' }],
+    parquet: new Uint8Array([80, 65, 82, 49]),
+    mode: 'replace',
+  });
+  // No fresh id was baked — that is the `row_number() OVER ()` rewrite.
+  assert.ok(!/row_number\(\) OVER/.test(engine.sql.join(' | ')),
+    'it rewrote the table to mint new row ids');
+  // And the sequence advanced to the recovered namespace, so the next source cannot
+  // collide with it: two rows sharing a `__ct_rid` makes one `setCell` edit both.
+  await store.loadDataset({ ...grid(2, 1), mode: 'append' });
+  const files = engine.registered.map(([n]) => n);
+  assert.ok(files.every((n) => !n.startsWith('src_1_')), `a source reused a low sequence: ${files}`);
 });

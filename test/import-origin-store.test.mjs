@@ -58,7 +58,8 @@ function stubEngine() {
     get loadedTableBytes() { return 0; },
     get canStreamOutOfCore() { return true; },
     async replaceTable(table, cols) { sql.push(`replaceTable ${table}`); this.cols = cols; },
-    async replaceTableFromParquet(table) { sql.push(`replaceTableFromParquet ${table}`); },
+    // `replaceTableFromParquet` is gone: the restore path registers the bytes as an OPFS
+    // file and CTASes from that, instead of putting the whole Parquet in the wasm heap.
     async query(text) {
       sql.push(String(text).replace(/\s+/g, ' ').slice(0, 60));
       // DESCRIBE: no row-id column yet, so the store bakes one.

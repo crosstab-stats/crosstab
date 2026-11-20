@@ -807,7 +807,7 @@ export class DataStore {
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
     if (parquet) {
-      await this.#duckdb.replaceTableFromParquet(table, parquet);
+      await this.#tableFromParquet(table, parquet);
     } else {
       const cols = columns ?? {};
       const lengths = variables.map((v) => (cols[v.name] ?? []).length);
@@ -843,6 +843,16 @@ export class DataStore {
     }
     this.#sourceTables.add(table);
     this.#noteRowidBase(await this.#ensureRowId(table, seq));
+    // RECORD WHAT IT COSTS. This path is reopening a project, and it never did: every
+    // source op materialises its own table and the cumulative budget saw none of them.
+    // So three files that were each cleared against the running total at import time —
+    // which is what the budget is for — reopened with nothing guarding them, and the
+    // next thing the user did got a budget answer computed from zero.
+    try {
+      const n = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(table)}`);
+      const rowCount = n.numRows ? Number(n.get(0).n ?? 0) : 0;
+      this.#duckdb.noteTableBytes(table, estimateTableBytes(variables ?? [], rowCount));
+    } catch { /* the count is for the budget, not for correctness */ }
     // The meta carries the SAME names the table now has, or every later lookup by name
     // would miss the column it just wrote.
     return {
@@ -884,6 +894,61 @@ export class DataStore {
   }
 
   /**
+   * Build a source table from persisted Parquet bytes — the restore path.
+   *
+   * ## Why not `registerFileBuffer`
+   *
+   * That is what this did, and it put the WHOLE Parquet into the wasm heap and then built
+   * the table beside it, so peak was the file plus the table at once. Registering the
+   * bytes as an OPFS file instead means DuckDB reads them off disk: the same route
+   * `registerParquetFile` already gave the wide sources, which is where it was proved to
+   * work on WebKit as well as Chromium (by NAME — the one OPFS registration WebKit
+   * accepts). The table still costs what a table costs; what is gone is paying for the
+   * file twice at the same time.
+   *
+   * The registered file is dropped afterwards: once the table exists it owns the data, and
+   * leaving the file would persist a second copy for the rest of the session.
+   *
+   * ## Why restore does NOT re-decide the route, which is the obvious next question
+   *
+   * It would be a better answer to "this project is too big to reopen" — route the later
+   * sources out of core instead of materialising all of them. It cannot be done here, and
+   * the reason is row ids rather than effort.
+   *
+   * A table source carries `__ct_rid`: absolute, namespaced by the source sequence, and
+   * **persisted in the saved Parquet** — `#ensureRowId` recovers both the ids and their
+   * base on restore. A wide source carries `__ct_row`: a 0-based contiguous index, with
+   * the id derived as `rowidBase + __ct_row + 1`. The saved bytes of a narrow source have
+   * no `__ct_row` in them at all, so re-routing one would mean minting new row ids — and
+   * every cell edit in the op log ADDRESSES ITS ROW BY ID. New ids would silently
+   * re-point, or orphan, every edit the project has ever recorded.
+   *
+   * So restoring is rehydration and not ingest: it must be byte-faithful first. A project
+   * genuinely too big to reopen needs the route decided at IMPORT time — which it now is,
+   * for every path in — or a migration that rewrites ids deliberately, which is a
+   * different piece of work with a different risk.
+   *
+   * @param {string} table
+   * @param {Uint8Array} parquet
+   */
+  async #tableFromParquet(table, parquet) {
+    const name = `${table}_restore.parquet`;
+    // Resolves to the reference DuckDB answers to — `opfs://<name>` on the by-name route,
+    // the plain name on the fallbacks — so it is taken from the registration rather than
+    // assumed.
+    const ref = await this.#duckdb.registerParquetFile(name, parquet);
+    try {
+      await this.#duckdb.query(
+        `CREATE OR REPLACE TABLE ${quoteIdent(table)} AS SELECT * FROM read_parquet(${sqlString(ref)})`,
+      );
+    } finally {
+      // Best-effort: a leftover registration costs a session's worth of OPFS, while
+      // failing the restore over it would cost the project.
+      try { await this.#duckdb.dropRegisteredFile(ref, { removeFromOpfs: true }); } catch { /* best-effort */ }
+    }
+  }
+
+  /**
    * Materialise an immutable source table directly from a SQL `SELECT` evaluated in
    * the shared DuckDB instance — no JS round-trip (#121). Used by
    * {@link DataStore#loadFromSql}/{@link DataStore#joinFromSql} to copy columns from
@@ -898,6 +963,16 @@ export class DataStore {
     await this.#duckdb.query(`CREATE OR REPLACE TABLE ${quoteIdent(table)} AS ${selectSql}`);
     this.#sourceTables.add(table);
     this.#noteRowidBase(await this.#ensureRowId(table, seq));
+    // RECORD WHAT IT COSTS, same as every other route that builds a table. This path
+    // stays separate on purpose — it never materialises in JS, which makes it the best
+    // ingest in the file — but "does not go through JS" was never a reason not to be
+    // accounted for: an Extract of 3,000 columns is as real a table as an import of them,
+    // and the budget is about what the ENGINE is holding.
+    try {
+      const n = await this.#duckdb.query(`SELECT count(*) AS n FROM ${quoteIdent(table)}`);
+      const rowCount = n.numRows ? Number(n.get(0).n ?? 0) : 0;
+      this.#duckdb.noteTableBytes(table, estimateTableBytes(variables ?? [], rowCount));
+    } catch { /* the count is for the budget, not for correctness */ }
     // The meta carries the SAME names the table now has, or every later lookup by name
     // would miss the column it just wrote.
     return {
