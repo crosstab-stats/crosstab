@@ -16,7 +16,7 @@
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { ingestTable } = globalThis.ctStd;
+const { ingestTable, tableVariableNames } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-csv-codec',
@@ -42,7 +42,7 @@ export const manifest = {
     },
   ],
   codecs: [
-    { id: 'csv', label: 'CSV…', extensions: ['.csv', '.tsv', '.txt'], read: 'readCsv', write: 'writeCsv', order: 10, multiple: true },
+    { id: 'csv', label: 'CSV…', extensions: ['.csv', '.tsv', '.txt'], read: 'readCsv', catalog: 'catalogCsv', write: 'writeCsv', order: 10, multiple: true },
   ],
 };
 
@@ -115,13 +115,44 @@ const WRITE_BATCH = 50_000; // rows per output flush on export
  * the hoist: a file ending in a newline tokenises to a final row of one empty field, and
  * that is not a row. No other format can produce it, so no other format inherits it.
  */
-export async function readCsv(app, { name }) {
+export async function readCsv(app, { name, select }) {
   const size = await app.codec.size();
   const delimiter = /\.tsv$/i.test(name || '') ? '\t' : ',';
   await ingestTable(app, {
+    select,
     dropSingleEmptyRow: true,
     scanRows: (onRow, ctx) => scan(app, size, delimiter, onRow, ctx.tick),
   });
+}
+
+/**
+ * The variable list without the data: the header row, and nothing else.
+ *
+ * This is the format where "choose which variables to import" costs the least to offer
+ * and was previously impossible to ask for — the capability existed only behind a second
+ * SPSS/Stata/SAS menu entry, so a 3,379-column CSV could not be subset at all.
+ *
+ * Reads ONE chunk, not the file. A header is the first line, and 4 MiB of a 67 MB file is
+ * enough for any header anyone has written; a file whose first line is longer than that
+ * yields a truncated last name, which is why the tokeniser's partial row is discarded
+ * rather than used (`tok.push`, never `tok.end`). The names come from the same
+ * `tableVariableNames` the import applies, or the user would tick `a_2` and the import
+ * would produce something else.
+ *
+ * No types: inferring them is the two-pass scan, which is the thing this call exists to
+ * avoid. The host's picker shows names, which is what someone choosing columns reads.
+ */
+export async function catalogCsv(app, { name }) {
+  const size = await app.codec.size();
+  const delimiter = /\.tsv$/i.test(name || '') ? '\t' : ',';
+  const u8 = await app.codec.read(0, Math.min(READ_CHUNK, size));
+  const tok = tokenizer(delimiter);
+  // `push`, so an incomplete final row stays pending and is never mistaken for the
+  // header. If the first chunk holds no line break at all there is no complete row and
+  // the catalog is empty — the host then says so and imports everything.
+  const rows = tok.push(new TextDecoder('utf-8').decode(u8));
+  if (!rows.length) return { variables: [] };
+  return { variables: tableVariableNames(rows[0]).map((nm) => ({ name: nm })) };
 }
 
 /**

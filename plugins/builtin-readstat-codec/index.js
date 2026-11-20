@@ -47,8 +47,11 @@ export const manifest = {
     },
   ],
   codecs: [
-    { id: 'readstat', label: 'SPSS / Stata / SAS…', extensions: ['.sav', '.zsav', '.dta', '.por', '.xpt', '.sas7bdat'], read: 'readImport', order: 20, multiple: true },
-    { id: 'readstat-pick', label: 'SPSS / Stata / SAS — choose variables…', extensions: ['.sav', '.zsav', '.dta', '.por', '.xpt', '.sas7bdat'], read: 'readImportPick', order: 21, multiple: true },
+    // ONE entry. There used to be a second, "SPSS / Stata / SAS — choose variables…",
+    // which was this codec's own door onto a capability that belongs to importing in
+    // general: a CSV user could not subset at all. The host now offers it for every
+    // format through the `catalog` verb below, so the door is gone and the room is open.
+    { id: 'readstat', label: 'SPSS / Stata / SAS…', extensions: ['.sav', '.zsav', '.dta', '.por', '.xpt', '.sas7bdat'], read: 'readImport', catalog: 'catalogImport', order: 20, multiple: true },
     { id: 'readstat-sav', label: 'SPSS (.sav)', extensions: ['.sav'], write: 'writeSav', order: 30 },
     { id: 'readstat-dta', label: 'Stata (.dta)', extensions: ['.dta'], write: 'writeDta', order: 31 },
   ],
@@ -421,19 +424,58 @@ async function stream(app, file, format, { onVariables, onBatch, variables = nul
 
 // --- read --------------------------------------------------------------------
 
-export async function readImport(app) {
+/**
+ * Read an SPSS/Stata/SAS file, optionally narrowed to the variables the host chose.
+ *
+ * `select` was this codec's own feature and is now the host's, asked once on the import
+ * picker for every format. What stays here is the only part that was ever format-specific:
+ * ReadStat can be told which columns to materialise (`stream`'s `variables`), so an
+ * unselected variable is never built — which is the whole reason picking 50 of the GSS's
+ * 7,000 is worth doing.
+ *
+ * The row count and the `wide` decision come from the dictionary, so narrowing is
+ * reflected in the storage routing: 50 columns are routed as 50, not as 7,000.
+ */
+export async function readImport(app, { select } = {}) {
   const file = await app.codec.sourceFile();
   const format = formatForName(file.name);
   if (!format) throw new Error(`Unsupported file: ${file.name}`);
   const cat = await catalog(app, file, format);
   const attach = format === 'sas7bdat' ? await offerCatalog(app, cat, cat.labelSets) : { attached: false };
-  const wide = isWide(cat.varCount, cat.rowCount);
+  // Names the file does not have are ignored rather than fatal, the same as the shared
+  // ingest: a recorded import may carry a selection made against another revision.
+  const have = new Set(cat.variables.map((v) => v.name));
+  const keep = select == null ? null : [...select].filter((n) => have.has(n));
+  if (keep !== null && !keep.length) {
+    throw new Error('None of the selected variables are in this file.');
+  }
+  const wide = isWide(keep === null ? cat.varCount : keep.length, cat.rowCount);
   await stream(app, file, format, {
+    ...(keep === null ? {} : { variables: keep }),
     labelSets: cat.labelSets,
     onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
     onBatch: (columns) => app.codec.batch(columns),
   });
   reportCatalog(app, attach);
+}
+
+/**
+ * The variable list without the data — the file's dictionary.
+ *
+ * The format this capability started in, and the one where it is cheapest: SPSS, Stata and
+ * SAS all carry a header block naming every variable, so `ct_parse` is run with the value
+ * callbacks stubbed out and no cell is ever decoded. Labels come along, because a
+ * 7,000-variable file is navigable by label and not by name.
+ */
+export async function catalogImport(app) {
+  const file = await app.codec.sourceFile();
+  const format = formatForName(file.name);
+  if (!format) throw new Error(`Unsupported file: ${file.name}`);
+  const cat = await catalog(app, file, format);
+  return {
+    rowCount: cat.rowCount,
+    variables: cat.variables.map((v) => ({ name: v.name, label: v.label || '' })),
+  };
 }
 
 /** Say what happened with the catalog — silence would leave the user unable to tell
@@ -442,31 +484,6 @@ function reportCatalog(app, attach) {
   if (!attach) return;
   if (attach.error) app.results?.appendError?.(`Value-label catalog could not be read (${attach.error}). The data imported without labels.`);
   else if (attach.attached) app.results?.appendText?.(`Attached ${attach.sets} value-label set${attach.sets === 1 ? '' : 's'} from the SAS format catalog.`);
-}
-
-export async function readImportPick(app) {
-  const file = await app.codec.sourceFile();
-  const format = formatForName(file.name);
-  if (!format) throw new Error(`Unsupported file: ${file.name}`);
-  const cat = await catalog(app, file, format);
-  const chosen = await app.ui.selectFromList({
-    title: `Choose variables — ${file.name}`,
-    hint: `${cat.varCount.toLocaleString()} variables${cat.rowCount >= 0 ? ` · ${cat.rowCount.toLocaleString()} rows` : ''}. Pick the ones to import (search to filter).`,
-    items: cat.variables.map((v) => ({ value: v.name, label: v.label ? `${v.label} (${v.name})` : v.name })),
-    multiple: true,
-    okLabel: 'Import selected',
-    searchPlaceholder: 'Filter by name or label…',
-  });
-  if (!chosen || !chosen.length) throw new Error('Import cancelled.');
-  const attach = format === 'sas7bdat' ? await offerCatalog(app, cat, cat.labelSets) : { attached: false };
-  const wide = isWide(chosen.length, cat.rowCount);
-  await stream(app, file, format, {
-    variables: chosen,
-    labelSets: cat.labelSets,
-    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
-    onBatch: (columns) => app.codec.batch(columns),
-  });
-  reportCatalog(app, attach);
 }
 
 // --- write -------------------------------------------------------------------

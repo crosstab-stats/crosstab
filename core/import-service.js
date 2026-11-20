@@ -275,6 +275,88 @@ export class ImportService {
   }
 
   /**
+   * Ask which variables to import, once for the whole selection.
+   *
+   * ## Once, not once per file
+   *
+   * The same rule as `#askMissingCodes`, for the same reason: stacked sources are
+   * combined with `UNION ALL BY NAME`, so a different answer for the second file does not
+   * import a different subset — it retypes or hollows out the first one. So the FIRST
+   * file's catalog is what is offered, and the answer governs every file in the run. The
+   * prompt says so when there is more than one.
+   *
+   * ## When the codec cannot answer, say so
+   *
+   * A format that cannot name its variables without reading everything does not declare
+   * `catalog`, and the honest response is a note rather than silence: the user ticked a
+   * box and is entitled to know it did nothing. Silently importing all 3,379 columns
+   * after being asked to choose is the failure mode this avoids.
+   *
+   * @param {object} spec - the importer spec (carries `readCatalog` when supported)
+   * @param {File} file - the first file of the run; its catalog is the one offered
+   * @param {{names: ?string[], asked: boolean, files: number}} run - carried across files
+   * @returns {Promise<?string[]>} the chosen names, or null for "import everything"
+   */
+  async #pickVariables(spec, file, run) {
+    if (run.asked) return run.names;
+    run.asked = true;
+    // Normally unreachable: `#runImport` turns the option off and explains itself before
+    // getting here, because the picker also lists importers that never reach this path at
+    // all. Kept as the guard for any OTHER caller, silent because the explaining has
+    // already been done once and twice would be worse than not at all.
+    if (typeof spec.readCatalog !== 'function') return null;
+    let cat;
+    try {
+      cat = await spec.readCatalog(file);
+    } catch (err) {
+      // A failed catalog must not sink the import: it is an optional convenience, and
+      // everything still works without it.
+      this.#results.appendError(
+        `Could not list the variables in ${file.name} (${err?.message ?? err}). Importing all of them.`,
+      );
+      return null;
+    }
+    const variables = cat?.variables ?? [];
+    if (!variables.length) {
+      this.#results.appendText(`No variables could be listed in ${file.name}; importing all of them.`);
+      return null;
+    }
+    if (!this.#ui?.selectFromList) return null;
+
+    const rows = Number(cat.rowCount ?? -1);
+    const chosen = await this.#ui.selectFromList({
+      title: `Choose variables — ${file.name}`,
+      hint: `${variables.length.toLocaleString()} variables`
+        + (rows >= 0 ? ` · ${rows.toLocaleString()} rows` : '')
+        + '. Pick the ones to import (search to filter).'
+        + (run.files > 1 ? ` This choice applies to all ${run.files} files.` : ''),
+      items: variables.map((v) => ({
+        value: v.name,
+        label: v.label ? `${v.label} (${v.name})` : v.name,
+      })),
+      multiple: true,
+      // Everything ticked: the dialog's job is to let a subset be chosen, not to make
+      // choosing mandatory, and an all-unticked list reads as "nothing will import".
+      selected: variables.map((v) => v.name),
+      okLabel: 'Import selected',
+      searchPlaceholder: 'Filter by name or label…',
+    });
+    // Cancel means cancel the import, not "import everything" — the user asked to choose.
+    if (chosen == null) throw new Error('Import cancelled.');
+    if (!chosen.length) throw new Error('No variables were selected, so nothing was imported.');
+    run.names = chosen.length === variables.length ? null : chosen;
+    debug('import', 'variable pick', {
+      importer: spec.id ?? spec.label,
+      available: variables.length,
+      chosen: chosen.length,
+      // null means "all of them", which is worth distinguishing in the log from a
+      // selection that happens to cover everything.
+      narrowed: run.names !== null,
+    });
+    return run.names;
+  }
+
+  /**
    * Register a file importer. Adds it to the unified **File ▸ Import data…** picker
    * and returns a disposer that removes it (the loader runs it on plugin unload).
    *
@@ -322,6 +404,9 @@ export class ImportService {
     if (!spec || typeof spec.startRead !== 'function' || !Array.isArray(spec.extensions)) {
       throw new TypeError('registerCodec: `extensions` and `startRead` are required');
     }
+    // `readCatalog` is optional and its ABSENCE is meaningful — it is how the host tells
+    // "this format cannot name its variables without reading the data" from "the user did
+    // not ask to choose". See `#pickVariables`.
     const id = spec.id ?? spec.label;
     this.#importers.set(id, { ...spec, codec: true });
     this.#ensureMenu();
@@ -363,7 +448,7 @@ export class ImportService {
         extensions: spec.source === 'web' ? [] : spec.extensions,
         group: groupFor(spec),
         order: spec.order ?? 100,
-        command: () => void this.#runImport(id),
+        command: (opts) => void this.#runImport(id, opts),
       }))
       .sort(byGroupThenOrder);
     // A cross-cutting "fetch a data file by URL" entry — routed to the right codec
@@ -396,6 +481,15 @@ export class ImportService {
       hint: 'Choose a format to import. Type to filter.',
       emptyText: 'No import formats are enabled. Turn some on in the plugin manager.',
       entries,
+      // One capability, offered for every format, instead of a second menu item for the
+      // one codec that happened to implement it. "SPSS / Stata / SAS — choose variables…"
+      // was a real feature behind an arbitrary door: picking 50 of the GSS's 7,000
+      // variables was possible, and the same thing on a 3,379-column CSV was not.
+      options: [{
+        id: 'pick',
+        label: 'Choose which variables to import',
+        hint: 'Lists the variables first, so you can import a subset of a wide file.',
+      }],
     });
   }
 
@@ -430,9 +524,23 @@ export class ImportService {
    * there is no file picker — we mint one ticket and commit what it delivers.
    * For a file importer we pick file(s) and stack/replace each in turn.
    */
-  async #runImport(id) {
+  async #runImport(id, pickerOptions = {}) {
     const spec = this.#importers.get(id);
     if (!spec) return;
+    // The checkbox is on the picker, which lists every importer — including web sources
+    // that fetch their own bytes and legacy `parse`-based importers that never reach the
+    // codec path. Ticking it for one of those used to do nothing and say nothing, which
+    // is the exact failure `#pickVariables` exists to avoid, one layer up. Checked HERE,
+    // before the branch, so there is one answer for all three kinds.
+    let options = pickerOptions;
+    if (options.pick && typeof spec.readCatalog !== 'function') {
+      this.#results.appendText(
+        `${spec.label ?? 'This format'} cannot list its variables without reading the whole file, `
+        + 'so everything will be imported. (Drop the columns you do not want afterwards.)',
+      );
+      debug('import', 'variable pick unsupported', { importer: spec.id ?? spec.label });
+      options = { ...options, pick: false };
+    }
     if (spec.source === 'web') return this.#runWebImport(id, spec);
 
     let files;
@@ -450,7 +558,7 @@ export class ImportService {
     if (files.length === 1 && (await looksEncrypted(files[0]))) {
       return this.#decryptAndDispatch(files[0]);
     }
-    await this.#dispatchFiles(spec, files, id);
+    await this.#dispatchFiles(spec, files, id, options);
   }
 
   /**
@@ -459,7 +567,7 @@ export class ImportService {
    * by the file-picker path ({@link #runImport}) and the URL path
    * ({@link #runUrlImport}) so both behave identically once the bytes are in hand.
    */
-  async #dispatchFiles(spec, files, id) {
+  async #dispatchFiles(spec, files, id, pickerOptions = {}) {
     // A self-committing importer owns its own dataset creation (QDPX → new dataset
     // + coding blob + media; any multi-dataset archive). There is nothing to merge
     // into the active dataset, so the replace/append/join/new dialog would be a
@@ -468,7 +576,7 @@ export class ImportService {
     // No data loaded → straight import (no mode dialog). Data loaded → ask how to
     // combine; join is offered only for a single incoming file.
     if (this.#data.rowCount === 0) {
-      await this.#importFiles(spec, files, 'replace', id);
+      await this.#importFiles(spec, files, 'replace', id, pickerOptions);
       // An importer that declares a collection name (e.g. media → "Images") shouldn't
       // leave the dataset as the blank boot seed's "Dataset 1".
       if (spec.datasetName && this.#data.activeId != null) {
@@ -495,7 +603,7 @@ export class ImportService {
         ?? spec.datasetName
         ?? (files.length === 1 ? baseName(files[0].name) : 'Imported data');
       this.#data.add(name, { activate: true });
-      await this.#importFiles(spec, files, 'replace', id);
+      await this.#importFiles(spec, files, 'replace', id, pickerOptions);
       // Offer to bring across whatever was attached to the outgoing dataset — BEFORE it
       // is binned, while its records and rows can still be read. This is the moment the
       // work would otherwise be quietly orphaned, which is why the offer belongs here
@@ -513,7 +621,7 @@ export class ImportService {
       // costs the user the data they still have.
       if (outgoing != null) await this.#data.remove(outgoing);
     } else {
-      await this.#importFiles(spec, files, mode, id);
+      await this.#importFiles(spec, files, mode, id, pickerOptions);
     }
   }
 
@@ -711,11 +819,13 @@ export class ImportService {
    * codec flags an ultra-wide file — the GSS path. First file of a Replace creates
    * the source; the rest append.
    */
-  async #importCodecFiles(spec, files, mode, id) {
+  async #importCodecFiles(spec, files, mode, id, pickerOptions = {}) {
     let committed = 0;
     // One answer for the whole selection: see `#askMissingCodes`. Stacked sources are
     // UNIONed BY NAME, so an inconsistent answer across files silently retypes the lot.
     const codeRun = { accepted: new Set(), offered: new Set(), files: files.length };
+    // Asked once, before the first read, and reused for the rest — see `#pickVariables`.
+    const pickRun = { names: null, asked: !pickerOptions.pick, files: files.length };
     for (const file of files) {
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
@@ -727,7 +837,11 @@ export class ImportService {
       // could not be created from an ingest that ran out of room.
       let seen = 0;
       try {
-        const reader = spec.startRead(file);
+        // Before `startRead`, because the chosen subset is an input to the read: a codec
+        // that can skip columns should never decode them, and one that cannot at least
+        // never stores them.
+        const select = await this.#pickVariables(spec, file, pickRun);
+        const reader = spec.startRead(file, { select });
         // Registered BEFORE begin(): a codec's first pass runs before it can declare
         // its variables, and on a large file that pass is most of the wait.
         const progress = this.#progressEmitter(file.name);
@@ -872,8 +986,8 @@ export class ImportService {
    * Parse each file and commit it — the first of a Replace creates the table,
    * everything else stacks (append). Used for replace/append (not join).
    */
-  async #importFiles(spec, files, mode, id) {
-    if (spec.codec) return this.#importCodecFiles(spec, files, mode, id);
+  async #importFiles(spec, files, mode, id, pickerOptions = {}) {
+    if (spec.codec) return this.#importCodecFiles(spec, files, mode, id, pickerOptions);
     let committed = 0;
     for (const file of files) {
       try {

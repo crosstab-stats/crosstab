@@ -1384,6 +1384,37 @@ export function createTypeScan({ columns = 0, numeric = (v) => Number.isFinite(N
 }
 
 /**
+ * The variable names a table of these raw header cells will import as.
+ *
+ * ## Why this is its own function
+ *
+ * Two things have to agree on it, and they run at different times. `ingestTable` applies
+ * it during an import; a codec's `catalog()` applies it BEFORE the import, to list the
+ * variables for the "choose which to import" picker. If they disagree by one character
+ * the user ticks `a_2` and the import offers `a2`, and nothing selected matches anything
+ * imported — a silent empty dataset rather than an error.
+ *
+ * The rule itself is small and entirely conventional: trim; a blank or absent name
+ * becomes `V<n>` by its POSITION, not by its rank among the blanks; a repeat gets
+ * `_2`, `_3`. The only thing worth stating is that position matters, so a header of
+ * `['a', '', 'a']` is `['a', 'V2', 'a_2']` and not `['a', 'V1', 'a_2']`.
+ *
+ * @param {Array<any>} rawNames - header cells, in order, as the format handed them over
+ * @returns {string[]} the names the dataset will have
+ */
+export function tableVariableNames(rawNames) {
+  const used = {};
+  const out = [];
+  for (let c = 0; c < (rawNames?.length ?? 0); c++) {
+    const base = String(rawNames[c] ?? '').trim() || `V${c + 1}`;
+    const nm = uniqueName(base, used);
+    used[nm] = true;
+    out.push(nm);
+  }
+  return out;
+}
+
+/**
  * Import a table of RAW values: the host's typing rule, code detection, naming, width
  * routing and batching, applied once, for every format that does not carry its own types.
  *
@@ -1454,14 +1485,24 @@ export function createTypeScan({ columns = 0, numeric = (v) => Number.isFinite(N
  *   columns and fatal at 3,300 — it is the width that decides what a batch costs. The
  *   default is the 1,000,000 that the delimited, spreadsheet and JSON-lines readers had
  *   each arrived at separately; there is now one of it.
+ * @param {?Iterable<string>} [spec.select] - import only these variables (by the name
+ *   {@link tableVariableNames} gives them), or null/undefined for all of them. Dropped
+ *   columns are never scanned and never buffered, so this is a memory saving and not only
+ *   a convenience: picking 50 of the GSS's 7,000 is the case it exists for. Names that do
+ *   not match anything in the file are ignored — a recorded import may carry a selection
+ *   made against a different revision of it, and failing the whole import over a renamed
+ *   column would be worse than importing what is still there.
  * @returns {Promise<{variables: object[], rowCount: number, wide: boolean,
- *                    missingCodes: string[]}>} what was handed to `begin`
+ *                    missingCodes: string[], names: string[]}>} what was handed to
+ *   `begin`, plus `names` — every variable the FILE had, selected or not, which a caller
+ *   that creates extra datasets from the same source needs.
  */
 export async function ingestTable(app, {
   scanRows,
   header = 'first-row',
   numeric,
   toText,
+  select = null,
   rowCount = null,
   dropSingleEmptyRow = false,
   // ## Why a million values, measured rather than picked
@@ -1514,6 +1555,13 @@ export async function ingestTable(app, {
     scan.observeRow(values);
     return undefined;
   }, { pass: 1, tick: () => app.codec.progress(rows, -1) });
+  // NOTE on why pass 1 still scans everything: the selection is by FINAL name, and the
+  // final names are not known until the header has been read — which happens inside this
+  // pass for a format with a header row. Narrowing the scan would mean a third pass or a
+  // second naming path, and what the selection is actually for is not scanning cheaply
+  // but not STORING 6,950 columns of a 7,000-column file. The scan holds tallies, not
+  // cells, so it is bounded either way.
+
 
   // A format whose columns are only known after a full pass gets told how wide the data
   // actually was, so it can keep columns its header row did not mention.
@@ -1527,15 +1575,22 @@ export async function ingestTable(app, {
   const { isNumeric, isMissing } = scan.decide(accepted);
 
   // --- the schema ---------------------------------------------------------------
-  const used = {};
+  const final = tableVariableNames(names);
+  // Which SOURCE column each output column comes from. Without a selection that is the
+  // identity; with one it is the gaps, and pass 2 reads source rows, so the mapping has
+  // to be kept rather than the names re-matched per row.
+  const wanted = select == null ? null : new Set(select);
+  const keep = [];
+  for (let c = 0; c < final.length; c++) {
+    if (wanted === null || wanted.has(final[c])) keep.push(c);
+  }
+  if (!keep.length) throw new Error('import: none of the selected variables are in this file');
+
   const variables = [];
   const storageTypes = {};
   const isNum = [];
-  for (let c = 0; c < names.length; c++) {
-    // Blank, absent, or whitespace -> V<n>. One rule, whichever reader supplied the name.
-    const base = String(names[c] ?? '').trim() || `V${c + 1}`;
-    const nm = uniqueName(base, used);
-    used[nm] = true;
+  for (const c of keep) {
+    const nm = final[c];
     const num = !!isNumeric[c];
     isNum.push(num);
     variables.push({ name: nm, type: num ? 'numeric' : 'string', measurementLevel: num ? 'scale' : 'nominal' });
@@ -1554,6 +1609,8 @@ export async function ingestTable(app, {
   // --- pass 2: fill and emit ----------------------------------------------------
   const width = variables.length;
   const perBatch = Math.max(1, Math.min(total || 1, Math.floor(emitCells / Math.max(1, width))));
+  // Source positions, in output order. `keep[c]` for a full import is just `c`.
+  const from = keep;
   let buf = newBuffers(width, isNum, perBatch);
   let fill = 0;
   let emitted = 0;
@@ -1571,7 +1628,8 @@ export async function ingestTable(app, {
     if (fromFirstRow && !seenHeader) { seenHeader = true; return undefined; }
     if (skip(values)) return undefined;
     for (let c = 0; c < width; c++) {
-      const v = c < values.length ? values[c] : '';
+      const at = from[c];
+      const v = at < values.length ? values[at] : '';
       // `isMissing` is the scan's, so "which values count as missing" is decided in one
       // place and applied identically by every format — including in a column that stayed
       // text, since the host ticked "NA means missing in this file", not "…in the columns
@@ -1590,7 +1648,7 @@ export async function ingestTable(app, {
   }, { pass: 2, tick: () => app.codec.progress(emitted + fill, total) });
   await flush();
 
-  return { variables, rowCount: total, wide, missingCodes: opts.missingCodes };
+  return { variables, rowCount: total, wide, missingCodes: opts.missingCodes, names: final };
 }
 
 /**

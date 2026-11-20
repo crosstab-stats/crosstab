@@ -38,6 +38,7 @@ export const manifest = {
       label: 'Parquet (.parquet)…',
       extensions: ['.parquet'],
       read: 'readParquet',
+      catalog: 'catalogParquet',
       write: 'writeParquet',
       order: 30,
       multiple: true,
@@ -47,7 +48,7 @@ export const manifest = {
 
 /** The host's shared helpers (core/plugin-stdlib.js). Bound at module scope, as every
  * other plugin does it — the sandbox assigns the global before importing this module. */
-const { isWideDataset } = globalThis.ctStd;
+const { isWideDataset, tableVariableNames } = globalThis.ctStd;
 
 const WRITE_BATCH = 50_000; // rows per write pass
 
@@ -123,11 +124,19 @@ function toText(v) {
  * mapping with no Parquet fixture to check it on would be trading a visible sampling bug
  * for an invisible mis-mapping. Recorded in TODO.md with the mechanism.
  */
-export async function readParquet(app, _info) {
+export async function readParquet(app, { select } = {}) {
   const hp = await importAsset(await app.codec.loadAsset('hyparquet'));
   const size = await app.codec.size();
   const file = sourceBuffer(app, size);
   const metadata = await hp.parquetMetadataAsync(file);
+
+  // A genuine SKIP, not a filter. Parquet is columnar, so hyparquet can be told which
+  // columns to decode and the rest are never touched — no decompression, no allocation.
+  // This is the format where "choose which variables to import" pays the most, and the
+  // reason the shared contract is "drop unselected columns as early as you can" rather
+  // than "drop them": where early means "never read", that is what it should mean.
+  const wanted = select == null ? null : new Set(select);
+  const only = wanted === null ? {} : { columns: [...wanted] };
 
   let began = false;
   let columns = null;
@@ -184,7 +193,7 @@ export async function readParquet(app, _info) {
     const num = Number(g.num_rows ?? 0);
     const rowEnd = rowStart + num;
     if (num > 0) {
-      const objs = await hp.parquetReadObjects({ file, metadata, rowStart, rowEnd });
+      const objs = await hp.parquetReadObjects({ file, metadata, rowStart, rowEnd, ...only });
       if (objs.length) {
         if (!began) await beginFrom(objs);
         await emit(objs);
@@ -194,10 +203,39 @@ export async function readParquet(app, _info) {
   }
   // No row-group metadata (or all empty): one read of the whole file.
   if (!began) {
-    const objs = await hp.parquetReadObjects({ file, metadata });
+    const objs = await hp.parquetReadObjects({ file, metadata, ...only });
     if (objs.length) { await beginFrom(objs); await emit(objs); }
     else await app.codec.begin([], {}, { rowCount: 0, wide: false });
   }
+}
+
+/**
+ * The variable list without the data: the footer's schema.
+ *
+ * The cheapest catalog of any format here, and the most useful — Parquet is columnar, so
+ * a selection made from this list is a genuine skip in `readParquet` rather than a filter
+ * applied after decoding. Reading the footer costs one seek to the tail of the file,
+ * whatever the file's size.
+ *
+ * `metadata.schema` is a FLAT, pre-order list whose first element is the root group and
+ * whose leaves are the columns. Only leaves are taken (`num_children` absent or zero),
+ * which also means a nested group contributes its leaves and not itself — the same thing
+ * `parquetReadObjects` produces top-level keys for in the flat case this reader supports.
+ * Nothing here maps the logical types: the reader still sniffs those from the first row
+ * group, and offering a type here that the import then contradicts would be worse than
+ * offering none. (That gap is the open item; see `readParquet`.)
+ */
+export async function catalogParquet(app, _info) {
+  const hp = await importAsset(await app.codec.loadAsset('hyparquet'));
+  const size = await app.codec.size();
+  const metadata = await hp.parquetMetadataAsync(sourceBuffer(app, size));
+  const leaves = (metadata?.schema ?? [])
+    .filter((el) => !Number(el?.num_children ?? 0) && el?.name != null)
+    .map((el) => String(el.name));
+  const rowCount = Number(
+    metadata?.num_rows ?? (metadata?.row_groups || []).reduce((n, g) => n + Number(g.num_rows ?? 0), 0),
+  ) || 0;
+  return { variables: tableVariableNames(leaves).map((nm) => ({ name: nm })), rowCount };
 }
 
 /**

@@ -255,6 +255,12 @@ export class PluginActions {
         multiple: codec.multiple,
         pluginId: id,
         read: codec.read,
+        // "The variable list without the data", for the import picker's "choose which
+        // variables to import". Forwarded here because this is the point in the chain
+        // that a new codec verb is most often forgotten at — `progress` was added to the
+        // sandbox namespace, the broker and the read session and then dropped exactly
+        // here, which is why import-liveness.test.mjs now checks all four.
+        catalog: codec.catalog,
         write: codec.write,
       });
       if (typeof dispose === 'function') disposers.push(dispose);

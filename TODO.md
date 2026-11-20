@@ -51,6 +51,10 @@ bottom; they are the project's memory and are not summarised away.
       formats that carry real types, where a missing-code pass over text is not the question —
       and the one remaining **no** is the next thing to do (see below).
 
+      All five also now declare `catalog`, so "choose which variables to import" is one
+      capability offered for every format instead of a second menu entry for one codec.
+      See the entry below.
+
       Three of five do not route; three of five do not detect codes. The Excel codec's own comment
       said its typing "mirrors the CSV codec" — and that mirroring is exactly why fixing CSV's
       3,347-mistyped-columns bug (e2a3b77) left Excel untouched. (Excel's own two columns were
@@ -298,29 +302,6 @@ bottom; they are the project's memory and are not summarised away.
          it — re-measure, the numbers are in e85f8e4 and the 2026-11-19 desktop comparison above.
 
       The test of whether this read is right: the protocol should get SMALLER, not larger.
-
-- [ ] **"Choose which variables to import" for every format, not just SPSS/SAS/Stata (owner,
-      2026-11-18).** `readImportPick` in builtin-readstat-codec is a real feature — picking 50 of
-      the GSS's 7,000 variables — and it is a second import *verb*, reachable only for readstat
-      formats. A CSV user cannot subset at all. That asymmetry is the same disease as the entry
-      above: a capability belonging to importing generally, living inside one codec.
-
-      **Shape:** a checkbox on the File ▸ Import data… picker ("Choose which variables to
-      import"), and a new codec verb — `catalog()`, "the variable list without the data" — that
-      the host calls when it is ticked. The host puts up the picker it already has and passes the
-      chosen subset into the read. One question, asked once, in one place.
-
-      **What each format can actually do**, because the capability is the part that genuinely
-      differs: Parquet reads its footer schema and skips columns for free (columnar); readstat
-      already does both; CSV gets names from the header row cheaply and must still scan every
-      byte but need not STORE the unselected columns — which is the memory win anyway; Excel can
-      only filter after parsing until it streams (see below); NDJSON has no header at all and
-      would need to sample the first N records, with the caveat that a later record can introduce
-      a field.
-
-      So the minimum contract is "drop unselected columns as early as you can", with genuine
-      skipping as an optimisation where the format allows it. That also collapses the second read
-      verb back into one.
 
 - [ ] **An EXTRA sheet of a multi-sheet workbook is still built whole — `app.data.create` has no
       streaming form (2026-11-18).** The Excel codec streams the primary sheet through the host
@@ -3065,6 +3046,80 @@ the entry. So the index decays in exactly the cases it exists for. It stays, bec
 missing line is worse, but it is to be read as "look here", never as "this is open".
 
 ## Completed
+
+- [x] **"Choose which variables to import" for every format, not just SPSS/SAS/Stata (owner,
+      2026-11-18). DONE 2026-11-19.** `readImportPick` in builtin-readstat-codec was a real feature — picking 50 of
+      the GSS's 7,000 variables — and it is a second import *verb*, reachable only for readstat
+      formats. A CSV user cannot subset at all. That asymmetry is the same disease as the entry
+      above: a capability belonging to importing generally, living inside one codec.
+
+      **Shape:** a checkbox on the File ▸ Import data… picker ("Choose which variables to
+      import"), and a new codec verb — `catalog()`, "the variable list without the data" — that
+      the host calls when it is ticked. The host puts up the picker it already has and passes the
+      chosen subset into the read. One question, asked once, in one place.
+
+      **What each format can actually do**, because the capability is the part that genuinely
+      differs: Parquet reads its footer schema and skips columns for free (columnar); readstat
+      already does both; CSV gets names from the header row cheaply and must still scan every
+      byte but need not STORE the unselected columns — which is the memory win anyway; Excel can
+      only filter after parsing until it streams (see below); NDJSON has no header at all and
+      would need to sample the first N records, with the caveat that a later record can introduce
+      a field.
+
+      So the minimum contract is "drop unselected columns as early as you can", with genuine
+      skipping as an optimisation where the format allows it. That also collapses the second read
+      verb back into one.
+
+      **BUILT AS SHAPED, and the second menu entry is gone.** `catalog` is a codec verb
+      alongside `read`/`write`; `ingestTable` takes a `select`; the picker carries one
+      checkbox whose state is read at the row click (the only moment that still has the
+      transient user activation the file dialog then needs). Asked ONCE per import run, not
+      per file — stacked sources are `UNION ALL BY NAME`, so a different answer for file 2
+      hollows out file 1, which is the same rule the missing-code prompt follows.
+
+      All five file codecs declare it, and each does the most its format allows:
+
+      | codec | catalogue costs | an unselected column is |
+      |---|---|---|
+      | Parquet | a footer read | never decompressed (`parquetReadObjects({columns})`) |
+      | readstat | the dictionary, value callbacks stubbed | never materialised |
+      | CSV | ONE 4 MiB chunk, header only | scanned, never stored |
+      | Excel | the first sheet's first row | scanned, never stored |
+      | NDJSON | the first chunk, sampled | scanned, never stored |
+
+      **The failure mode this mostly guarded against was the naming.** Two pieces of code
+      have to agree on what a variable is CALLED, minutes apart — `catalog()` for the
+      picker and the import for real — and a one-character disagreement means the user
+      ticks `a_2`, the import makes `a2`, and the result is an empty dataset with no error
+      anywhere. `tableVariableNames` is now the single rule both call, and the round trip
+      (catalogue a file, import the same file, require identical lists) is tested per
+      codec. Verified in the app on a header of `id,,id,score`: the picker offered `id`,
+      `V2`, `id_2`, `score` and unticking two produced exactly `id` and `score`.
+
+      **Two rough edges, deliberately left and written down:**
+      * *NDJSON samples.* There is no header row, so a field first appearing late in the
+        file is not offered. It fails safely — an unoffered field is one nobody unticked,
+        and importing everything (the default) still sees every field — and the
+        alternative is scanning the file to list its columns before scanning it twice more
+        to import them, which makes choosing cost more than not choosing.
+      * *Excel offers the FIRST sheet's header* while the sheet picker comes later, inside
+        the read. A selection is matched by name, so choosing from sheet 1 and importing
+        sheet 2 narrows to what the two have in common rather than failing, and the extra
+        sheets (their own datasets) are not narrowed at all. Doing better means two dialogs
+        before a byte is read, for a case nobody has reported.
+
+      **And one thing the implementation had to be told by the running app, not by the
+      tests:** the checkbox is on a picker that lists web importers and legacy
+      `parse`-based ones too, neither of which reaches the codec path — so ticking it for
+      "Wikipedia table" did nothing and said nothing, which is the precise failure the
+      feature exists to avoid, one layer up. The check now sits before the branch and says
+      so in the Output pane. Found by driving the real dialog.
+
+      *(Kept open elsewhere: `readstat-pick` stays in `script-export.js`'s importer map.
+      The id no longer exists, but a project saved before today RECORDS it as the importer
+      that made its dataset, and that map is what decides which R/Stata reader an exported
+      script gets. Deleting the row would downgrade old projects from a known reader to a
+      guess.)*
 
 - [x] **Excel `.xlsx` import streams — DONE 2026-11-18 (the bug `af31a0e` deleted from CSV).** The
       owner asked what would happen importing Scorecard years as .xlsx. Measured, by running the

@@ -63,6 +63,15 @@ const ASSETS = {
   xlsx: { url: 'https://esm.sh/xlsx@0.18.5?bundle&target=es2022', kind: 'text' },
 };
 
+/** What `app.codec`'s ingest verbs do during a `catalog` call: refuse, by name. A sink
+ * of no-ops would let a codec "declare variables" into a void and look like it worked. */
+const CATALOG_SINK = Object.freeze({
+  begin: () => { throw new Error('app.codec.begin is not available in a catalog call — return {variables} instead'); },
+  batch: () => { throw new Error('app.codec.batch is not available in a catalog call — a catalog carries no data'); },
+  progress: () => {},
+  missingCodes: async () => [],
+});
+
 export class CodecService {
   /** @type {import('./import-service.js').ImportService} */
   #importers;
@@ -108,6 +117,10 @@ export class CodecService {
    * @param {string[]} spec.extensions
    * @param {string} spec.pluginId - The owning plugin's id (for loader.invoke).
    * @param {string} [spec.read] - Name of the plugin's read function.
+   * @param {string} [spec.catalog] - Name of a function returning `{variables}` — the
+   *   variable list WITHOUT the data — so the host can offer "choose which variables to
+   *   import". Optional: a format that cannot name its columns without reading everything
+   *   simply does not declare it, and the host says so rather than pretending.
    * @param {string} [spec.write] - Name of the plugin's write function.
    * @param {number} [spec.order]
    * @param {boolean} [spec.multiple]
@@ -124,7 +137,10 @@ export class CodecService {
           extensions: spec.extensions,
           order: spec.order,
           multiple: spec.multiple,
-          startRead: (file) => this.#startRead(spec, file),
+          startRead: (file, opts) => this.#startRead(spec, file, opts),
+          // Declared only when the codec has one, so the host can tell "this format
+          // cannot list its variables" from "the user did not ask".
+          ...(spec.catalog ? { readCatalog: (file) => this.#runCatalog(spec, file) } : {}),
         }),
       );
     }
@@ -204,7 +220,7 @@ export class CodecService {
    * memory is one batch). Decoupling producer from consumer is what lets the host
    * pick `loadStreaming` vs `loadWide` *after* seeing the catalog's `wide` hint.
    */
-  #startRead(spec, file) {
+  #startRead(spec, file, { select = null } = {}) {
     const queue = [];
     let notify = null;
     let ended = false;
@@ -281,7 +297,10 @@ export class CodecService {
     // report. This is the same shape as the begin()/batch() race in #91, where desktop
     // won it and iPad Safari did not.
     Promise.resolve()
-      .then(() => this.#loader.invoke(spec.pluginId, spec.read, [{ name: file.name }]))
+      // `select` rides on the same `info` argument as `name`, which is the channel that
+      // already existed. A codec that ignores it imports everything, which is the
+      // behaviour every codec had before there was a selection to ignore.
+      .then(() => this.#loader.invoke(spec.pluginId, spec.read, [{ name: file.name, select }]))
       .then(() => { ended = true; debug('codec', 'read finished', { batches: seenBatches }); if (!head) headReject(new Error('codec read produced no variables')); })
       // The failure the user is about to read off the results pane, with the count of
       // batches that made it through — which is how far in it got.
@@ -302,6 +321,46 @@ export class CodecService {
         }
       },
     };
+  }
+
+  /**
+   * Ask a codec to name its variables without reading the data.
+   *
+   * ## Why this is a separate verb and not a flag on `read`
+   *
+   * The host has to put a dialog between "which variables are there" and "read these" —
+   * so the two cannot be one call. It is also the whole point that this is CHEAP: a
+   * Parquet footer, a CSV header line, an SPSS header block. A codec that cannot answer
+   * cheaply should not declare `catalog` at all rather than answer expensively, because
+   * the host's offer to the user ("choose which variables to import") is a promise that
+   * choosing costs less than importing.
+   *
+   * Runs in a `read` session, so the codec has `size`, `read`, `sourceFile` and
+   * `loadAsset` — but no `begin`/`batch`/`missingCodes`, which `need('read')` would allow
+   * and which would make no sense here. That looseness is deliberate rather than
+   * overlooked: tightening it means a fourth session kind and a second set of verb
+   * guards, and the failure it would catch is a codec calling `begin` from its catalog,
+   * which produces a head nobody awaits and is visible immediately.
+   *
+   * @param {object} spec
+   * @param {File} file
+   * @returns {Promise<{variables: Array<{name: string, label?: string, type?: string}>,
+   *                    rowCount?: number}>}
+   */
+  async #runCatalog(spec, file) {
+    this.#session = { kind: 'read', file, pluginId: spec.pluginId, sink: CATALOG_SINK };
+    try {
+      const out = await this.#loader.invoke(spec.pluginId, spec.catalog, [{ name: file.name }]);
+      const variables = Array.isArray(out?.variables) ? out.variables : [];
+      debug('codec', 'catalog', {
+        codec: spec.pluginId,
+        columns: variables.length,
+        rows: Number(out?.rowCount ?? -1),
+      });
+      return { variables, rowCount: Number(out?.rowCount ?? -1) };
+    } finally {
+      this.#session = null;
+    }
   }
 
   /** Drive one streaming write: collect the plugin's emitted chunks, then deliver

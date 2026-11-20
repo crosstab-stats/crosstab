@@ -40,10 +40,14 @@
  * @param {string} [opts.hint] - Sub-title hint line.
  * @param {string} [opts.emptyText] - Shown when there are no entries at all.
  * @param {FormatEntry[]} opts.entries
+ * @param {Array<{id: string, label: string, checked?: boolean, hint?: string}>}
+ *   [opts.options] - checkboxes shown above the list, qualifying every format rather than
+ *   one of them. Their state is passed to the chosen entry's `command(opts)` as
+ *   `{[id]: boolean}`.
  */
 import { stripEllipsis } from './text.js';
 
-export function showFormatPicker({ title, hint, emptyText, entries }) {
+export function showFormatPicker({ title, hint, emptyText, entries, options = [] }) {
   const dialog = document.createElement('dialog');
   dialog.className = 'ct-dialog ct-dialog--wide ct-fmt';
   dialog.innerHTML = `
@@ -51,6 +55,7 @@ export function showFormatPicker({ title, hint, emptyText, entries }) {
       <h2 class="ct-dialog__title"></h2>
       <p class="ct-dialog__hint"></p>
       <input type="search" class="ct-fmt__search" placeholder="Filter formats…" aria-label="Filter formats" autocomplete="off" />
+      <div class="ct-fmt__options"></div>
       <div class="ct-fmt__list"></div>
       <menu class="ct-dialog__buttons">
         <button value="cancel" type="submit">Cancel</button>
@@ -65,14 +70,52 @@ export function showFormatPicker({ title, hint, emptyText, entries }) {
   const listEl = dialog.querySelector('.ct-fmt__list');
   const searchEl = dialog.querySelector('.ct-fmt__search');
 
+  // Optional per-picker checkboxes, read at the moment a format row is clicked and handed
+  // to its command. They sit ABOVE the list because they qualify every row rather than
+  // belonging to one, and they are not in the search haystack for the same reason.
+  //
+  // Why a checkbox here rather than a step after the file is chosen: the row click is the
+  // only moment that still carries the browser's transient user activation, which the
+  // file picker then needs (see the note in `choose`). Anything that asks a question
+  // before the file dialog has to be asked here or not at all.
+  const optionsEl = dialog.querySelector('.ct-fmt__options');
+  const boxes = new Map();
+  for (const opt of options) {
+    const label = document.createElement('label');
+    label.className = 'ct-fmt__option';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!opt.checked;
+    const text = document.createElement('span');
+    text.textContent = opt.label;
+    label.append(box, text);
+    if (opt.hint) {
+      const h = document.createElement('small');
+      h.className = 'ct-fmt__option-hint';
+      h.textContent = opt.hint;
+      label.append(h);
+    }
+    optionsEl.append(label);
+    boxes.set(opt.id, box);
+  }
+  if (!options.length) optionsEl.remove();
+  const readOptions = () => {
+    const out = {};
+    for (const [id, box] of boxes) out[id] = box.checked;
+    return out;
+  };
+
   // Group entries in the order their groups first appear (caller controls order by
   // pre-sorting `entries`), then by `order`/label within each group.
   const choose = (entry) => {
     // Close first, then run synchronously so the file picker the command opens
     // still has the click's transient user activation (see the file header).
+    // Read the options BEFORE closing: `close()` triggers the `close` listener, which
+    // removes the dialog from the document, and a removed input reports nothing useful.
+    const opts = readOptions();
     dialog.close();
     try {
-      entry.command();
+      entry.command(opts);
     } catch (err) {
       console.error('[format-picker]', err);
     }

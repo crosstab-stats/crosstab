@@ -37,6 +37,7 @@ export const manifest = {
       label: 'JSON Lines (.ndjson)…',
       extensions: ['.ndjson', '.jsonl'],
       read: 'readNdjson',
+      catalog: 'catalogNdjson',
       write: 'writeNdjson',
       order: 40,
       multiple: true,
@@ -45,7 +46,7 @@ export const manifest = {
 };
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { ingestTable } = globalThis.ctStd;
+const { ingestTable, tableVariableNames } = globalThis.ctStd;
 
 const READ_CHUNK = 1 << 20; // 1 MiB source reads
 const WRITE_BATCH = 10_000; // rows per output flush
@@ -85,7 +86,7 @@ const WRITE_BATCH = 10_000; // rows per output flush
  * 'number'` rather than "parses as a finite number". Without that, `Number(true)` is 1
  * and a column of booleans would import as numeric — and a JSON `true` is not 1.
  */
-export async function readNdjson(app, _info) {
+export async function readNdjson(app, { select } = {}) {
   const size = await app.codec.size();
   // First appearance wins, and it is shared between the two passes deliberately: pass 2
   // must position values exactly as pass 1 typed them.
@@ -93,6 +94,7 @@ export async function readNdjson(app, _info) {
   const index = new Map();
 
   await ingestTable(app, {
+    select,
     header: () => keyOrder,
     // JSON carries its own types. Anything that is not a number is text, including a
     // boolean and including `null` (which the shared missing rule catches first anyway).
@@ -114,6 +116,37 @@ export async function readNdjson(app, _info) {
       return onRow(row);
     }, ctx.tick),
   });
+}
+
+/**
+ * The variable list without the data — and in this format that is a SAMPLE, with a caveat
+ * the host cannot soften.
+ *
+ * There is no header row. A field may first appear in the last record of the file, so the
+ * only honest complete answer is to read the whole thing, which is what the catalog call
+ * exists to avoid. So it reads the first chunk, takes the union of the keys it finds, and
+ * a field that appears only later is simply not offered.
+ *
+ * That is a real limitation and it fails SAFELY, which is the reason it is acceptable: a
+ * field nobody was offered is one the user did not untick, and an unselected column is
+ * dropped — so the worst case is a late-appearing field being left out of a subset
+ * import. Importing everything (the default, no selection) is unaffected and still sees
+ * every field, because `readNdjson` builds its key order over the whole file.
+ *
+ * The alternative — scanning the file to list its columns, then scanning it twice more to
+ * import them — would make choosing cost more than not choosing.
+ */
+export async function catalogNdjson(app, _info) {
+  const size = await app.codec.size();
+  const order = [];
+  const seen = new Set();
+  await scan(app, Math.min(READ_CHUNK, size), (obj) => {
+    for (const k of Object.keys(obj)) {
+      if (!seen.has(k)) { seen.add(k); order.push(k); }
+    }
+    return undefined;
+  }, () => {});
+  return { variables: tableVariableNames(order).map((nm) => ({ name: nm })) };
 }
 
 /**

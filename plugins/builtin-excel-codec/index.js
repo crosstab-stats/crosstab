@@ -52,7 +52,7 @@
  */
 
 /** The host's shared helpers (core/plugin-stdlib.js). */
-const { uniqueName, createTypeScan, ingestTable } = globalThis.ctStd;
+const { uniqueName, createTypeScan, ingestTable, tableVariableNames } = globalThis.ctStd;
 
 export const manifest = {
   id: 'builtin-excel-codec',
@@ -91,6 +91,7 @@ export const manifest = {
       label: 'Excel…',
       extensions: ['.xlsx', '.xls', '.xlsm', '.xlsb'],
       read: 'readXlsx',
+      catalog: 'catalogXlsx',
       write: 'writeXlsx',
       order: 11, // just after CSV (10)
       multiple: true,
@@ -119,13 +120,79 @@ export const manifest = {
  * The alternative is holding every cell to decide types from, which is the thing being
  * fixed; a second inflate costs CPU, and CPU is not what runs out.
  */
-export async function readXlsx(app, { name }) {
+export async function readXlsx(app, { name, select } = {}) {
   const size = await app.codec.size();
   const bytes = await readAll(app, size);
 
   const ooxml = await openStreaming(app, bytes);
-  if (ooxml) return readStreaming(app, ooxml, name);
-  return readWithSheetJs(app, bytes, name);
+  if (ooxml) return readStreaming(app, ooxml, name, select);
+  return readWithSheetJs(app, bytes, name, select);
+}
+
+/**
+ * The variable list without the data: the header row of the first sheet.
+ *
+ * ## Why the FIRST sheet, when the import may be told to use another
+ *
+ * The sheet picker comes later — the host asks "which variables" before the read starts,
+ * and the read is where the sheet choice happens. Offering the first sheet's header is
+ * therefore a guess, and it is the right one for the case this exists for: the primary
+ * sheet IS the data sheet in a workbook used as a data file, and the extra tabs are a
+ * codebook or a summary. A selection made here is matched by NAME during the read
+ * (`ingestTable` ignores names a file does not have), so choosing from sheet 1 and then
+ * importing sheet 2 narrows to whatever the two have in common rather than failing — and
+ * the extra sheets, which become their own datasets, are never narrowed at all.
+ *
+ * That is a real rough edge rather than a hidden one. Doing better means asking for the
+ * sheet before asking for the variables, which is two dialogs before a single byte of
+ * data is read, for a case nobody has reported.
+ *
+ * ## Cost
+ *
+ * Still reads the whole file, because an .xlsx is a zip and the central directory is at
+ * the end of it; what it does NOT do is scan the sheet. `streamSheetRows` stops at the
+ * first non-blank row. For .xls/.xlsb there is no streaming form at all and SheetJS
+ * parses the workbook — acceptable because those formats cap at 65,536 rows, so the file
+ * that would make this expensive cannot exist.
+ */
+export async function catalogXlsx(app, _info) {
+  const size = await app.codec.size();
+  const bytes = await readAll(app, size);
+  const ooxml = await openStreaming(app, bytes);
+  const header = ooxml
+    ? await firstRowOf(ooxml, ooxml.sheets[0])
+    : await firstRowWithSheetJs(app, bytes);
+  return { variables: tableVariableNames(header).map((nm) => ({ name: nm })) };
+}
+
+/** The first non-blank row of a sheet, and nothing after it. */
+async function firstRowOf(ooxml, sheet) {
+  if (!sheet) return [];
+  let header = null;
+  await ooxml.mod.streamSheetRows(sheet.entry, {
+    sharedStrings: ooxml.sharedStrings,
+    dateStyles: ooxml.dateStyles,
+    onRow: (values) => {
+      if (header !== null || blankRow(values)) return undefined;
+      header = values;
+      // There is no "stop" in the row callback, so the rest of the sheet is skipped by
+      // the guard above rather than by not reading it. A header is row 1 in every real
+      // file; paying for the scan of a sheet whose header is row 1 would be silly, and
+      // this is the catalog call, where cheap is the whole promise.
+      return undefined;
+    },
+  });
+  return header ?? [];
+}
+
+/** Same, for a legacy workbook: SheetJS, first sheet, first row. */
+async function firstRowWithSheetJs(app, bytes) {
+  const XLSX = await importAsset(await app.codec.loadAsset('xlsx'));
+  const wb = XLSX.read(bytes, { type: 'array', cellDates: true });
+  const first = (wb.SheetNames || [])[0];
+  if (!first) return [];
+  const aoa = sheetAoa(XLSX, wb.Sheets[first]);
+  return aoa[0] ?? [];
 }
 
 /**
@@ -184,7 +251,7 @@ async function eachDataRow(ooxml, sheet, onRow) {
 }
 
 /** Read an .xlsx by streaming it. */
-async function readStreaming(app, ooxml, fileName) {
+async function readStreaming(app, ooxml, fileName, select = null) {
   const items = [];
   for (const sh of ooxml.sheets) {
     // eslint-disable-next-line no-await-in-loop -- a few tabs, a few hundred bytes each.
@@ -211,6 +278,7 @@ async function readStreaming(app, ooxml, fileName) {
   // whatever `String(date)` says in the current locale (`toText`).
   let headerRow = [];
   const { missingCodes: codes } = await ingestTable(app, {
+    select,
     numeric: EXCEL_NUMERIC,
     toText: cellToString,
     // Called after pass 1, with the width the data actually reached. A sheet whose rows
@@ -297,7 +365,7 @@ async function collectSheet(ooxml, sheet, codes) {
 /** Read a legacy workbook with SheetJS: parse the whole thing, pivot to columns, emit.
  * Memory is proportional to the cell count — which is why this is no longer the path an
  * .xlsx takes, and is acceptable for the formats that have no other. */
-async function readWithSheetJs(app, bytes, name) {
+async function readWithSheetJs(app, bytes, name, select = null) {
   const XLSX = await importAsset(await app.codec.loadAsset('xlsx'));
   // cellDates → date cells become JS Date (carried as ISO text below). Don't parse
   // formulas' cached errors into throws; SheetJS yields them as strings.
@@ -328,6 +396,7 @@ async function readWithSheetJs(app, bytes, name) {
   // from the delimited reader on the same data.
   const primaryAoa = aoas[at];
   const { missingCodes: codes } = await ingestTable(app, {
+    select,
     numeric: EXCEL_NUMERIC,
     toText: cellToString,
     header: (w) => padNames(primaryAoa[0] || [], Math.max(w, aoaWidth(primaryAoa))),

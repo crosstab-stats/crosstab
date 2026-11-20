@@ -1705,6 +1705,12 @@ const IMPORTER_FORMAT = {
   'import-codebook-csv': { reader: 'delimited' },
   // Six formats, three packages, dispatched on the suffix by the codec itself.
   readstat: { byExtension: true },
+  // KEPT although the id no longer exists. "SPSS / Stata / SAS — choose variables…" was a
+  // second codec entry until 2026-11-19, when choosing variables became a host capability
+  // offered for every format and the duplicate was removed. This map is read against
+  // op logs, and a project saved before then still RECORDS `readstat-pick` as the
+  // importer that made its dataset — so deleting the row would not tidy anything, it
+  // would make those scripts export a guessed reader instead of a known one.
   'readstat-pick': { byExtension: true },
 };
 

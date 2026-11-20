@@ -944,6 +944,15 @@
         width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px;
         border: 1px solid var(--line); border-radius: 6px; margin: 0 0 10px;
       }
+      /* Picker-wide options (e.g. "choose which variables to import"). Above the list
+         because they qualify every row rather than belonging to one. */
+      .ct-fmt__options { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+      .ct-fmt__option {
+        display: grid; grid-template-columns: auto 1fr; align-items: baseline;
+        gap: 4px 8px; font-size: 13px; cursor: pointer;
+      }
+      .ct-fmt__option input { margin: 0; }
+      .ct-fmt__option-hint { grid-column: 2; color: var(--ct-muted); font-size: 12px; }
       .ct-fmt__list { max-height: 50vh; overflow-y: auto; margin: 0 0 16px; }
       .ct-fmt__group {
         font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
