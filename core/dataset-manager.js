@@ -830,19 +830,16 @@ export class DatasetManager {
     return this.#target().loadedTableBytes;
   }
 
-  wouldExceedTableBudget(variables, rowCount) {
-    return this.#target().wouldExceedTableBudget(variables, rowCount);
-  }
-
   get canStreamOutOfCore() {
     return this.#target().canStreamOutOfCore;
   }
 
-  loadStreaming(o) {
-    return this.#target().loadStreaming(o);
-  }
-  loadWide(o) {
-    return this.#target().loadWide(o);
+  /** The one way data enters a dataset from outside the engine. Replaced the
+   * `loadStreaming`/`loadWide` pair on 2026-11-20: the caller no longer picks which,
+   * because the pick needs the engine's resident bytes and the caller does not have
+   * them. See `core/ingest.js`. */
+  load(o) {
+    return this.#target().load(o);
   }
   getDataFrame(o) {
     return this.active.getDataFrame(o);

@@ -118,6 +118,45 @@ export class DuckDBManager {
     return exceedsTableBudget(this.loadedTableBytes, variables, rowCount, this.#opfsHandleOk === true);
   }
 
+  /**
+   * The whole ingest route decision: table, or out-of-core?
+   *
+   * ## Why it lives here and not in the caller
+   *
+   * It used to be two halves in two layers. A codec decided `wide` from the FILE and
+   * `import-service` decided `overBudget` from what was already resident, and the import
+   * took `head.wide || overBudget` — while the four other ways into the engine consulted
+   * neither half. Width is a property of the data; residency and the stream capability
+   * are properties of THIS instance. Two of the three facts are here, so the decision is.
+   *
+   * ## Why it is async, which is not incidental
+   *
+   * The capability is probed during init, and the FIRST import routes before anything has
+   * touched DuckDB. An earlier version read `#opfsHandleOk` while it was still `null`,
+   * `null !== false` was true, the desktop budget applied, and an iPhone built the table
+   * that killed it. {@link DuckDBManager#wouldExceedTableBudget} awaits readiness and
+   * applies `=== true` (unknown counts as cannot-stream); this delegates to it rather
+   * than recomputing, so there is one budget computation and not two that can drift.
+   *
+   * @param {Array<{type?: string}>} variables
+   * @param {number} rowCount - rows, or -1 when not known (routed pessimistically)
+   * @param {object} [opts]
+   * @param {boolean} [opts.declaredWide] - the caller already measured the source and
+   *   knows a table cannot hold it (the full GSS FATAL-OOMs however empty the database).
+   * @returns {Promise<{wide: boolean, overBudget: boolean, estBytes: number,
+   *                    canStream: boolean, loadedBytes: number}>}
+   */
+  async planIngest(variables, rowCount, { declaredWide = false } = {}) {
+    const overBudget = await this.wouldExceedTableBudget(variables, rowCount);
+    return {
+      wide: !!declaredWide || overBudget,
+      overBudget,
+      estBytes: estimateTableBytes(variables ?? [], rowCount),
+      canStream: this.canStreamOutOfCore === true,
+      loadedBytes: this.loadedTableBytes,
+    };
+  }
+
   /** Whether this browser can stream an ingest out of core. False on WebKit, where
    * `registerFileHandle` cannot cross into the worker — which makes a table ingest hold
    * the whole dataset (twice, at `finish`) in the wasm heap. @type {boolean|null} */

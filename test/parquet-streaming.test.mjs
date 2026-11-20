@@ -139,22 +139,32 @@ test('the chunk is a COPY — the buffer is reused the moment the write is pendi
 // The wiring that makes the async writes safe
 // =============================================================================
 
-test('loadWide awaits the drain, and the producer awaits loadWide', () => {
-  const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
-  assert.match(ds, /await writer\.drain\(\)/, 'the row-group flush awaits the write');
-  assert.match(ds, /const wait = accRows >= groupRows \? flush\(\) : undefined;[\s\S]*?return wait;/,
-    'and the stream callback RETURNS it, so the producer waits');
-  assert.match(ds, /await flush\(\)/, 'the final partial group is awaited too');
+// The out-of-core route moved out of `data-store.js` into `core/ingest.js` on
+// 2026-11-20, when the five separate ways into the engine became one. These three read
+// the new home; every property they assert is the same property.
 
-  // Without this the callback's promise is dropped and every row group's write races.
+test('the ingest awaits the drain, and the producer awaits the ingest', () => {
+  const ing = stripComments(readFileSync('core/ingest.js', 'utf8'));
+  assert.match(ing, /await writer\.drain\(\)/, 'the row-group flush awaits the write');
+  assert.match(ing, /return accRows >= groupRows \? flush\(\) : Promise\.resolve\(\);/,
+    'and batch() RETURNS the flush, so the producer waits');
+  assert.match(ing, /await flush\(\)/, 'the final partial group is awaited too');
+
+  // The chain continues through the one `load`, which awaits every batch...
+  const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
+  assert.match(ds, /await stream\(async \(columns\) => \{\s*await ingest\.batch\(columns\);/,
+    'DataStore#load drops the batch promise');
+
+  // ...and back to the codec reader, which must return it rather than discarding it.
+  // Without this every row group's OPFS write races.
   const imp = stripComments(readFileSync('core/import-service.js', 'utf8'));
-  assert.match(imp, /reader\.drain\(\(columns\) => \{ tick\(columns\); return onBatch\(columns\); \}\)/,
+  assert.match(imp, /reader\.drain\(\(columns\) => \{ tick\(columns\); return batch\(columns\); \}\)/,
     'import-service returns the batch promise rather than discarding it');
 });
 
 test('the writer is opened WITH a name, or it would buffer the whole file', () => {
-  const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
-  assert.match(ds, /openParquetWriter\(columns, \{ name: file \}\)/);
+  const ing = stripComments(readFileSync('core/ingest.js', 'utf8'));
+  assert.match(ing, /openParquetWriter\(columns, \{ name: file \}\)/);
   const dm = stripComments(readFileSync('core/duckdb-manager.js', 'utf8'));
   // No name → the old buffered behaviour, which other callers may still rely on.
   assert.match(dm, /openParquetWriter\(columns, \{ name = null \} = \{\}\)/);
@@ -164,9 +174,14 @@ test('the writer is opened WITH a name, or it would buffer the whole file', () =
 test('a failed wide import closes the writable before deleting the file', () => {
   // A writable left open holds the file; the cleanup would then fail silently and leave
   // a half-written Parquet behind.
-  const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
-  assert.match(ds, /await writer\.abort\?\.\(\)[\s\S]*?dropRegisteredFile/,
+  const ing = stripComments(readFileSync('core/ingest.js', 'utf8'));
+  assert.match(ing, /await writer\.abort\?\.\(\)[\s\S]*?dropRegisteredFile/,
     'abort comes before the delete');
+  // ...and the one `load` must actually CALL abort on any failure, or the rollback that
+  // used to be inline in each path is now nobody's job.
+  const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
+  assert.match(ds, /catch \(err\) \{[\s\S]{0,400}?await ingest\.abort\(\);[\s\S]{0,80}?throw err;/,
+    'DataStore#load does not roll the half-built source back');
 });
 
 test('the finished file is registered WITHOUT reading it back', () => {

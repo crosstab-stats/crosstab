@@ -121,10 +121,19 @@ test('every link in the budget chain awaits', () => {
   // An un-awaited async call here returns a Promise, which is truthy — so forgetting
   // one would route EVERYTHING out of core and look like a performance bug rather than
   // a wiring bug. Worth pinning at each hop.
+  //
+  // The hops changed on 2026-11-20: the import no longer asks the budget, because the
+  // import no longer decides the route. `DuckDBManager#planIngest` does, and the one
+  // `DataStore#load` awaits it — so the chain is shorter and every way into the engine
+  // is on it, rather than only file imports.
+  const dm = stripComments(readFileSync('core/duckdb-manager.js', 'utf8'));
+  assert.match(dm, /async planIngest\(/, 'the plan is async');
+  assert.match(dm, /const overBudget = await this\.wouldExceedTableBudget\(/,
+    'and it AWAITS the budget rather than recomputing it — one computation, not two');
   const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
-  assert.match(ds, /async wouldExceedTableBudget\(/, 'DataStore is async');
-  const imp = stripComments(readFileSync('core/import-service.js', 'utf8'));
-  assert.match(imp, /await this\.#data\.wouldExceedTableBudget\(/, 'and the import awaits it');
+  assert.match(ds, /async wouldExceedTableBudget\(/, 'DataStore still exposes it, async');
+  assert.match(ds, /await this\.#duckdb\.planIngest\(variables, rowCount, \{ declaredWide \}\)/,
+    'and the one load() awaits the plan');
 });
 
 test('garbage byte counts cannot poison the total', () => {
@@ -139,12 +148,21 @@ test('garbage byte counts cannot poison the total', () => {
 // The chain — every link, because a missing one is silent
 // =============================================================================
 
-test('DatasetManager forwards both halves of the budget', () => {
-  // The link that was missing. It delegates the DataStore interface method by method,
-  // so anything not written out here simply is not there.
+test('DatasetManager forwards what the budget needs', () => {
+  // The link that was missing, and the reason this file exists: DatasetManager delegates
+  // the DataStore interface method by method, so anything not written out there simply
+  // is not there, and `?.` at the call site turned the absence into "no, carry on".
+  //
+  // `wouldExceedTableBudget` is no longer forwarded, deliberately: it had exactly one
+  // caller — the routing block in import-service — and that block is gone, because the
+  // route is now decided inside `load`. A forwarder with no caller is an invitation to
+  // open a second routing site, which is the thing being consolidated away.
   const src = readFileSync('core/dataset-manager.js', 'utf8');
   assert.match(src, /get loadedTableBytes\(\)/, 'the getter is forwarded');
-  assert.match(src, /wouldExceedTableBudget\(variables, rowCount\)/, 'the method is forwarded');
+  assert.match(src, /\n  load\(o\) \{\n    return this\.#target\(\)\.load\(o\);/,
+    'the one way in is forwarded');
+  assert.ok(!/wouldExceedTableBudget/.test(src),
+    'a forwarded budget check with no caller invites a second routing site');
 });
 
 test('DataStore defers to the instance instead of keeping its own total', () => {
@@ -156,18 +174,27 @@ test('DataStore defers to the instance instead of keeping its own total', () => 
   assert.match(src, /this\.#duckdb\.forgetTable\(/, 'a dropped table is forgotten');
 });
 
-test('the import does NOT optional-call the budget', () => {
+test('the route decision is NOT optional-called', () => {
   // `?.` is what turned a missing method into "no, carry on" for three imports running.
   // If the wiring breaks again it must throw, loudly, rather than quietly reverting to
   // the behaviour that destroys the database.
-  // Comments stripped FIRST. The comment at that call site quotes the broken form on
+  //
+  // Comments stripped FIRST. The comment at the old call site quoted the broken form on
   // purpose, to say why it is not written that way — and this assertion matched the
-  // explanation rather than the code. Asserting an ABSENCE over raw source is a trap
-  // this repo has fallen into repeatedly; `stripComments` exists for it.
-  const src = stripComments(readFileSync('core/import-service.js', 'utf8'));
-  assert.doesNotMatch(src, /wouldExceedTableBudget\?\./,
+  // explanation rather than the code. Asserting an ABSENCE over raw source is a trap this
+  // repo has fallen into repeatedly; `stripComments` exists for it.
+  //
+  // The call site moved from import-service to `DataStore#load`, which is the point: one
+  // site, on every path in, instead of one site on one of five.
+  const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
+  assert.doesNotMatch(ds, /planIngest\?\./,
     'an optional call here hides exactly the failure this guards against');
-  assert.match(src, /this\.#data\.wouldExceedTableBudget\(/, 'it is called directly');
+  assert.match(ds, /await this\.#duckdb\.planIngest\(/, 'it is called directly');
+
+  // And the old site must not grow a second opinion back.
+  const imp = stripComments(readFileSync('core/import-service.js', 'utf8'));
+  assert.ok(!/wouldExceedTableBudget|planIngest/.test(imp),
+    'import-service is deciding the route again');
 });
 
 test('the budget is still bracketed by the observations', () => {

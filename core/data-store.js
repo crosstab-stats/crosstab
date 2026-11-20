@@ -46,6 +46,7 @@
 import { CoreEvents } from './event-bus.js';
 import { safeText, rowGroupFor } from './plugin-stdlib.js';
 import { quoteIdent, estimateTableBytes } from './duckdb-manager.js';
+import { openIngest } from './ingest.js';
 import { debug } from './debug.js';
 import { newOpId } from './merge.js';
 import { foldDataOps, flattenStep, barrierDroppedIds } from './data-fold.js';
@@ -380,13 +381,21 @@ export class DataStore {
    * content-addressed asset (and the table name to a peer-local map) is Layer 4/7.
    * @returns {import('./op-log.js').Op}
    */
-  #addSourceOp(type, src, { joinKey, aliases, joinType, author } = {}) {
+  #addSourceOp(type, src, { joinKey, aliases, joinType, author, producedBy } = {}) {
     const payload = { src };
     if (type === 'join') {
       payload.joinKey = joinKey;
       payload.aliases = aliases ?? [];
       payload.joinType = joinType ?? 'left';
     }
+    // WHICH RUN IN THIS PROJECT MADE THE DATA (#160), and until 2026-11-20 it went
+    // nowhere. `createWithData` accepted it, `loadDataset` passed it, and this function
+    // destructured four fields and not this one — so the reverse bridge from Run R script
+    // had been recording the run id into a void since it shipped, and the log held bytes
+    // with no account of where they came from, which is the exact thing the field was
+    // added to fix. Found while counting the ingest routes, not by anything failing: it
+    // has one producer and, until now, zero readers.
+    if (producedBy) payload.producedBy = producedBy;
     return this.#append(type, payload, `source:${newOpId()}`, [], author);
   }
 
@@ -475,90 +484,134 @@ export class DataStore {
   }
 
   /**
-   * Load a dataset by **streaming** it into a source table batch-by-batch, for
-   * importers that can't materialise the whole thing in memory (a multi-GB
-   * .sav/.dta read by ReadStat). The caller drives the ingest via the `ctx` it's
-   * handed:
-   *  - `ctx.begin(variables, storageTypes)` — once, first: records the variable
-   *    metadata and creates the (empty) source table with a stable schema.
-   *  - `ctx.batch(columns)` — per chunk: appends rows (name→Float64Array|Array).
+   * **The** way data enters this dataset from outside the engine.
    *
-   * After `ingest` resolves, the row-id is baked in and the source is registered
-   * as a `load` (replace) or `append` op, then the view re-derives — identical to
-   * any other import from there on.
+   * Everything that is not an in-engine `SELECT` comes through here: a file import, a
+   * plugin's `app.data.create`, the demo seed, a restored project. Before 2026-11-20
+   * there were five separate routes and only one of them recorded what the shared table
+   * budget needs, which is how an unaccounted table could poison the budget for a
+   * perfectly well-behaved import and take the whole database down with it. See
+   * `core/ingest.js` for the count and the reasoning.
+   *
+   * The caller says what it has and streams it; this decides how it lands. Specifically,
+   * this owns — once, for every caller:
+   *
+   *  - the route (a DuckDB table, or out-of-core Parquet that DuckDB only reads),
+   *  - the batch budget, so nothing reaches the engine in one piece,
+   *  - the table-bytes accounting the cumulative budget is computed from,
+   *  - the row-id namespace, the source table/file naming,
+   *  - the one `src` descriptor shape, the op append, and the rederive.
+   *
+   * `stream(batch)` is called once and must `await batch(columns)` for each chunk — that
+   * await IS the backpressure, and on the out-of-core route it is what keeps one Parquet
+   * row group in flight instead of all of them.
    *
    * @param {Object} opts
    * @param {'replace'|'append'} [opts.mode='replace']
-   * @param {string} [opts.source] - Provenance label.
-   * @param {(ctx: {begin: Function, batch: Function}) => Promise<void>} opts.ingest
+   * @param {VariableMeta[]} opts.variables - column metadata, in order
+   * @param {Object<string, string>} [opts.storageTypes] - name → 'numeric'|'string';
+   *   derived from `variables` when absent
+   * @param {number} [opts.rowCount=-1] - total rows if known; -1 routes pessimistically
+   * @param {boolean} [opts.declaredWide] - the caller already knows it is too big
+   * @param {number} [opts.rowGroupRows] - override the derived Parquet row-group size
+   * @param {string} [opts.source] - provenance label (the `source_file` column's value)
+   * @param {string} [opts.origin] - the file name it came from
+   * @param {string} [opts.importer] - which reader parsed it
+   * @param {string[]} [opts.missingCodes] - codes the read treated as missing
+   * @param {object} [opts.producedBy] - which run in this project made the data
+   * @param {(batch: (columns: object) => Promise<void>) => Promise<void>} opts.stream
+   * @param {(done: number, total: number) => void} [opts.onProgress]
    * @returns {Promise<void>}
    */
-  async loadStreaming({ mode = 'replace', source, origin, importer, missingCodes, ingest }) {
+  async load({
+    mode = 'replace', variables, storageTypes, rowCount = -1, declaredWide = false,
+    rowGroupRows = 0, source, origin, importer, missingCodes, producedBy, stream, onProgress,
+  }) {
+    if (!Array.isArray(variables) || variables.length === 0) {
+      throw new Error('load: variables are required');
+    }
     const had = this.#hasData();
     const combine = had && mode === 'append' ? 'append' : 'replace';
     if (combine === 'replace') await this.#pruneDeadSources();
 
+    const types = storageTypes ?? Object.fromEntries(
+      variables.map((v) => [v.name, v.type === 'string' ? 'string' : 'numeric']),
+    );
+    // One decision, from the data AND from what the engine already holds — and AWAITED,
+    // because whether this browser can stream out of core is probed during init and the
+    // first import routes before anything has touched DuckDB. Reading that capability
+    // synchronously is the bug that killed an iPhone; see `planIngest`.
+    const route = await this.#duckdb.planIngest(variables, rowCount, { declaredWide });
+    // Everything the decision was made FROM, not just what it decided — two sessions were
+    // spent reasoning about `canStream` from the outside when printing it would have ended
+    // the question.
+    debug('data', 'route', {
+      wide: route.wide,
+      declaredWide,
+      overBudget: route.overBudget,
+      columns: variables.length,
+      rows: rowCount,
+      estMiB: Math.round(route.estBytes / 1048576),
+      loadedMiB: Math.round(route.loadedBytes / 1048576),
+      canStream: route.canStream,
+    });
+
     const seq = ++this.#sourceSeq;
     const table = `${this.#sourcePrefix}${seq}`;
-    // Bake the stable row id into the ingest (namespaced by seq, like #ensureRowId)
-    // so there's no separate full-table rewrite afterwards. Row order is irrelevant
-    // — the id only needs to be unique and stable per row.
     const base = seq * ROWID_STRIDE;
-    let meta = null;
-    let ingester = null;
+    const ingest = await openIngest({
+      duckdb: this.#duckdb,
+      wide: route.wide,
+      variables,
+      storageTypes: types,
+      table,
+      file: `${this.#sourcePrefix}${seq}.parquet`,
+      rowidCol: ROWID_COL,
+      rowidBase: base,
+      rowGroupRows,
+    });
 
-    let ingestedRows = 0;
-    const ctx = {
-      begin: async (variables, storageTypes) => {
-        meta = variables;
-        ingester = await this.#duckdb.beginStreamIngest(table, storageTypes, {
-          rowidCol: ROWID_COL,
-          rowidBase: base,
-        });
-      },
-      batch: async (columns) => {
-        if (!ingester) throw new Error('loadStreaming: batch before begin()');
-        const first = Object.keys(columns)[0];
-        ingestedRows += first ? columns[first].length : 0;
-        await ingester.addBatch(columns);
-      },
-    };
-
+    let done = 0;
+    let out;
     try {
-      await ingest(ctx);
-      // The phases AFTER the read, which had no instrumentation at all — and the iPhone
-      // died in exactly this gap: the log's last line was the codec's `read finished`
-      // and the next thing was a relaunch. `finish` is where a WebKit ingest builds the
-      // final table from its temp one, holding both.
-      debug('data', 'ingest finishing', { rows: ingestedRows });
-      if (ingester) await ingester.finish();
-      debug('data', 'ingest finished', { rows: ingestedRows });
+      await stream(async (columns) => {
+        await ingest.batch(columns);
+        const first = Object.keys(columns)[0];
+        done += first ? columns[first].length : 0;
+        onProgress?.(done, rowCount);
+      });
+      out = await ingest.finish();
     } catch (err) {
-      // Roll back a half-built source so the dataset isn't left broken, and sweep
-      // any leftover OPFS ingest parts.
-      try {
-        await this.#duckdb.query(`DROP TABLE IF EXISTS ${quoteIdent(table)}`);
-      } catch {
-        /* best-effort */
-      }
-      try {
-        await this.#duckdb.cleanupStreamIngest(table);
-      } catch {
-        /* best-effort */
-      }
+      // Roll back a half-built source so the dataset is not left broken, and sweep any
+      // leftover OPFS parts or a locked half-written file.
+      debug('data', 'ingest FAILED', { rows: done, message: String(err?.message ?? err).slice(0, 200) });
+      await ingest.abort();
       throw err;
     }
-    if (!meta) throw new Error('streaming import delivered no variables');
 
-    this.#sourceTables.add(table);
-    this.#duckdb.noteTableBytes(table, estimateTableBytes(meta, ingestedRows));
-    // Row id already baked into the table by the ingest CTAS (no #ensureRowId).
-    const src = { table, meta: meta.map((m) => ({ ...m })), label: source ?? null, origin: origin ?? null,
-      importer: importer ?? null, missingCodes: normaliseCodes(missingCodes) };
-    this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
-    debug('data', 'rederiving', { rows: ingestedRows, columns: meta.length });
+    const meta = variables.map((m) => ({ ...m }));
+    let src;
+    if (route.wide) {
+      src = { wide: true, file: out.file, rowidBase: base, meta };
+      this.#wideFiles.add(out.file);
+    } else {
+      src = { table, meta };
+      this.#sourceTables.add(table);
+      // THE LINE THAT HAD ONE CALLER. Four of the five routes into the engine built a
+      // real table and never registered its cost, so `loadedTableBytes` under-reported
+      // and the next import's budget check passed when it should not have — the failure
+      // being a FATAL checkpoint that also destroys what had already loaded.
+      this.#duckdb.noteTableBytes(table, estimateTableBytes(meta, out.rows));
+    }
+    src.label = source ?? null;
+    src.origin = origin ?? null;
+    src.importer = importer ?? null;
+    src.missingCodes = normaliseCodes(missingCodes);
+
+    this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src, { producedBy });
+    debug('data', 'rederiving', { rows: out.rows, columns: meta.length, wide: route.wide });
     await this.rederive(this.#loadReason(combine, had));
-    debug('data', 'source ready', { table });
+    debug('data', 'source ready', route.wide ? { file: out.file } : { table });
   }
 
   /** Estimated bytes the source TABLES are holding — across EVERY dataset, because they
@@ -586,132 +639,6 @@ export class DataStore {
    * printing it would have settled the question immediately. */
   get canStreamOutOfCore() {
     return this.#duckdb.canStreamOutOfCore;
-  }
-
-  /**
-   * Load a **very wide** file as a *wide source*: a single streaming pass encodes
-   * the data — in JS, outside DuckDB — to one Parquet **file** on OPFS (carrying a
-   * `__ct_row` index), and the dataset reads it back with `read_parquet`.
-   *
-   * Why a file, not a table: ingesting the full GSS (~6,942 cols) into a DuckDB
-   * table FATAL-OOMs — DuckDB-WASM's checkpoint can't accumulate past ~600 MB and
-   * can't spill (OPFS temp is unimplemented). Encoding Parquet in JS bypasses the
-   * whole write/checkpoint path; DuckDB only ever *reads* the file, which is
-   * genuinely out-of-core (the full file reads in ~1 s using a few MB of heap).
-   *
-   * The file is written one row group at a time from the stream, so only
-   * `rowGroupRows` rows are buffered at once regardless of total size — and it's a
-   * single file read (no per-column passes, no join).
-   *
-   * @param {Object} opts
-   * @param {'replace'|'append'} [opts.mode='replace']
-   * @param {string} [opts.source]
-   * @param {number} [opts.rowGroupRows=8000] - Rows buffered per row group.
-   * @param {import('./data-store.js').VariableMeta[]} opts.variables - The file
-   *   catalog (column order + source metadata).
-   * @param {number} opts.rowCount - Total rows (from the catalog), for progress.
-   * @param {(done: number, total: number) => void} [opts.onProgress] - Row tick.
-   * @param {(onBatch: (columns: object) => void) => Promise<void>} opts.stream
-   *   - Stream the whole file once, calling `onBatch` per batch of rows (all columns).
-   * @returns {Promise<void>}
-   */
-  async loadWide({ mode = 'replace', source, origin, importer, missingCodes, rowGroupRows = 0, variables, rowCount, onProgress, stream }) {
-    if (!Array.isArray(variables) || variables.length === 0) {
-      throw new Error('loadWide: variables (the file catalog) are required');
-    }
-    const had = this.#hasData();
-    const combine = had && mode === 'append' ? 'append' : 'replace';
-    if (combine === 'replace') await this.#pruneDeadSources();
-
-    // A row group is accumulated whole in JS before it is written, so its size IS the
-    // peak memory of this path — and a flat row count is blind to width in exactly the
-    // way a flat batch size was: 8,000 rows is 80,000 values at ten columns and 26
-    // million at 3,300. Derived from the width unless the caller insists.
-    const groupRows = rowGroupRows > 0 ? rowGroupRows : rowGroupFor(variables.length);
-
-    const seq = ++this.#sourceSeq;
-    const base = seq * ROWID_STRIDE;
-    // Starts as the OPFS file name and becomes the DuckDB reference once registered —
-    // `opfs://<name>` on the by-name route. `dropRegisteredFile` accepts either spelling,
-    // so the error path below is correct before or after the reassignment.
-    let file = `${this.#sourcePrefix}${seq}.parquet`;
-
-    const columns = variables.map((v) => ({ name: v.name, type: v.type === 'string' ? 'string' : 'numeric' }));
-    columns.push({ name: CT_ROW, type: 'numeric' });
-    // With the name, the writer streams each row group straight to OPFS instead of
-    // accumulating the whole Parquet — which is what makes this path survive on a phone.
-    const writer = await this.#duckdb.openParquetWriter(columns, { name: file });
-
-    // Accumulate the stream into row-group-sized column buffers, flush each as one
-    // Parquet row group, then reset — so peak JS memory is one row group, not the
-    // whole (potentially multi-GB uncompressed) dataset.
-    const freshAcc = () => {
-      const a = {};
-      for (const v of variables) a[v.name] = [];
-      a[CT_ROW] = [];
-      return a;
-    };
-    let acc = freshAcc();
-    let accRows = 0;
-    let rowBase = 0;
-    const flush = async () => {
-      if (accRows === 0) return;
-      const columnData = variables.map((v) => ({
-        name: v.name,
-        data: acc[v.name],
-        ...(v.type === 'string' ? {} : { type: 'DOUBLE' }),
-      }));
-      columnData.push({ name: CT_ROW, data: acc[CT_ROW], type: 'DOUBLE' });
-      writer.writeRowGroup(columnData);
-      acc = freshAcc();
-      accRows = 0;
-      // Push the encoded row group to OPFS and free the buffer. Awaited, so peak is one
-      // row group rather than the whole file — and so the write cannot race the next one.
-      await writer.drain();
-    };
-
-    try {
-      await stream((cols) => {
-        const first = variables[0].name;
-        const n = first && cols[first] ? cols[first].length : 0;
-        for (const v of variables) {
-          const src = cols[v.name];
-          const dst = acc[v.name];
-          for (let k = 0; k < n; k++) dst.push(src[k]);
-        }
-        const rowIdx = acc[CT_ROW];
-        for (let k = 0; k < n; k++) rowIdx.push(rowBase + k);
-        rowBase += n;
-        accRows += n;
-        // RETURNED, not called and dropped: the producer awaits this, which is what keeps
-        // one row group in flight instead of all of them.
-        const wait = accRows >= groupRows ? flush() : undefined;
-        onProgress?.(rowBase, rowCount);
-        return wait;
-      });
-      await flush();
-      // The reference, from the registration — `opfs://<name>` on the by-name route.
-      file = await writer.finalize(file);
-      this.#wideFiles.add(file);
-    } catch (err) {
-      // Close the writable first, or the half-written file stays locked by it.
-      try { await writer.abort?.(); } catch { /* best-effort */ }
-      try { await this.#duckdb.dropRegisteredFile(file, { removeFromOpfs: true }); } catch { /* best-effort */ }
-      throw err;
-    }
-
-    const src = {
-      wide: true,
-      file,
-      rowidBase: base,
-      meta: variables.map((m) => ({ ...m })),
-      label: source ?? null,
-      origin: origin ?? null,
-      importer: importer ?? null,
-      missingCodes: normaliseCodes(missingCodes),
-    };
-    this.#addSourceOp(combine === 'replace' ? 'load' : 'append', src);
-    await this.rederive(this.#loadReason(combine, had));
   }
 
   /** Whether any data is loaded (the log has a source op). */
@@ -1980,7 +1907,7 @@ export class DataStore {
         const created = o.src.wide
           ? await this.#restoreWideSource(o.src)
           : await this.#createSource({ variables: o.src.meta, parquet: o.src.parquet, source: o.src.label, origin: o.src.origin, importer: o.src.importer });
-        this.#addSourceOp(o.type, created, { joinKey: o.joinKey, aliases: o.aliases, joinType: o.joinType, author: o.author });
+        this.#addSourceOp(o.type, created, { joinKey: o.joinKey, aliases: o.aliases, joinType: o.joinType, author: o.author, producedBy: o.producedBy });
       } else {
         // Carry the recipe's recorded author through (#149 A6) — exportState preserves
         // it precisely so a library/recycle round-trip doesn't reassign every step to

@@ -855,60 +855,30 @@ export class ImportService {
           seen += k ? columns[k].length : 0;
           progress(seen, head.rowCount);
         };
-        // The codec decides "wide" from the FILE. The ceiling it protects — DuckDB-WASM's
-        // checkpoint, which cannot accumulate past ~600 MB and cannot spill — belongs to
-        // the DATABASE, so a run of individually-modest imports walks into it together.
-        // Three Scorecard years did exactly that (owner, 2026-11-18): every row ingested,
-        // then `Failed to create checkpoint: Out of Memory Error` — which is FATAL, so
-        // the two tables that had already loaded died with it.
-        // NOT optional-called. The first version wrote `wouldExceedTableBudget?.(…)`,
-        // the method was never forwarded through DatasetManager, and `?.` turned a
-        // missing wiring into a silent `false` — so the budget reported `loadedMiB: 0`
-        // for three imports running and the third FATAL-ed exactly as it had before the
-        // budget existed. A guard that quietly neutralises the feature it guards is
-        // worse than the crash it was meant to prevent.
-        const overBudget = !head.wide && await this.#data.wouldExceedTableBudget(head.variables, head.rowCount);
-        const wide = head.wide || overBudget;
-        // Everything the decision was made FROM, not just what it decided. Two runs were
-        // spent reasoning about `canStream` from the outside when printing it would have
-        // ended the question — a log line that reports a verdict without its inputs
-        // invites exactly that.
-        debug('import', 'route', {
-          wide,
+        // ONE call, whichever way it lands. The routing used to be decided HERE —
+        // `head.wide || overBudget`, half from the codec's view of the file and half from
+        // the host's view of what was already resident — and the four non-import routes
+        // into the engine consulted neither half. Both inputs belong to whoever owns the
+        // engine, so the decision moved there (`DataStore#load`, `chooseIngestRoute`) and
+        // this side simply streams.
+        //
+        // What is kept here is `declaredWide`: a codec that measured the file can insist,
+        // and `loadWide`'s reason for existing — the full GSS FATAL-OOMs as a table —
+        // is a property of the file the codec read, not of the engine.
+        await this.#data.load({
+          mode: fileMode,
+          source: tag,
+          variables: head.variables,
+          storageTypes: head.storageTypes,
+          rowCount: head.rowCount,
           declaredWide: head.wide,
-          overBudget,
-          loadedMiB: Math.round((this.#data.loadedTableBytes ?? 0) / 1048576),
-          estMiB: Math.round(estimateTableBytes(head.variables, head.rowCount) / 1048576),
-          canStream: this.#data.canStreamOutOfCore,
+          missingCodes: head.missingCodes,
+          onProgress: (done) => progress(done, head.rowCount),
+          // RETURN the batch promise: `drain` awaits the callback, so this is the whole
+          // backpressure chain. Dropping it would let every row group's OPFS write race,
+          // which is the bug the out-of-core path exists to avoid.
+          stream: (batch) => reader.drain((columns) => { tick(columns); return batch(columns); }),
         });
-        if (wide) {
-          await this.#data.loadWide({
-            mode: fileMode,
-            source: tag,
-            variables: head.variables,
-            rowCount: head.rowCount,
-            missingCodes: head.missingCodes,
-            onProgress: (done) => progress(done, head.rowCount),
-            // RETURN onBatch's promise: `drain` awaits the callback, so this is the whole
-            // backpressure chain for the streaming Parquet write. Dropping it would let
-            // every row group's OPFS write race, which is the bug this path exists to avoid.
-            stream: (onBatch) => reader.drain((columns) => { tick(columns); return onBatch(columns); }),
-          });
-        } else {
-          await this.#data.loadStreaming({
-            mode: fileMode,
-            source: tag,
-            missingCodes: head.missingCodes,
-            ingest: async (ctx) => {
-              // MUST await: begin() is async (it creates the DuckDB ingester); without
-              // the await, reader.drain() could deliver the first batch before the
-              // ingester exists → "batch before begin()". Desktop usually won the race;
-              // slower iPad Safari lost it (#91).
-              await ctx.begin(head.variables, head.storageTypes);
-              await reader.drain((columns) => { tick(columns); return ctx.batch(columns); });
-            },
-          });
-        }
         committed += 1;
       } catch (err) {
         debug('import', 'FAILED', { rowsIngested: seen, message: String(err?.message ?? err).slice(0, 200) });
