@@ -57,6 +57,16 @@ bottom; they are the project's memory and are not summarised away.
       we support has the fewest escape hatches, and it is the one the product is differentiated
       on. No step below is finished while it is desktop-only.
 
+      **BOTH HALVES OF THAT ARE NOW FIXED OR WERE NEVER TRUE (2026-11-19).**
+      `registerParquetFile` went by-name on every platform (9e4fc8d) and the handle route is
+      a fallback nothing normal takes, so the wide path is genuinely out of core on iOS —
+      four Scorecard years, measured on the device. And the database is in the heap on
+      *every* platform for a reason that has nothing to do with WebKit (step 1 below), so
+      there is no asymmetry left to close: the desktop is not better off. The paragraph
+      stays because the principle it states is the right one and it is why the mobile work
+      got done — but "the most constrained platform has the fewest escape hatches" was a
+      true description of a mis-diagnosis.
+
       **CONFIRMED ON THE DEVICE, 2026-11-18 (iPhone, iOS 18.7, Safari 27).** Not a lead any
       more. `registerOPFSFileName` takes a **string**; the worker calls
       `navigator.storage.getDirectory()` and opens its own sync access handle, so no handle
@@ -168,6 +178,16 @@ bottom; they are the project's memory and are not summarised away.
       blocked on a primitive that does not exist there — including the COPY-then-
       `copyFileToBuffer` shape suggested above, which is doubly dead (see below).
 
+      **"ON WEBKIT" WAS WRONG — RE-MEASURED ON CHROMIUM, 2026-11-19, same result.** The
+      conclusion holds and the reason does not: `COPY … TO 'opfs://x'` leaves the OPFS file
+      untouched and buffers 868,359 bytes under `opfs:/x` at `dataProtocol 0` on the
+      desktop too. It is the same single-slash normalisation as step 1 — the COPY *target*
+      is a write path, so the registry is consulted under a name nothing holds. Not a
+      platform gap, and the placeholder byte was never the variable (a zero-byte file
+      registers fine through `registerFileURL` + `registerOPFSFileName`, verified; it still
+      does not get written). So "do not build this" stands for everywhere, and 809c770's
+      title — *WebKit cannot WRITE to OPFS* — names the wrong culprit.
+
       **THE REAL MOBILE CEILING WAS OURS, NOT DUCKDB'S — AND IT IS NOW GONE (c16a99b,
       2026-11-18).** `loadWide` works on WebKit because it writes Parquet in **JS** with
       `createWritable` and never asks DuckDB to write anything; its limit was that
@@ -180,12 +200,47 @@ bottom; they are the project's memory and are not summarised away.
       duckdb-wasm. The PARITY REACHED and desktop-measurement paragraphs above both
       describe the app WITH this change in it.
 
-      1. **Fix the OPFS database first** (see the follow-up entry below). Most of the memory
-         branches — `isWideDataset`, cell-sized batches, `rowGroupFor`, the cumulative table
-         budget — exist because the heap is a ceiling with no spill. Fixing it does not delete
-         them, but it turns a class of FATAL into merely slow, after which several can relax
-         instead of multiplying. Do not re-tune the heuristics before this; they are compensating
-         for it.
+      1. ~~**Fix the OPFS database first**~~ — **ANSWERED 2026-11-19, and the answer is that
+         it cannot be fixed here. This step is struck from the plan; it is not blocking
+         anything any more.** Three earlier rounds blamed the size gate and died at
+         `copyFileToBuffer`. The cause is one character, measured on Chromium by
+         `core/storage-probe.js` (`opfs-path-spelling`, now a permanent case):
+
+             one slash    -> IO Error: Extension opfs.duckdb_extension.wasm is not available
+             two, three, four slashes -> all resolve to exactly `opfs:/name`
+
+         DuckDB canonicalises the scheme separator on every path it opens as a database or
+         opens for WRITING — `open({path})`, `ATTACH` and `COPY … TO` alike — while the
+         duckdb-wasm registry is only reachable under the name a file was registered with,
+         and `opfs://name` is the only spelling that reaches the web filesystem at all. So
+         the write side looks up a name nothing is registered under and silently creates a
+         heap BUFFER. `globFiles` shows both entries side by side, which is how this was
+         finally caught:
+
+             opfs://crosstab-duckdb.db   dataProtocol 3   fileSize 0         <- the registration
+             opfs:/crosstab-duckdb.db    dataProtocol 0   fileSize 1847296   <- the database
+
+         Everything tried and ruled out, so nobody repeats it: seeding a valid image
+         (fails, and would not help — the seeded registration is under the wrong spelling);
+         DETACH-then-copy-closed, the move the last round concluded with (fails, file still
+         in the registry and the copy still throws a bare `Error`); pre-registering the
+         file as protocol 3 before `open()` (registers fine, never consulted);
+         pre-registering under the resolved `opfs:/` name (DuckDB then treats `opfs` as an
+         unknown scheme); ATTACH instead of open (normalises identically — the earlier
+         "ATTACH does not normalise" reading came from a probe that ATTACHed a name with no
+         scheme in it, so no `//` to collapse). **It is an upstream fix.**
+
+         Two things are now visible rather than silent: `#warnIfNotDiskBacked` checks the
+         registry after `open()` and warns once — verified firing in the running app, naming
+         the real database — and the mechanism is written up in `core/duckdb-manager.js`
+         rather than asserted wrongly there.
+
+         **THIS INVERTS THE STEP'S OWN ADVICE.** It said "do not re-tune the heuristics
+         before this; they are compensating for it". They are not compensating for anything
+         temporary. There is no spill, on any platform, and no local change makes one — so
+         the table budget, width routing and cell-sized batches are the permanent ceiling
+         management, and step 4 can be asked whenever someone wants to ask it. The hoist
+         (2 and 3) is now the whole of the work.
       2. **Hoist typing + missing-code detection into the host.** Formats that carry real types
          (Parquet, readstat) declare them; formats that do not (CSV, Excel, NDJSON) hand over raw
          values and the host applies ONE typing rule and ONE code-detection pass. Excel and NDJSON
@@ -2859,37 +2914,19 @@ line, and an index that quietly disagrees with the entry it points at is worse t
 index — which is exactly what the building-block line was doing. They stay there because the reasoning around them is the parent entry's;
 this is the index.
 
-- **The DuckDB store has never actually been on OPFS** — found 2026-11-18 while reproducing
-  the owner's 3.1 GiB import OOM, and the code comment asserted the opposite. duckdb-wasm
-  registers an `opfs://` database only if the file already has bytes
-  (`!fromCached && handle.getSize() && registerFileHandleAsync(…)`), and our
-  `removeEntry` deletes it immediately before `open()` to "start from a clean DB" — so it
-  is always zero-length, always falls back to protocol 2 (BUFFER), and the database lives
-  in the wasm heap on every machine. `open()` does not throw, so the in-memory fallback's
-  warning never fires; the only sign is `Buffering missing file: opfs:/…` from a worker.
-  The "verified out-of-core, 1.2 GB under a 488 MB cap" the comment cited must have been
-  the OPFS **Parquet parts** path, which registers handles directly and does work.
-  **Latent, not theoretical:** there is no spill at all, so a table that outgrows the heap
-  has nowhere to page. The 67 MB Scorecard CSV was fixed by correcting column TYPES
-  (3,366 VARCHAR → 3,360 DOUBLE, confirmed 2026-11-18: same cells, same route, same
-  in-memory DB, 22 batches, no OOM), which means the next genuinely-too-big file still
-  dies. **Needs a browser, not reasoning:** both registration paths carry the size gate,
-  so nothing upstream can bootstrap a NEW OPFS database and dropping `removeEntry` alone
-  leaves a first boot buffered. Probably: seed a valid empty DB (open buffered →
-  `copyFileToBuffer` → write → reopen), then clean-start by dropping tables instead of
-  deleting the file. Mechanism is written up in `core/duckdb-manager.js`.
-
-  **2026-11-18, three probe rounds in: the seed is blocked on `copyFileToBuffer`, and it
-  is NOT a naming problem.** Every strategy (attach-copy-detach, open-buffered-path,
-  attach-with-table) reached that call with every statement before it succeeding — and
-  `globFiles` then showed DuckDB holding the file under exactly the name being passed:
-  `crosstab-probe-names.db`, `fileSize: 278529`, `dataProtocol: 0` (a memory buffer,
-  which independently confirms the database is not disk-backed). Copying that name
-  fails; copying `…db.wal` — 1 byte, closed after CHECKPOINT — **succeeds**. So the call
-  works, and what differs is the file being open and non-trivial, not what it is called.
-  The naming theory was mine and it was wrong; do not spend another round on it. If this
-  is picked up: DETACH first, check the file still appears in `globFiles`, and copy it
-  closed. *(under #98, codec interface / f27c337)*
+- ~~**The DuckDB store has never actually been on OPFS**~~ — **TRUE, and CLOSED
+  2026-11-19 as not fixable locally.** duckdb-wasm canonicalises `opfs://name` to
+  `opfs:/name` on every path it opens as a database or opens for writing, and only
+  consults its file registry under the registered spelling — so the open silently buffers
+  the database in the wasm heap, on every browser. Measured, with four slash-counts and
+  the buffered twin visible in `globFiles`; the full account, the list of five things tried
+  and ruled out, and the consequence (there is no spill anywhere, so the memory heuristics
+  are permanent rather than scaffolding) are in step 1 of "Import machinery: pull host
+  policy OUT of the codecs" in Now/near-term, and the mechanism is in
+  `core/duckdb-manager.js`. The boot now warns once instead of failing silently.
+  The `copyFileToBuffer` wall that blocked three rounds is moot — satisfying the size gate
+  would not have helped, because a seeded registration is under the spelling the open does
+  not look up. *(under #98, codec interface / f27c337)*
 - ~~**Record the accepted missing-value codes on the import op**~~ — **DONE 2026-11-18
   (9ef15d6, c3f7b3f), and the item as filed described a bug that did not exist.** There
   was no re-prompt to fix: `# use "file" via importer` is a COMMENT, `parse()` strips

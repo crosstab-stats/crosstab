@@ -54,6 +54,12 @@ export class DuckDBManager {
   /** Lazily-imported JS Parquet writer module (loaded on first wide import). */
   #parquetWriter = null;
 
+  /** Whether the opened database actually landed on OPFS. `false` on every browser
+   * today (see `#instantiate`); kept as a field rather than inferred so that the day
+   * upstream fixes the path lookup, there is one place that notices. `null` = not
+   * determined. @type {boolean|null} */
+  #diskBacked = null;
+
   /** Whether this browser can hand an OPFS `FileSystemFileHandle` to the DuckDB
    * worker via postMessage. Chrome: yes. WebKit/iOS Safari: NO — it throws
    * `DataCloneError` (handles aren't structured-cloneable to a worker there), which
@@ -397,6 +403,43 @@ export class DuckDBManager {
       }
     };
     return { addBatch, finish };
+  }
+
+  /**
+   * Say so, once, when the database did not end up on disk.
+   *
+   * The failure this guards is not an exception — `db.open()` succeeds and quietly
+   * buffers (see the long note in `#instantiate`). For a month the only evidence was one
+   * worker log line on an installed PWA, and a comment in this file asserted the
+   * opposite. A diagnostic that nobody can see is how that happens.
+   *
+   * The test is the registry, not a heuristic: DuckDB's own `globFiles` reports a
+   * `dataProtocol` per file, and a `0` (BUFFER) on the path the database resolved to
+   * means the heap. Best-effort throughout — this is a diagnostic, and a diagnostic that
+   * can break a boot is worse than no diagnostic.
+   *
+   * @param {any} db - the AsyncDuckDB, already opened
+   * @param {string} dbFile - the plain OPFS database file name
+   */
+  async #warnIfNotDiskBacked(db, dbFile) {
+    try {
+      const files = await db.globFiles('*');
+      // The spelling DuckDB resolves the database path to — one slash, not two.
+      const resolved = `opfs:/${opfsName(dbFile)}`;
+      const entry = (files ?? []).find((f) => String(f?.fileName) === resolved);
+      // BUFFER is protocol 2 when DuckDB reports a missing file it is buffering and 0
+      // once it holds one; either way, anything that is not 3 is not on disk.
+      if (entry && Number(entry.dataProtocol) !== 3) {
+        this.#diskBacked = false;
+        console.warn(
+          `[duckdb] the database is in the wasm heap, not on OPFS (${resolved} is`
+          + ` dataProtocol ${entry.dataProtocol}). Large datasets cannot spill; the table`
+          + ' budget is the only ceiling. See the note in core/duckdb-manager.js.',
+        );
+      } else if (entry) {
+        this.#diskBacked = true;
+      }
+    } catch { /* a diagnostic must never be the thing that breaks the boot */ }
   }
 
   /**
@@ -754,42 +797,68 @@ export class DuckDBManager {
     // carried-over DuckDB file would only orphan tables and grow unbounded.
     // (`ATTACH 'opfs://…'` does NOT page — it must be the opened database.)
     //
-    // ## THIS DOES NOT CURRENTLY WORK, and this comment used to claim it did
+    // ## THIS DOES NOT WORK, AND IT CANNOT BE MADE TO FROM HERE
     //
-    // The database is in the wasm heap on every machine, every session. Read in
-    // duckdb-wasm 1.33.1-dev56.0: the worker's OPEN handler does call
-    // `prepareDBFileHandle(path, 3)` for an `opfs://` path, but that registers the file
-    // only if it already has bytes —
+    // The database is in the wasm heap on every machine, every session, and the cause is
+    // one character. **Measured 2026-11-19 on Chromium** by `core/storage-probe.js`
+    // (`opfs-path-spelling`), after three earlier rounds chased the wrong thing:
     //
-    //     !fromCached && handle.getSize() && await this.registerFileHandleAsync(…)
+    // DuckDB canonicalises the scheme separator on every path it opens as a database or
+    // opens for WRITING — `open({path})`, `ATTACH`, and `COPY … TO` alike. One, two,
+    // three and four slashes all resolve to exactly `opfs:/name`. The duckdb-wasm file
+    // registry is only reachable under the name a file was registered with, and
+    // `opfs://name` is the only spelling that reaches the web filesystem at all —
+    // register and open `opfs:/name` and DuckDB decides `opfs` is an unknown filesystem
+    // scheme and tries to autoload `opfs.duckdb_extension.wasm`, which does not exist.
     //
-    // — and `prepareFileHandles` creates a missing file with `create:true`, i.e. at zero
-    // length. So the `&&` short-circuits, nothing is registered, `getDefaultDataProtocol`
-    // returns 2 (BUFFER), and DuckDB logs `Buffering missing file: opfs:/…`. The
-    // `removeEntry` call below guarantees the zero length by deleting the file first, so
-    // "start from a clean DB" is what defeats the disk backing. `registerOPFSFileName` is
-    // no escape: `prepareFileHandle` carries the identical gate.
+    // So the write side looks up a name nothing is registered under, finds nothing, and
+    // creates a BUFFER entry in the wasm heap. `globFiles` shows both, side by side:
     //
-    // `db.open()` does NOT throw, so the catch below never fires and nothing warns. The
-    // only outward sign is that console line, in a worker, on an installed PWA.
+    //     opfs://crosstab-duckdb.db   dataProtocol 3   fileSize 0         <- the registration
+    //     opfs:/crosstab-duckdb.db    dataProtocol 0   fileSize 1847296   <- the database
     //
-    // The "verified out-of-core — a 1.2 GB table queried under a 488 MB cap" this comment
-    // used to cite cannot have been this path. It must have been the OPFS **Parquet
-    // parts** path further down, which registers handles directly and does work.
+    // `db.open()` does not throw, so the catch below never fires. The only outward sign
+    // was a `Buffering missing file: opfs:/…` line from a worker — note the single slash,
+    // which was the clue sitting in plain sight for a month.
     //
-    // CONSEQUENCE, measured 2026-11-18: there is no spill, so a table that outgrows the
-    // heap dies with "no temporary directory is specified" and no safety valve. A 67 MB
-    // CSV OOMed at 3.1 GiB and was fixed by correcting its column TYPES (3,366 VARCHAR →
-    // 3,360 DOUBLE), not by storage — the database was in memory for the successful
-    // import too. Which means this is latent, not theoretical: the next file that is
-    // genuinely too big has nowhere to page.
+    // ## FOUR findings, one cause
     //
-    // NOT FIXED HERE because the fix needs measuring in a browser, not reasoning: both
-    // registration paths carry the size gate, so nothing in duckdb-wasm can bootstrap a
-    // NEW OPFS database, and simply dropping `removeEntry` leaves a first-ever boot still
-    // buffered. It likely needs a valid empty DB seeded into OPFS first (open buffered,
-    // `copyFileToBuffer`, write, reopen) and a clean start done by dropping tables rather
-    // than deleting the file. See TODO, open follow-ups.
+    // This retires three other conclusions, which were all this:
+    //
+    //   * **The size gate is not the obstacle.** `prepareDBFileHandle` does skip
+    //     registration for a zero-length file (`!fromCached && handle.getSize() && …`), and
+    //     that is real, but satisfying it changes nothing: a registration under
+    //     `opfs://name` is not what the open looks up. The gate can also be defeated
+    //     outright — `registerFileURL(ref, ref, 3, true)` sets the protocol and
+    //     `registerOPFSFileName(ref)` stashes the sync handle via `_preparedHandles`
+    //     before the gate, both string-only, both verified on a zero-byte file. It does
+    //     not help here.
+    //   * **Seeding cannot help either**, so the `copyFileToBuffer` wall that blocked
+    //     three rounds no longer needs climbing. (DETACH-first-then-copy, the move those
+    //     rounds concluded with, was tried on 2026-11-19 and also fails — the file is
+    //     still in the registry, closed, and the copy still throws a bare `Error`.)
+    //   * **"WebKit cannot write to OPFS" was mis-attributed.** `COPY … TO 'opfs://x'`
+    //     leaves the file untouched and buffers 868,359 bytes under `opfs:/x` on
+    //     **Chromium** too. It is not a platform gap; it is this gap, on the COPY target
+    //     path. iOS is not worse off than the desktop here — both are in the heap.
+    //
+    // Reads are the one thing unaffected, which is why they are the one thing that works:
+    // `read_parquet('opfs://x')` resolves against the registry under the registered name,
+    // which is what the wide-dataset path is built on and why it genuinely is out of core.
+    //
+    // ## CONSEQUENCE
+    //
+    // There is no spill, on any platform, and no local change makes one. A table that
+    // outgrows the heap dies with "no temporary directory is specified". The 67 MB
+    // Scorecard CSV that OOMed at 3.1 GiB was fixed by correcting column TYPES (3,366
+    // VARCHAR → 3,360 DOUBLE), not by storage. So the memory heuristics — the table
+    // budget, width routing, cell-sized batches — are not scaffolding waiting for this
+    // fix. They are the ceiling management, permanently, until duckdb-wasm looks the
+    // database path up under the name it was registered with.
+    //
+    // The open is still ATTEMPTED, because the day that lands we get disk backing for
+    // free and the cost today is two empty OPFS files. What is NOT acceptable is failing
+    // silently, so it now checks and says so once. See `#warnIfNotDiskBacked`.
     try {
       const OPFS_DB = 'crosstab-duckdb.db';
       try {
@@ -800,6 +869,7 @@ export class DuckDBManager {
         /* OPFS unavailable — db.open below will fall back or throw, handled next */
       }
       await db.open({ path: `opfs://${OPFS_DB}`, accessMode: duckdb.DuckDBAccessMode.READ_WRITE });
+      await this.#warnIfNotDiskBacked(db, OPFS_DB);
     } catch (err) {
       // OPFS unavailable (private mode, quota, older browser): stay in-memory.
       console.warn('[duckdb] OPFS open failed; using in-memory storage (datasets capped by the wasm heap)', err);
