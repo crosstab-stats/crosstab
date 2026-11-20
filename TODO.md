@@ -168,13 +168,17 @@ bottom; they are the project's memory and are not summarised away.
       blocked on a primitive that does not exist there — including the COPY-then-
       `copyFileToBuffer` shape suggested above, which is doubly dead (see below).
 
-      **THE REAL MOBILE CEILING IS OURS, NOT DUCKDB'S.** `loadWide` already works on
-      WebKit because it writes Parquet in **JS** with `createWritable` and never asks
-      DuckDB to write anything. Its limit is that `openParquetWriter` accumulates the whole
-      file in a `ByteWriter` and only then calls `registerParquetFile` — so peak memory is
-      one row group PLUS the entire encoded Parquet. Streaming those bytes to the OPFS
-      writable as row groups complete would remove the last mobile ceiling, needs nothing
-      from duckdb-wasm, and can be tested in node. That is the thing to build.
+      **THE REAL MOBILE CEILING WAS OURS, NOT DUCKDB'S — AND IT IS NOW GONE (c16a99b,
+      2026-11-18).** `loadWide` works on WebKit because it writes Parquet in **JS** with
+      `createWritable` and never asks DuckDB to write anything; its limit was that
+      `openParquetWriter` accumulated the whole file in a `ByteWriter` before calling
+      `registerParquetFile`, so peak memory was one row group PLUS the entire encoded
+      Parquet. Each row group is now pushed to the OPFS writable as it is encoded and the
+      buffer released. Measured against the real hyparquet-writer at the owner's geometry
+      (3,379 x 6,272, row groups of 1,183): peak buffer 79.8 MiB buffered vs 14.8 MiB
+      streamed over 7 chunks, output byte-for-byte identical. Nothing was needed from
+      duckdb-wasm. The PARITY REACHED and desktop-measurement paragraphs above both
+      describe the app WITH this change in it.
 
       1. **Fix the OPFS database first** (see the follow-up entry below). Most of the memory
          branches — `isWideDataset`, cell-sized batches, `rowGroupFor`, the cumulative table
@@ -2886,12 +2890,18 @@ this is the index.
   The naming theory was mine and it was wrong; do not spend another round on it. If this
   is picked up: DETACH first, check the file still appears in `globFiles`, and copy it
   closed. *(under #98, codec interface / f27c337)*
-- **Record the accepted missing-value codes on the import op** so an exported script
-  re-applies them instead of re-asking. Op-log replay inside a project is unaffected (it
-  restores the stored parquet and never re-runs the codec); it is the `.ctscript`/`.do`
-  path that would re-prompt. The provenance channel already exists — `loadDataset` →
-  `src` → `op.src`, same as `origin`/`importer` (147e53a) — plus script-export and the
-  syntax. *(under #98 / 643c30e)*
+- ~~**Record the accepted missing-value codes on the import op**~~ — **DONE 2026-11-18
+  (9ef15d6, c3f7b3f), and the item as filed described a bug that did not exist.** There
+  was no re-prompt to fix: `# use "file" via importer` is a COMMENT, `parse()` strips
+  leading-# lines before `parseLine` sees them, and nothing in CrossTab re-executes an
+  import from text. The real gap was FIDELITY in the R/Stata export, which does emit a
+  runnable open command — `read.csv(…)` with no `na.strings`, so the codes were silently
+  dropped. Now carried the whole way: codec proposes -> `begin(opts.missingCodes)` ->
+  `op.src` -> syntax `missing "NA", "PS"` -> `na.strings = c("NA", "PS")` in R and
+  `destring` in Stata, verified end to end against the real 67 MB file. c3f7b3f then
+  fixed the hazard this exposed — four stacked Scorecard years asked the identical
+  question four times, so the answer is now given once per import rather than once per
+  file. *(under #98 / 643c30e)*
 - **`isWideDataset` ignores width, and width is what costs** — it routes on cells
   (`ceil(cols*rows/4e6) > 8`), so the 3,379 × 6,272 Scorecard file was "not wide" at 21.2M
   cells and built a plain table. e85f8e4 measured width-routing and rejected it, but on
