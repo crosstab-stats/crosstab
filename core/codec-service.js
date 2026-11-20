@@ -72,6 +72,63 @@ const CATALOG_SINK = Object.freeze({
   missingCodes: async () => [],
 });
 
+/**
+ * Both catalogue shapes, as one list of sources.
+ *
+ * A codec with a single table may answer `{variables, rowCount}` — which is what CSV,
+ * JSON Lines, Parquet and readstat do, and what they should keep doing: a format with
+ * nothing to choose between should not have to invent a source id to say so. One that
+ * holds several answers `{sources: [...]}`.
+ *
+ * Normalising HERE rather than in each codec is the point: every codec that gained a
+ * catalogue before this existed keeps working untouched, and the host downstream has
+ * exactly one shape to reason about.
+ *
+ * @param {any} out - whatever the codec returned
+ * @param {string} fileName - names the implicit single source, so the picker's heading
+ *   reads as the file rather than as an invented word like "default"
+ */
+function normaliseCatalog(out, fileName) {
+  const clean = (list) => (Array.isArray(list) ? list : [])
+    .filter((v) => v && typeof v.name === 'string')
+    .map((v) => ({ name: v.name, ...(v.label ? { label: String(v.label) } : {}) }));
+
+  if (Array.isArray(out?.sources)) {
+    return out.sources
+      .map((src, i) => ({
+        // An id is what a selection is keyed by and what the read is told to open, so it
+        // must exist even if the codec forgot one.
+        id: String(src?.id ?? src?.label ?? `source-${i + 1}`),
+        label: String(src?.label ?? src?.id ?? `Source ${i + 1}`),
+        rowCount: Number(src?.rowCount ?? -1),
+        variables: clean(src?.variables),
+      }))
+      .filter((src) => src.variables.length);
+  }
+  const variables = clean(out?.variables);
+  if (!variables.length) return [];
+  return [{ id: '', label: fileName, rowCount: Number(out?.rowCount ?? -1), variables }];
+}
+
+/**
+ * The variable list for a codec that holds ONE table, out of whatever plan the host made.
+ *
+ * A single-source catalogue is keyed by the empty string (see `normaliseCatalog`), so the
+ * plan for a flat format has exactly one entry and this is its value. For a multi-source
+ * plan there is no single answer and the codec is expected to read `plan.sources`
+ * instead — returning the first source's list would silently narrow a workbook's second
+ * sheet to the first sheet's columns, which is the sort of help nobody wants.
+ *
+ * @param {?{sources: Object<string, ?string[]>}} plan
+ * @returns {?string[]} names, or null for "everything"
+ */
+function flatSelect(plan) {
+  const entries = Object.entries(plan?.sources ?? {});
+  if (entries.length !== 1) return null;
+  const [id, names] = entries[0];
+  return id === '' ? names ?? null : null;
+}
+
 export class CodecService {
   /** @type {import('./import-service.js').ImportService} */
   #importers;
@@ -117,10 +174,11 @@ export class CodecService {
    * @param {string[]} spec.extensions
    * @param {string} spec.pluginId - The owning plugin's id (for loader.invoke).
    * @param {string} [spec.read] - Name of the plugin's read function.
-   * @param {string} [spec.catalog] - Name of a function returning `{variables}` — the
-   *   variable list WITHOUT the data — so the host can offer "choose which variables to
-   *   import". Optional: a format that cannot name its columns without reading everything
-   *   simply does not declare it, and the host says so rather than pretending.
+   * @param {string} [spec.catalog] - Name of a function returning the TABLE OF CONTENTS
+   *   without the data, so the host can offer "choose which variables to import".
+   *   Optional: a format that cannot name its columns without reading everything simply
+   *   does not declare it, and the host says so rather than pretending. See
+   *   {@link CodecService##runCatalog} for the shape and why it is a list of sources.
    * @param {string} [spec.write] - Name of the plugin's write function.
    * @param {number} [spec.order]
    * @param {boolean} [spec.multiple]
@@ -220,7 +278,7 @@ export class CodecService {
    * memory is one batch). Decoupling producer from consumer is what lets the host
    * pick `loadStreaming` vs `loadWide` *after* seeing the catalog's `wide` hint.
    */
-  #startRead(spec, file, { select = null } = {}) {
+  #startRead(spec, file, { plan = null } = {}) {
     const queue = [];
     let notify = null;
     let ended = false;
@@ -297,10 +355,20 @@ export class CodecService {
     // report. This is the same shape as the begin()/batch() race in #91, where desktop
     // won it and iPad Safari did not.
     Promise.resolve()
-      // `select` rides on the same `info` argument as `name`, which is the channel that
-      // already existed. A codec that ignores it imports everything, which is the
-      // behaviour every codec had before there was a selection to ignore.
-      .then(() => this.#loader.invoke(spec.pluginId, spec.read, [{ name: file.name, select }]))
+      // The import plan rides on the same `info` argument as `name`, which is the channel
+      // that already existed. A codec that ignores it imports everything, which is the
+      // behaviour every codec had before there was anything to ignore.
+      //
+      // Two shapes, because most formats hold one table and should not have to care that
+      // some hold several: `select` is the variable list for a single-source format, and
+      // `plan.sources` is the per-source map for a multi-source one. Derived here rather
+      // than in each codec — a flat codec never sees a source id, and the Excel codec
+      // never sees a bare array.
+      .then(() => this.#loader.invoke(spec.pluginId, spec.read, [{
+        name: file.name,
+        select: flatSelect(plan),
+        plan: plan ?? null,
+      }]))
       .then(() => { ended = true; debug('codec', 'read finished', { batches: seenBatches }); if (!head) headReject(new Error('codec read produced no variables')); })
       // The failure the user is about to read off the results pane, with the count of
       // batches that made it through — which is how far in it got.
@@ -324,16 +392,35 @@ export class CodecService {
   }
 
   /**
-   * Ask a codec to name its variables without reading the data.
+   * Ask a codec for its table of contents, without the data.
    *
    * ## Why this is a separate verb and not a flag on `read`
    *
-   * The host has to put a dialog between "which variables are there" and "read these" —
-   * so the two cannot be one call. It is also the whole point that this is CHEAP: a
-   * Parquet footer, a CSV header line, an SPSS header block. A codec that cannot answer
-   * cheaply should not declare `catalog` at all rather than answer expensively, because
-   * the host's offer to the user ("choose which variables to import") is a promise that
-   * choosing costs less than importing.
+   * The host has to put a dialog between "what is in here" and "read this" — so the two
+   * cannot be one call. It is also the whole point that this is CHEAP: a Parquet footer, a
+   * CSV header line, an SPSS header block. A codec that cannot answer cheaply should not
+   * declare `catalog` at all rather than answer expensively, because the host's offer to
+   * the user is a promise that choosing costs less than importing.
+   *
+   * ## Why a LIST of sources rather than a list of variables
+   *
+   * Because the host cannot know whether a format holds one table or several, and that is
+   * not a thing it should try to guess. A workbook has sheets; a `.RData` has named
+   * objects; a SQLite or Access file has tables; a zip of CSVs has members. The codec is
+   * the only thing that knows, so it says — and a flat format answers with one source,
+   * which it may do by returning the older `{variables}` shape and letting this wrap it.
+   *
+   * That also moved a dialog out of plugin code. The Excel codec used to ask "which
+   * sheets?" itself, mid-read, AFTER the host had already asked which variables — so a
+   * multi-sheet import produced two dialogs from two owners in an order nobody designed,
+   * and the variables on offer were a guess at the first sheet's. One catalogue answers
+   * both questions before the read starts. (A codec DECIDING whether to ask, and what to
+   * show, was always right and still is; what was wrong was two deciders and no sequence.)
+   *
+   * Each selected source becomes its own dataset, because sheets are heterogeneous —
+   * pooling or row-stacking them would be wrong, and a keyed join is Merge's deliberate
+   * job. So "ABC from sheet 1 and DEF from sheet 2" means two datasets, each narrowed,
+   * with their own honest row counts.
    *
    * Runs in a `read` session, so the codec has `size`, `read`, `sourceFile` and
    * `loadAsset` — but no `begin`/`batch`/`missingCodes`, which `need('read')` would allow
@@ -344,20 +431,20 @@ export class CodecService {
    *
    * @param {object} spec
    * @param {File} file
-   * @returns {Promise<{variables: Array<{name: string, label?: string, type?: string}>,
-   *                    rowCount?: number}>}
+   * @returns {Promise<{sources: Array<{id: string, label: string, rowCount: number,
+   *   variables: Array<{name: string, label?: string}>}>}>}
    */
   async #runCatalog(spec, file) {
     this.#session = { kind: 'read', file, pluginId: spec.pluginId, sink: CATALOG_SINK };
     try {
       const out = await this.#loader.invoke(spec.pluginId, spec.catalog, [{ name: file.name }]);
-      const variables = Array.isArray(out?.variables) ? out.variables : [];
+      const sources = normaliseCatalog(out, file.name);
       debug('codec', 'catalog', {
         codec: spec.pluginId,
-        columns: variables.length,
-        rows: Number(out?.rowCount ?? -1),
+        sources: sources.length,
+        columns: sources.reduce((n, src) => n + src.variables.length, 0),
       });
-      return { variables, rowCount: Number(out?.rowCount ?? -1) };
+      return { sources };
     } finally {
       this.#session = null;
     }

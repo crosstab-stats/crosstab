@@ -120,49 +120,92 @@ export const manifest = {
  * The alternative is holding every cell to decide types from, which is the thing being
  * fixed; a second inflate costs CPU, and CPU is not what runs out.
  */
-export async function readXlsx(app, { name, select } = {}) {
+export async function readXlsx(app, { name, plan } = {}) {
   const size = await app.codec.size();
   const bytes = await readAll(app, size);
 
   const ooxml = await openStreaming(app, bytes);
-  if (ooxml) return readStreaming(app, ooxml, name, select);
-  return readWithSheetJs(app, bytes, name, select);
+  if (ooxml) return readStreaming(app, ooxml, name, plan);
+  return readWithSheetJs(app, bytes, name, plan);
 }
 
 /**
- * The variable list without the data: the header row of the first sheet.
+ * The table of contents: one source per sheet, each with its own header row.
  *
- * ## Why the FIRST sheet, when the import may be told to use another
+ * ## What this replaced, and why it is better than a guess
  *
- * The sheet picker comes later — the host asks "which variables" before the read starts,
- * and the read is where the sheet choice happens. Offering the first sheet's header is
- * therefore a guess, and it is the right one for the case this exists for: the primary
- * sheet IS the data sheet in a workbook used as a data file, and the extra tabs are a
- * codebook or a summary. A selection made here is matched by NAME during the read
- * (`ingestTable` ignores names a file does not have), so choosing from sheet 1 and then
- * importing sheet 2 narrows to whatever the two have in common rather than failing — and
- * the extra sheets, which become their own datasets, are never narrowed at all.
+ * The first version offered the FIRST sheet's header and said so as a known rough edge:
+ * the sheet picker came later, inside the read, so a selection made here was matched by
+ * name against whatever sheet was then chosen. Pick from sheet 1, import sheet 2, and you
+ * got the intersection. Declaring every sheet removes the guess entirely — and it removed
+ * this codec's own dialog with it, because the host can now ask "which sheets, and which
+ * variables in each" in one go, before the read.
  *
- * That is a real rough edge rather than a hidden one. Doing better means asking for the
- * sheet before asking for the variables, which is two dialogs before a single byte of
- * data is read, for a case nobody has reported.
+ * Each sheet the user picks from becomes its own dataset. That is the rule this codec has
+ * always followed (workbook tabs are usually heterogeneous — data, codebook, summary — so
+ * pooling them would be wrong and a keyed join is Merge's job); what is new is that each
+ * one can be narrowed.
  *
  * ## Cost
  *
- * Still reads the whole file, because an .xlsx is a zip and the central directory is at
- * the end of it; what it does NOT do is scan the sheet. `streamSheetRows` stops at the
- * first non-blank row. For .xls/.xlsb there is no streaming form at all and SheetJS
- * parses the workbook — acceptable because those formats cap at 65,536 rows, so the file
- * that would make this expensive cannot exist.
+ * It reads the whole file, because an .xlsx is a zip and the central directory is at the
+ * end of it. What it does NOT do is scan the sheets: `firstRowOf` stops the inflate at the
+ * header row. That early exit had to be added to `core/xlsx-stream.js` for this — without
+ * it, listing a five-sheet workbook inflated all five in full, which would make choosing
+ * cost more than importing and break the promise the offer makes.
+ *
+ * .xls/.xlsb have no streaming form at all, so SheetJS parses the workbook. Acceptable
+ * because those formats cap at 65,536 rows: the file that would make this expensive
+ * cannot exist.
  */
 export async function catalogXlsx(app, _info) {
   const size = await app.codec.size();
   const bytes = await readAll(app, size);
   const ooxml = await openStreaming(app, bytes);
-  const header = ooxml
-    ? await firstRowOf(ooxml, ooxml.sheets[0])
-    : await firstRowWithSheetJs(app, bytes);
-  return { variables: tableVariableNames(header).map((nm) => ({ name: nm })) };
+  if (!ooxml) return { sources: await sheetJsSources(app, bytes) };
+
+  const sources = [];
+  for (const sheet of ooxml.sheets) {
+    // eslint-disable-next-line no-await-in-loop -- one header row per sheet, sequential
+    const dim = await ooxml.mod.readSheetDimension(sheet.entry);
+    // eslint-disable-next-line no-await-in-loop
+    const header = await firstRowOf(ooxml, sheet);
+    const names = tableVariableNames(padNames(header, dim?.cols ?? header.length));
+    if (!names.length) continue; // an empty tab is not a source
+    sources.push({
+      id: sheet.name,
+      label: sheet.name,
+      // The count the picker shows beside each heading, which is what tells a data sheet
+      // from a codebook at a glance. `readSheetDimension` reads the sheet's own
+      // `<dimension>` record, so it costs nothing; -1 when the file omits it.
+      //
+      // NOT `rows - 1`: its contract already EXCLUDES the header, and subtracting again
+      // reported 1 row for a two-row sheet. Caught by the agreement test, which is the
+      // kind of off-by-one that otherwise just looks like a slightly wrong label.
+      rowCount: dim ? Math.max(0, dim.rows) : -1,
+      variables: names.map((nm) => ({ name: nm })),
+    });
+  }
+  return { sources };
+}
+
+/** The same, for a legacy workbook: SheetJS, every sheet, first row of each. */
+async function sheetJsSources(app, bytes) {
+  const XLSX = await importAsset(await app.codec.loadAsset('xlsx'));
+  const wb = XLSX.read(bytes, { type: 'array', cellDates: true });
+  const out = [];
+  for (const sn of wb.SheetNames || []) {
+    const aoa = sheetAoa(XLSX, wb.Sheets[sn]);
+    const names = tableVariableNames(padNames(aoa[0] ?? [], aoaWidth(aoa)));
+    if (!names.length) continue;
+    out.push({
+      id: sn,
+      label: sn,
+      rowCount: Math.max(0, aoa.length - 1),
+      variables: names.map((nm) => ({ name: nm })),
+    });
+  }
+  return out;
 }
 
 /** The first non-blank row of a sheet, and nothing after it. */
@@ -173,13 +216,12 @@ async function firstRowOf(ooxml, sheet) {
     sharedStrings: ooxml.sharedStrings,
     dateStyles: ooxml.dateStyles,
     onRow: (values) => {
-      if (header !== null || blankRow(values)) return undefined;
+      if (blankRow(values)) return undefined; // leading blanks are not the header
       header = values;
-      // There is no "stop" in the row callback, so the rest of the sheet is skipped by
-      // the guard above rather than by not reading it. A header is row 1 in every real
-      // file; paying for the scan of a sheet whose header is row 1 would be silly, and
-      // this is the catalog call, where cheap is the whole promise.
-      return undefined;
+      // `false` STOPS the scan. Without it this inflated the whole sheet to read one row
+      // of it — and a five-sheet workbook inflated five sheets in full to list them,
+      // which is the opposite of what offering the choice promises.
+      return false;
     },
   });
   return header ?? [];
@@ -251,22 +293,12 @@ async function eachDataRow(ooxml, sheet, onRow) {
 }
 
 /** Read an .xlsx by streaming it. */
-async function readStreaming(app, ooxml, fileName, select = null) {
-  const items = [];
-  for (const sh of ooxml.sheets) {
-    // eslint-disable-next-line no-await-in-loop -- a few tabs, a few hundred bytes each.
-    const dim = await ooxml.mod.readSheetDimension(sh.entry);
-    items.push({
-      value: sh.name,
-      label: dim ? `${sh.name}  (${dim.rows.toLocaleString()} rows × ${dim.cols} cols)` : sh.name,
-    });
-  }
-  const chosen = await chooseSheets(app, items, fileName);
-  if (chosen == null) throw new Error('Excel import cancelled');
-  if (!chosen.length) throw new Error('Excel: no sheets selected');
-
+async function readStreaming(app, ooxml, fileName, plan = null) {
+  const names = ooxml.sheets.map((sh) => sh.name);
+  const chosen = await sheetsToRead(app, names, plan, fileName);
   const byName = new Map(ooxml.sheets.map((s) => [s.name, s]));
   const primary = byName.get(chosen[0]);
+  const selectFor = (sheet) => plan?.sources?.[sheet] ?? null;
 
   // The primary sheet goes through the shared ingest, which owns the two passes, the
   // typing, the missing-code ask, the naming, the cell-sized batching and the
@@ -278,7 +310,7 @@ async function readStreaming(app, ooxml, fileName, select = null) {
   // whatever `String(date)` says in the current locale (`toText`).
   let headerRow = [];
   const { missingCodes: codes } = await ingestTable(app, {
-    select,
+    select: selectFor(chosen[0]),
     numeric: EXCEL_NUMERIC,
     toText: cellToString,
     // Called after pass 1, with the width the data actually reached. A sheet whose rows
@@ -300,8 +332,11 @@ async function readStreaming(app, ooxml, fileName, select = null) {
     if (!app.data || typeof app.data.create !== 'function') {
       throw new Error('Excel: cannot create extra sheet datasets (app.data.create unavailable)');
     }
+    // Its OWN selection, not the primary's. "ABC from sheet 1 and DEF from sheet 2" is
+    // two datasets, each narrowed to what was ticked under its own heading — which is why
+    // the catalogue declares a source per sheet rather than one list of names.
     // eslint-disable-next-line no-await-in-loop -- sequential, to avoid racing the engine.
-    const built = await collectSheet(ooxml, sheet, codes);
+    const built = await collectSheet(ooxml, sheet, codes, selectFor(nm));
     if (!built.variables.length) continue;
     // eslint-disable-next-line no-await-in-loop
     await app.data.create({ name: nm, variables: built.variables, columns: built.columns, activate: false });
@@ -331,33 +366,41 @@ function buildSchema(headerRow, width, decided) {
 
 /** A whole sheet as columns, for the `app.data.create` path (extra sheets). Two passes,
  * same as the primary, but the result is retained rather than emitted. */
-async function collectSheet(ooxml, sheet, codes) {
+async function collectSheet(ooxml, sheet, codes, select = null) {
   const scan = createTypeScan({ numeric: EXCEL_NUMERIC });
   const headerRow = await eachDataRow(ooxml, sheet, (v) => scan.observeRow(v));
   const decided = scan.decide(codes);
   const width = Math.max(headerRow.length, decided.isNumeric.length);
   const schema = buildSchema(headerRow, width, decided);
+  // This sheet's own selection, applied to this sheet's own columns.
+  const keep = select == null
+    ? schema.variables.map((_v, c) => c)
+    : schema.variables.map((v, c) => (select.includes(v.name) ? c : -1)).filter((c) => c >= 0);
+  if (!keep.length) return { variables: [], storageTypes: {}, columns: {} };
 
-  const raw = schema.variables.map(() => []);
+  const raw = keep.map(() => []);
   await eachDataRow(ooxml, sheet, (values) => {
-    for (let c = 0; c < schema.variables.length; c++) {
-      const cell = values[c];
-      raw[c].push(cell === undefined || cell === '' ? null : cell ?? null);
+    for (let k = 0; k < keep.length; k++) {
+      const cell = values[keep[k]];
+      raw[k].push(cell === undefined || cell === '' ? null : cell ?? null);
     }
   });
 
+  const variables = keep.map((c) => schema.variables[c]);
+  const storageTypes = {};
   const columns = {};
-  for (let c = 0; c < schema.variables.length; c++) {
-    const nm = schema.variables[c].name;
-    if (schema.storageTypes[nm] === 'numeric') {
-      const a = new Float64Array(raw[c].length);
-      for (let i = 0; i < a.length; i++) a[i] = decided.isMissing(raw[c][i]) ? NaN : Number(raw[c][i]);
+  for (let k = 0; k < keep.length; k++) {
+    const nm = variables[k].name;
+    storageTypes[nm] = schema.storageTypes[nm];
+    if (storageTypes[nm] === 'numeric') {
+      const a = new Float64Array(raw[k].length);
+      for (let i = 0; i < a.length; i++) a[i] = decided.isMissing(raw[k][i]) ? NaN : Number(raw[k][i]);
       columns[nm] = a;
     } else {
-      columns[nm] = raw[c].map((v) => (decided.isMissing(v) ? null : cellToString(v)));
+      columns[nm] = raw[k].map((v) => (decided.isMissing(v) ? null : cellToString(v)));
     }
   }
-  return { variables: schema.variables, storageTypes: schema.storageTypes, columns };
+  return { variables, storageTypes, columns };
 }
 
 // --- read: the SheetJS path (.xls, .xlsb) ------------------------------------
@@ -365,7 +408,7 @@ async function collectSheet(ooxml, sheet, codes) {
 /** Read a legacy workbook with SheetJS: parse the whole thing, pivot to columns, emit.
  * Memory is proportional to the cell count — which is why this is no longer the path an
  * .xlsx takes, and is acceptable for the formats that have no other. */
-async function readWithSheetJs(app, bytes, name, select = null) {
+async function readWithSheetJs(app, bytes, name, plan = null) {
   const XLSX = await importAsset(await app.codec.loadAsset('xlsx'));
   // cellDates → date cells become JS Date (carried as ISO text below). Don't parse
   // formulas' cached errors into throws; SheetJS yields them as strings.
@@ -374,14 +417,8 @@ async function readWithSheetJs(app, bytes, name, select = null) {
   const sheetNames = wb.SheetNames || [];
   if (!sheetNames.length) throw new Error('Excel: the workbook has no sheets');
 
-  const items = sheetNames.map((sn) => {
-    const { rows, cols } = sheetDims(XLSX, wb.Sheets[sn]);
-    return { value: sn, label: `${sn}  (${rows.toLocaleString()} rows × ${cols} cols)` };
-  });
-  const chosen = await chooseSheets(app, items, name);
-  if (chosen == null) throw new Error('Excel import cancelled');
-  if (!chosen.length) throw new Error('Excel: no sheets selected');
-
+  const chosen = await sheetsToRead(app, sheetNames, plan, name);
+  const selectFor = (sheet) => plan?.sources?.[sheet] ?? null;
   const aoas = chosen.map((sn) => sheetAoa(XLSX, wb.Sheets[sn]));
   // The primary is the first chosen sheet that HAS columns, not simply the first chosen
   // one — an empty tab selected first should not become the dataset. (Preserved
@@ -396,7 +433,7 @@ async function readWithSheetJs(app, bytes, name, select = null) {
   // from the delimited reader on the same data.
   const primaryAoa = aoas[at];
   const { missingCodes: codes } = await ingestTable(app, {
-    select,
+    select: selectFor(chosen[at]),
     numeric: EXCEL_NUMERIC,
     toText: cellToString,
     header: (w) => padNames(primaryAoa[0] || [], Math.max(w, aoaWidth(primaryAoa))),
@@ -415,7 +452,10 @@ async function readWithSheetJs(app, bytes, name, select = null) {
   // within it.
   for (let i = 0; i < aoas.length; i++) {
     if (i === at) continue;
-    const b = { sheet: chosen[i], ...buildColumns(aoas[i], scanAoa(aoas[i]).decide(codes)) };
+    const b = {
+      sheet: chosen[i],
+      ...buildColumns(aoas[i], scanAoa(aoas[i]).decide(codes), selectFor(chosen[i])),
+    };
     if (!b.variables.length) continue;
     if (!app.data || typeof app.data.create !== 'function') {
       throw new Error('Excel: cannot create extra sheet datasets (app.data.create unavailable)');
@@ -438,21 +478,56 @@ function aoaWidth(aoa) {
   return (aoa ?? []).reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
 }
 
-/** Choose which sheet(s) to import. One sheet → use it. Several → a multi-select
- * checklist (first sheet pre-checked; summary/codebook sheets can be unticked),
- * falling back to the first sheet if the UI service isn't available here. Returns
- * the chosen sheet names, `[]` if none picked, or `null` if cancelled. */
-async function chooseSheets(app, items, fileName) {
-  if (items.length === 1) return [items[0].value];
-  if (!app.ui || typeof app.ui.selectFromList !== 'function') return [items[0].value];
-  return app.ui.selectFromList({
-    title: 'Choose sheets to import',
-    hint: `“${fileName || 'Workbook'}” has ${items.length} sheets. Each selected sheet becomes its own dataset — skip summary/codebook sheets you don’t need.`,
-    items,
-    multiple: true,
-    okLabel: 'Import',
-    selected: [items[0].value], // first sheet pre-checked
-  });
+/**
+ * Which sheets this read covers.
+ *
+ * ## The dialog that used to live here
+ *
+ * This codec used to put up its own sheet picker, mid-read, via `app.ui.selectFromList`.
+ * Deciding WHETHER to ask and WHAT to show was always right — nothing above a codec can
+ * know that a workbook has tabs while a CSV does not. What was wrong was that the host
+ * had ALREADY asked which variables to import by then, from a guess at the first sheet's
+ * header: two dialogs, two owners, in an order nobody designed, and a selection that
+ * could only be matched against whichever sheet was chosen afterwards.
+ *
+ * `catalogXlsx` now declares a source per sheet, so the host asks both questions at once,
+ * before the read, and hands the answer down as `plan`. The decision is still this
+ * codec's — it is the catalogue that says there are sheets at all — it is just made in
+ * the one place where the user can see every part of the question together.
+ *
+ * ## The fallback, which is not dead code
+ *
+ * No plan means nobody asked: the host only consults a catalogue when its importer
+ * declares one AND there is something to decide, and a read can also be driven by a
+ * caller that has no picker at all (the test harness, a replayed script). The first sheet
+ * is the right default for the same reason it was pre-ticked in the old dialog — in a
+ * workbook used as a data file, sheet 1 is the data and the rest is a codebook.
+ *
+ * @param {object} app
+ * @param {string[]} names - every sheet in the workbook, in order
+ * @param {?{sources: Object<string, ?string[]>}} plan - what the host was told to import
+ * @param {string} fileName
+ * @returns {Promise<string[]>} the sheets to read, primary first
+ */
+async function sheetsToRead(app, names, plan, fileName) {
+  const picked = Object.keys(plan?.sources ?? {}).filter((id) => names.includes(id));
+  if (picked.length) {
+    // The workbook's own order, not the order the dialog happened to return them in: the
+    // first sheet of the FILE is the primary if it was picked, which keeps "the data sheet
+    // becomes the dataset" true however the user ticked the boxes.
+    return names.filter((n) => picked.includes(n));
+  }
+  if (!names.length) throw new Error('Excel: the workbook has no sheets');
+  if (names.length > 1) {
+    // Nobody asked and there is more than one. Say which one was used rather than picking
+    // silently — a workbook whose data is on tab 2 would otherwise import its codebook
+    // with no indication that a choice was made on the user's behalf.
+    app.results?.appendText?.(
+      `${fileName} has ${names.length} sheets; imported “${names[0]}”. `
+      + 'Use File ▸ Import data… with “Choose which variables to import” to pick others.',
+    );
+  }
+  return [names[0]];
 }
 
 /** Header:1 array-of-arrays for a worksheet: raw JS types (numbers as numbers,
@@ -461,14 +536,6 @@ function sheetAoa(XLSX, ws) {
   return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
 }
 
-/** Data-row and column counts for a worksheet (rows excludes the header), for the
- * sheet-picker hint. Empty sheet → 0×0. */
-function sheetDims(XLSX, ws) {
-  const ref = ws && ws['!ref'];
-  if (!ref) return { rows: 0, cols: 0 };
-  const r = XLSX.utils.decode_range(ref);
-  return { rows: Math.max(0, r.e.r - r.s.r), cols: r.e.c - r.s.c + 1 };
-}
 
 /** Read the whole source via chunked random-access reads, concatenated. */
 async function readAll(app, size) {
@@ -491,18 +558,26 @@ async function readAll(app, size) {
  * numeric columns as Float64Array (NaN for missing), everything else as string
  * arrays (null for missing). The SheetJS path only — the streaming path never builds
  * an array-of-arrays in the first place. */
-function buildColumns(aoa, decision = null) {
+function buildColumns(aoa, decision = null, select = null) {
   if (!aoa.length) return { variables: [], storageTypes: {}, columns: {} };
 
   const headerRow = aoa[0] || [];
   const width = aoa.reduce((w, row) => Math.max(w, row ? row.length : 0), 0);
   const decided = decision ?? scanAoa(aoa).decide([]);
   const schema = buildSchema(headerRow, width, decided);
+  // This sheet's own selection, applied to this sheet's own columns.
+  const keep = select == null
+    ? schema.variables.map((_v, c) => c)
+    : schema.variables.map((v, c) => (select.includes(v.name) ? c : -1)).filter((c) => c >= 0);
+  if (!keep.length) return { variables: [], storageTypes: {}, columns: {} };
 
+  const variables = keep.map((c) => schema.variables[c]);
+  const storageTypes = {};
   const columns = {};
-  for (let c = 0; c < width; c++) {
+  for (const c of keep) {
     const nm = schema.variables[c].name;
     const isNum = schema.storageTypes[nm] === 'numeric';
+    storageTypes[nm] = schema.storageTypes[nm];
     const out = isNum ? new Float64Array(Math.max(0, aoa.length - 1)) : [];
     for (let r = 1; r < aoa.length; r++) {
       const cell = (aoa[r] || [])[c];
@@ -512,7 +587,7 @@ function buildColumns(aoa, decision = null) {
     }
     columns[nm] = out;
   }
-  return { variables: schema.variables, storageTypes: schema.storageTypes, columns };
+  return { variables, storageTypes, columns };
 }
 
 /** A spreadsheet cell is a number only when the reader handed back a real one. A text

@@ -545,7 +545,12 @@ export class UiService {
    * @param {Object} [options]
    * @param {string} [options.title='Select']
    * @param {string} [options.hint]
-   * @param {Array<{value: string, label?: string}>} [options.items]
+   * @param {Array<{value: string, label?: string, group?: string}>} [options.items] -
+   *   `group` puts the item under a heading, in the order the groups first appear. Added
+   *   for the import catalogue, where a format with more than one table inside it (a
+   *   workbook's sheets, and in principle a `.RData`'s objects or a SQLite file's tables)
+   *   offers its variables grouped by which table they live in. Items without a `group`
+   *   render ungrouped, which is every other caller.
    * @param {boolean} [options.multiple=true]
    * @param {string} [options.okLabel='OK']
    * @param {string} [options.searchPlaceholder='Filter…']
@@ -653,7 +658,19 @@ export class UiService {
           : items;
         shown = matches.slice(0, CAP);
         list.replaceChildren();
+        // A heading whenever the group changes, in the order the groups first appear —
+        // which is the caller's order, because `items` is not re-sorted. Nothing is
+        // emitted when no item carries a `group`, which is every caller but the import
+        // catalogue.
+        let group = null;
         for (const it of shown) {
+          if (it.group != null && it.group !== group) {
+            group = it.group;
+            const head = document.createElement('li');
+            head.className = 'ct-dialog__group';
+            head.textContent = it.group;
+            list.append(head);
+          }
           const li = document.createElement('li');
           const label = document.createElement('label');
           const input = document.createElement('input');
@@ -678,7 +695,12 @@ export class UiService {
         if (matches.length > CAP) {
           const li = document.createElement('li');
           li.style.cssText = 'color:#646e77; padding:6px;';
-          li.textContent = `Showing first ${CAP} of ${matches.length} — refine your filter.`;
+          // Name the groups that fell off the end. The cap is per LIST, so 500 rows across
+          // five sheets can hide a whole sheet — and a sheet the user cannot see is one
+          // they cannot untick, which reads as the dialog having forgotten it.
+          const hiddenGroups = [...new Set(matches.slice(CAP).map((m) => m.group).filter(Boolean))];
+          li.textContent = `Showing first ${CAP} of ${matches.length} — refine your filter.`
+            + (hiddenGroups.length ? ` Not shown: ${hiddenGroups.join(', ')}.` : '');
           list.append(li);
         }
         count.textContent = `${selected.size} selected`;

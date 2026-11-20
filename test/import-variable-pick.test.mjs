@@ -30,6 +30,25 @@ import { workbook, sheetXml } from './xlsx-fixture.mjs';
 
 const { ingestTable, tableVariableNames } = globalThis.ctStd;
 
+/**
+ * Every variable a catalogue offers, flattened, in order.
+ *
+ * `catalog()` returns a list of SOURCES as of 2026-11-20 — a workbook's sheets, and in
+ * principle a `.RData`'s objects or a SQLite file's tables — because the host cannot know
+ * whether a format holds one table or several. A single-table format may still answer
+ * with the older `{variables}` shape, which the codec service wraps. Most assertions here
+ * are about the agreement between a catalogue and an import, which is per source, so this
+ * flattens only where the test genuinely does not care which source a name came from.
+ */
+/** Comments are prose about the rule, not the rule — strip before asserting absence. */
+const stripComments = (src) => src
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+const allNames = (cat) => (cat.sources
+  ? cat.sources.flatMap((src) => src.variables.map((v) => v.name))
+  : cat.variables.map((v) => v.name));
+
 // The .xlsx reader and the Parquet reader both import their library from a blob: URL,
 // which node's ESM loader refuses. Same shim as the two codec test files, for the same
 // reason; see excel-codec-streaming.test.mjs for the long version.
@@ -55,7 +74,7 @@ const STREAM_SOURCE = readFileSync(new URL('../core/xlsx-stream.js', import.meta
  * `loadAsset`.
  */
 function host(bytes, { select = null, asset = null } = {}) {
-  const out = { batches: [], variables: null, opts: null, select };
+  const out = { batches: [], variables: null, opts: null, select, created: [] };
   const app = {
     codec: {
       size: async () => bytes.length,
@@ -71,6 +90,8 @@ function host(bytes, { select = null, asset = null } = {}) {
       progress: async () => {},
       missingCodes: async () => [],
     },
+    // Extra sources become their own datasets through `app.data.create`.
+    data: { create: async (spec) => { out.created.push(spec); return 1; } },
     ui: { selectFromList: async () => null },
   };
   return { app, out };
@@ -287,11 +308,57 @@ test('Excel: the catalogue agrees with the import', async () => {
   const asset = (name) => (name === 'xlsx-stream' ? STREAM_SOURCE : null);
 
   const cat = await catalogXlsx(host(bytes, { asset }).app, {});
+  // One source per sheet now, so the agreement is checked against the SHEET the import
+  // actually read rather than against a flattened list — which is the whole reason the
+  // tree shape exists. The old version offered the first sheet's header as a guess and
+  // the import matched it by name against whichever sheet was chosen afterwards.
+  assert.ok(Array.isArray(cat.sources), 'the catalogue is not a list of sources');
   const h = host(bytes, { asset });
-  h.app.ui.selectFromList = async ({ items }) => [items[0].value]; // first sheet only
-  await readXlsx(h.app, { name: 'book.xlsx' });
-  assert.deepEqual(cat.variables.map((v) => v.name), namesOf(h.out));
-  assert.deepEqual(cat.variables.map((v) => v.name), ['a', 'V2', 'a_2']);
+  await readXlsx(h.app, { name: 'book.xlsx', plan: { sources: { [cat.sources[0].id]: null } } });
+  assert.deepEqual(cat.sources[0].variables.map((v) => v.name), namesOf(h.out));
+  assert.deepEqual(cat.sources[0].variables.map((v) => v.name), ['a', 'V2', 'a_2']);
+  // ...and the row count the picker shows beside each heading comes from the sheet's own
+  // dimension record, which is what tells a data sheet from a codebook at a glance.
+  assert.equal(cat.sources[0].rowCount, 2);
+});
+
+test('Excel: ABC from one sheet and DEF from another is TWO datasets', async () => {
+  // The shape the owner asked for, and the answer to what it means. Two sheets are two
+  // tables with their own row counts and no shared row identity, so pooling them would be
+  // a positional paste — which this codec has always refused. Each picked sheet becomes
+  // its own dataset, narrowed to what was ticked under its own heading.
+  const { catalogXlsx, readXlsx } = await import('../plugins/builtin-excel-codec/index.js');
+  const text = (c, r, v) => `<c r="${String.fromCharCode(65 + c)}${r}" t="inlineStr"><is><t>${v}</t></is></c>`;
+  const num = (c, r, v) => `<c r="${String.fromCharCode(65 + c)}${r}"><v>${v}</v></c>`;
+  const bytes = workbook({
+    sheet1: `<row r="1">${text(0, 1, 'ABC')}${text(1, 1, 'XYZ')}</row>`
+      + `<row r="2">${num(0, 2, 1)}${num(1, 2, 9)}</row>`,
+    dim1: 'A1:B2',
+    sheet2: `<row r="1">${text(0, 1, 'term')}${text(1, 1, 'DEF')}</row>`
+      + `<row r="2">${num(0, 2, 7)}${num(1, 2, 8)}</row>`,
+    dim2: 'A1:B2',
+  });
+  const asset = (name) => (name === 'xlsx-stream' ? STREAM_SOURCE : null);
+
+  const cat = await catalogXlsx(host(bytes, { asset }).app, {});
+  assert.equal(cat.sources.length, 2, 'both sheets were not declared');
+  const [s1, s2] = cat.sources;
+  assert.deepEqual(s1.variables.map((v) => v.name), ['ABC', 'XYZ']);
+  assert.deepEqual(s2.variables.map((v) => v.name), ['term', 'DEF']);
+
+  const h = host(bytes, { asset });
+  await readXlsx(h.app, {
+    name: 'book.xlsx',
+    plan: { sources: { [s1.id]: ['ABC'], [s2.id]: ['DEF'] } },
+  });
+  // Sheet 1 is the primary: it streams through the host ingest.
+  assert.deepEqual(namesOf(h.out), ['ABC']);
+  assert.deepEqual([...columnsOf(h.out).ABC], [1]);
+  // Sheet 2 becomes its own dataset, narrowed to ITS pick and not to the primary's.
+  assert.equal(h.out.created.length, 1);
+  assert.equal(h.out.created[0].name, s2.id);
+  assert.deepEqual(h.out.created[0].variables.map((v) => v.name), ['DEF']);
+  assert.deepEqual([...h.out.created[0].columns.DEF], [8]);
 });
 
 test('Excel: a selection drops the rest', async () => {
@@ -313,8 +380,10 @@ test('Excel: a selection drops the rest', async () => {
   assert.ok(sheet.length > 0); // the helper is exercised, not asserted on
   const asset = (name) => (name === 'xlsx-stream' ? STREAM_SOURCE : null);
   const h = host(bytes, { asset });
-  h.app.ui.selectFromList = async ({ items }) => [items[0].value];
-  await readXlsx(h.app, { name: 'book.xlsx', select: ['keep', 'also'] });
+  await readXlsx(h.app, {
+    name: 'book.xlsx',
+    plan: { sources: { Data: ['keep', 'also'] } },
+  });
   assert.deepEqual(namesOf(h.out), ['keep', 'also']);
   assert.deepEqual([...columnsOf(h.out).also], [3]);
 });
@@ -372,7 +441,19 @@ test('`catalog` is forwarded at every point between the manifest and the host', 
 
   const imp = readFileSync('core/import-service.js', 'utf8');
   assert.match(imp, /spec\.readCatalog/, 'import-service never calls it');
-  assert.match(imp, /startRead\(file, \{ select \}\)/, 'the selection never reaches the read');
+  assert.match(imp, /startRead\(file, \{ plan \}\)/, 'the import plan never reaches the read');
+
+  // The codec's own sheet dialog is gone: `catalog` declares a source per sheet and the
+  // host asks both questions at once, before the read. Deciding WHETHER to ask was always
+  // the codec's business and still is — the catalogue is what says there are sheets at
+  // all — but two dialogs from two owners in an undesigned order was not.
+  // Comments stripped FIRST. The codec's own doc comment explains that it USED to call
+  // `app.ui.selectFromList`, which is exactly the prose this assertion would match — a
+  // trap this repo has fallen into repeatedly, where a correct comment breaks its own
+  // guard.
+  const excel = stripComments(readFileSync('plugins/builtin-excel-codec/index.js', 'utf8'));
+  assert.ok(!/chooseSheets/.test(excel), 'the codec still runs its own sheet picker');
+  assert.ok(!/app\.ui\./.test(excel), 'the codec still opens a dialog of its own');
 
   // ...and the declaring end: every codec that can name its columns cheaply does.
   for (const name of ['builtin-csv-codec', 'builtin-ndjson-codec', 'builtin-excel-codec',
@@ -412,7 +493,13 @@ test('the import picker carries the option, and reads it before closing', async 
   assert.match(imp, /id: 'pick'/, 'the import picker offers no variable-pick option');
   // Asked once per RUN, not once per file: stacked sources are UNIONed BY NAME, so a
   // different answer for file 2 hollows out file 1.
-  assert.match(imp, /asked: !pickerOptions\.pick/, 'the once-per-run latch is gone');
+  assert.match(imp, /asked: false, wanted: !!pickerOptions\.pick/,
+    'the once-per-run latch is gone');
+  // And the latch now closes AFTER the catalogue is seen rather than before, because a
+  // multi-source file has to be asked "which tables?" whatever the user said about
+  // variables — which is what let the Excel codec stop asking for itself.
+  assert.match(imp, /if \(sources\.length === 1 && !run\.wanted\) return null;/,
+    'a multi-source file is no longer always asked about');
 });
 
 test('a codec with no catalogue is told to the user, not ignored', async () => {

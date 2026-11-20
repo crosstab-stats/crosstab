@@ -157,6 +157,15 @@ export function missingCodesPrompt(fileName, proposal, { files = 1, selected = n
   };
 }
 
+/** A source's heading in the picker: its label, plus the row count when the codec knew
+ * one. The count is what tells a data sheet from a codebook at a glance, which is the
+ * decision the grouped dialog exists to support. */
+function labelWithCount(src) {
+  const rows = Number(src?.rowCount ?? -1);
+  if (!(rows >= 0)) return String(src?.label ?? src?.id ?? '');
+  return `${src.label}  ·  ${rows.toLocaleString()} row${rows === 1 ? '' : 's'}`;
+}
+
 export class ImportService {
   /** @type {import('./menu-shell.js').MenuShell} */
   #menus;
@@ -275,85 +284,169 @@ export class ImportService {
   }
 
   /**
-   * Ask which variables to import, once for the whole selection.
+   * Ask what to import, once for the whole selection.
+   *
+   * ## One dialog, over a tree
+   *
+   * A codec's catalogue is a list of SOURCES — a workbook's sheets, and in principle a
+   * `.RData`'s objects or a SQLite file's tables — each with its own variables. The host
+   * cannot know whether a format holds one table or several, so it asks the codec and
+   * shows what it gets back, grouped by source.
+   *
+   * Which means a selection is per source: tick `ABC` under Sheet 1 and `DEF` under
+   * Sheet 2 and both come in, each as its own dataset with its own honest row count.
+   * Pooling them into one would be a positional paste across tables with no shared row
+   * identity, which is exactly what the Excel codec has always refused to do; a keyed
+   * join is Merge's deliberate job.
+   *
+   * ## When it asks, which is not only when the box is ticked
+   *
+   * If a source has more than one table in it, "which ones?" has to be asked whatever the
+   * user said about variables — so a multi-source catalogue always prompts, and the
+   * checkbox only decides whether the variables are offered alongside. That is what let
+   * the Excel codec stop asking for itself: two dialogs from two owners, in an order
+   * nobody designed, became one before the read starts.
    *
    * ## Once, not once per file
    *
-   * The same rule as `#askMissingCodes`, for the same reason: stacked sources are
-   * combined with `UNION ALL BY NAME`, so a different answer for the second file does not
-   * import a different subset — it retypes or hollows out the first one. So the FIRST
-   * file's catalog is what is offered, and the answer governs every file in the run. The
-   * prompt says so when there is more than one.
-   *
-   * ## When the codec cannot answer, say so
-   *
-   * A format that cannot name its variables without reading everything does not declare
-   * `catalog`, and the honest response is a note rather than silence: the user ticked a
-   * box and is entitled to know it did nothing. Silently importing all 3,379 columns
-   * after being asked to choose is the failure mode this avoids.
+   * Same rule as `#askMissingCodes`, for the same reason: stacked sources are combined
+   * with `UNION ALL BY NAME`, so a different answer for the second file does not import a
+   * different subset — it hollows out the first one. The FIRST file's catalogue is what is
+   * offered, and the answer governs every file in the run.
    *
    * @param {object} spec - the importer spec (carries `readCatalog` when supported)
-   * @param {File} file - the first file of the run; its catalog is the one offered
-   * @param {{names: ?string[], asked: boolean, files: number}} run - carried across files
-   * @returns {Promise<?string[]>} the chosen names, or null for "import everything"
+   * @param {File} file - the first file of the run; its catalogue is the one offered
+   * @param {{plan: ?object, asked: boolean, files: number, wanted: boolean}} run
+   * @returns {Promise<?object>} `{sources: {[id]: string[]|null}}`, or null for
+   *   "everything, as it comes"
    */
   async #pickVariables(spec, file, run) {
-    if (run.asked) return run.names;
+    if (run.asked) return run.plan;
     run.asked = true;
     // Normally unreachable: `#runImport` turns the option off and explains itself before
     // getting here, because the picker also lists importers that never reach this path at
     // all. Kept as the guard for any OTHER caller, silent because the explaining has
     // already been done once and twice would be worse than not at all.
     if (typeof spec.readCatalog !== 'function') return null;
+
     let cat;
     try {
       cat = await spec.readCatalog(file);
     } catch (err) {
-      // A failed catalog must not sink the import: it is an optional convenience, and
+      // A failed catalogue must not sink the import: it is an optional convenience, and
       // everything still works without it.
       this.#results.appendError(
-        `Could not list the variables in ${file.name} (${err?.message ?? err}). Importing all of them.`,
+        `Could not read the contents of ${file.name} (${err?.message ?? err}). Importing all of it.`,
       );
       return null;
     }
-    const variables = cat?.variables ?? [];
-    if (!variables.length) {
-      this.#results.appendText(`No variables could be listed in ${file.name}; importing all of them.`);
+    const sources = cat?.sources ?? [];
+    if (!sources.length) {
+      this.#results.appendText(`Nothing could be listed in ${file.name}; importing all of it.`);
       return null;
     }
+    // One table and the user did not ask to choose: nothing to decide.
+    if (sources.length === 1 && !run.wanted) return null;
     if (!this.#ui?.selectFromList) return null;
 
-    const rows = Number(cat.rowCount ?? -1);
+    const multi = sources.length > 1;
+    const chosen = multi && !run.wanted
+      ? await this.#pickSources(sources, file, run)
+      : await this.#pickSourceVariables(sources, file, run, multi);
+    if (chosen == null) throw new Error('Import cancelled.');
+    run.plan = chosen;
+    debug('import', 'import plan', {
+      importer: spec.id ?? spec.label,
+      sources: Object.keys(chosen.sources).length,
+      ofSources: sources.length,
+      // null means "all of this source's variables", which is worth telling apart in the
+      // log from a selection that happens to cover them all.
+      narrowed: Object.values(chosen.sources).filter(Boolean).length,
+    });
+    return run.plan;
+  }
+
+  /** Which tables, when the user did not ask about variables. One row per source. */
+  async #pickSources(sources, file, run) {
     const chosen = await this.#ui.selectFromList({
-      title: `Choose variables — ${file.name}`,
-      hint: `${variables.length.toLocaleString()} variables`
-        + (rows >= 0 ? ` · ${rows.toLocaleString()} rows` : '')
-        + '. Pick the ones to import (search to filter).'
+      title: `Choose what to import — ${file.name}`,
+      hint: `${file.name} holds ${sources.length} tables. Each one you pick becomes its own dataset.`
         + (run.files > 1 ? ` This choice applies to all ${run.files} files.` : ''),
-      items: variables.map((v) => ({
-        value: v.name,
-        label: v.label ? `${v.label} (${v.name})` : v.name,
-      })),
+      items: sources.map((src) => ({ value: src.id, label: src.label })),
       multiple: true,
-      // Everything ticked: the dialog's job is to let a subset be chosen, not to make
-      // choosing mandatory, and an all-unticked list reads as "nothing will import".
-      selected: variables.map((v) => v.name),
+      // The first one pre-ticked, which is the data sheet in a workbook used as a data
+      // file — the rest are usually a codebook or a summary.
+      selected: [sources[0].id],
+      okLabel: 'Import selected',
+      searchPlaceholder: 'Filter…',
+    });
+    if (chosen == null) return null;
+    if (!chosen.length) throw new Error('Nothing was selected, so nothing was imported.');
+    // `null` per source: every variable in it.
+    return { sources: Object.fromEntries(chosen.map((id) => [id, null])) };
+  }
+
+  /**
+   * Which variables, grouped by which table they live in — so a source with nothing
+   * ticked is simply not imported, and one with some ticked is imported narrowed.
+   *
+   * The values are namespaced by source id, because two sheets may both have a column
+   * called `id` and the dialog hands back a flat list of what was ticked.
+   */
+  async #pickSourceVariables(sources, file, run, multi) {
+    // NUL, written as an escape rather than typed: a column name can contain almost
+    // anything a file cares to put there, and NUL is the one byte `safeText` strips on
+    // the way in — so it is the one character that cannot appear in either half.
+    const SEP = '\u0000';
+    const items = [];
+    const preselected = [];
+    for (const src of sources) {
+      for (const v of src.variables) {
+        const value = `${src.id}${SEP}${v.name}`;
+        items.push({
+          value,
+          label: v.label ? `${v.label} (${v.name})` : v.name,
+          ...(multi ? { group: labelWithCount(src) } : {}),
+        });
+        // Everything in the FIRST source, nothing in the others: the dialog's job is to
+        // let a subset be chosen, not to make choosing mandatory — and in a workbook the
+        // extra tabs are usually a codebook nobody wants as a dataset.
+        if (!multi || src === sources[0]) preselected.push(value);
+      }
+    }
+    const total = items.length;
+    const chosen = await this.#ui.selectFromList({
+      title: `Choose what to import — ${file.name}`,
+      hint: (multi
+        ? `${sources.length} tables, ${total.toLocaleString()} variables. Each table you pick from becomes its own dataset.`
+        : `${total.toLocaleString()} variables. Pick the ones to import (search to filter).`)
+        + (run.files > 1 ? ` This choice applies to all ${run.files} files.` : ''),
+      items,
+      multiple: true,
+      selected: preselected,
       okLabel: 'Import selected',
       searchPlaceholder: 'Filter by name or label…',
     });
-    // Cancel means cancel the import, not "import everything" — the user asked to choose.
-    if (chosen == null) throw new Error('Import cancelled.');
+    if (chosen == null) return null;
     if (!chosen.length) throw new Error('No variables were selected, so nothing was imported.');
-    run.names = chosen.length === variables.length ? null : chosen;
-    debug('import', 'variable pick', {
-      importer: spec.id ?? spec.label,
-      available: variables.length,
-      chosen: chosen.length,
-      // null means "all of them", which is worth distinguishing in the log from a
-      // selection that happens to cover everything.
-      narrowed: run.names !== null,
-    });
-    return run.names;
+
+    const bySource = new Map();
+    for (const v of chosen) {
+      const at = v.indexOf(SEP);
+      const id = at < 0 ? '' : v.slice(0, at);
+      const name = at < 0 ? v : v.slice(at + 1);
+      if (!bySource.has(id)) bySource.set(id, []);
+      bySource.get(id).push(name);
+    }
+    const out = {};
+    for (const src of sources) {
+      const picked = bySource.get(src.id);
+      if (!picked) continue; // nothing ticked in this table: do not import it
+      // Everything ticked is the same as no restriction, and saying so keeps the recorded
+      // selection honest — a list that happens to cover the file is not a narrowing.
+      out[src.id] = picked.length === src.variables.length ? null : picked;
+    }
+    return { sources: out };
   }
 
   /**
@@ -534,6 +627,8 @@ export class ImportService {
     // before the branch, so there is one answer for all three kinds.
     let options = pickerOptions;
     if (options.pick && typeof spec.readCatalog !== 'function') {
+      // (A codec with no catalogue cannot be asked anything, ticked or not: `#pickVariables`
+      // returns null for it, and this is where the user is told why.)
       this.#results.appendText(
         `${spec.label ?? 'This format'} cannot list its variables without reading the whole file, `
         + 'so everything will be imported. (Drop the columns you do not want afterwards.)',
@@ -825,7 +920,11 @@ export class ImportService {
     // UNIONed BY NAME, so an inconsistent answer across files silently retypes the lot.
     const codeRun = { accepted: new Set(), offered: new Set(), files: files.length };
     // Asked once, before the first read, and reused for the rest — see `#pickVariables`.
-    const pickRun = { names: null, asked: !pickerOptions.pick, files: files.length };
+    // Asked once, before the first read, and reused for the rest — see `#pickVariables`.
+    // `asked` starts true only when there is nothing the host could need to ask: a
+    // MULTI-SOURCE file still has to be asked "which tables?" whatever the user said
+    // about variables, so the latch is set after the catalogue is seen, not before.
+    const pickRun = { plan: null, asked: false, wanted: !!pickerOptions.pick, files: files.length };
     for (const file of files) {
       const fileMode = mode === 'replace' && committed === 0 ? 'replace' : 'append';
       const tag = mode === 'replace' && files.length === 1 ? undefined : baseName(file.name);
@@ -840,8 +939,8 @@ export class ImportService {
         // Before `startRead`, because the chosen subset is an input to the read: a codec
         // that can skip columns should never decode them, and one that cannot at least
         // never stores them.
-        const select = await this.#pickVariables(spec, file, pickRun);
-        const reader = spec.startRead(file, { select });
+        const plan = await this.#pickVariables(spec, file, pickRun);
+        const reader = spec.startRead(file, { plan });
         // Registered BEFORE begin(): a codec's first pass runs before it can declare
         // its variables, and on a large file that pass is most of the wait.
         const progress = this.#progressEmitter(file.name);

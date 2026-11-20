@@ -293,6 +293,8 @@ export function serialToDate(serial) {
  * @param {(values: Array<any>, rowNumber: number) => void|Promise<void>} opts.onRow
  */
 export async function streamSheetRows(entry, { sharedStrings = [], dateStyles = [], onRow }) {
+  // `onRow(values, rowNum)` may return `false` to stop the scan — see the note in `flush`.
+  // Everything else, `undefined` included, carries on.
   const decoder = new TextDecoder('utf-8');
   let buf = '';
 
@@ -308,6 +310,8 @@ export async function streamSheetRows(entry, { sharedStrings = [], dateStyles = 
    *
    * So the loop awaits `onRow` inline and keeps only what is left of the buffer: peak is
    * one inflate chunk plus one row.
+   *
+   * @returns {Promise<boolean>} true when `onRow` asked to stop.
    */
   const flush = async (final) => {
     for (;;) {
@@ -341,13 +345,21 @@ export async function streamSheetRows(entry, { sharedStrings = [], dateStyles = 
         }
       }
       buf = buf.slice(end);
-      await onRow(values, rowNum);
+      // `false` means stop. The catalogue call needs the HEADER ROW and nothing after it,
+      // and without a way to say so it inflated every sheet in the workbook to read one
+      // row of each — which makes "choose which variables to import" cost more than
+      // importing them, the opposite of what offering it promises. Any other return value
+      // (including the `undefined` every existing caller gives) continues.
+      if ((await onRow(values, rowNum)) === false) return true;
     }
   };
 
   for await (const chunk of streamZipEntry(entry)) {
     buf += decoder.decode(chunk, { stream: true });
-    await flush(false);
+    // Breaking out of the `for await` calls the generator's `return()`, which runs its
+    // `finally` and cancels the reader — so the DecompressionStream is closed rather than
+    // left pending.
+    if (await flush(false)) return;
   }
   buf += decoder.decode();
   await flush(true);

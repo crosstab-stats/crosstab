@@ -97,11 +97,11 @@ function legacyWorkbook(obj) {
  *   control, where typing must be exactly what it was before any of this.
  * @param {?string[]} [opts.sheets] what the sheet picker returns (null → no UI service).
  */
-async function run(bytes, { answer = () => [], sheets = null, name = 'book.xlsx' } = {}) {
+async function run(bytes, { answer = () => [], sheets = null, plan = null, name = 'book.xlsx' } = {}) {
   globalThis.__fakeSheetJsRead = 0;
   const out = {
     batches: [], variables: null, storageTypes: null, beginOpts: null,
-    asked: null, assets: [], created: [], offered: null,
+    asked: null, assets: [], created: [], offered: null, notes: [],
   };
   const codec = {
     size: async () => bytes.length,
@@ -126,13 +126,17 @@ async function run(bytes, { answer = () => [], sheets = null, name = 'book.xlsx'
   const app = {
     codec,
     data: { create: async (spec) => { out.created.push(spec); } },
+    // The codec says so when nobody chose and there was more than one sheet — a workbook
+    // whose data is on tab 2 would otherwise import its codebook with no sign that a
+    // choice had been made on the user's behalf.
+    results: { appendText: (m) => { out.notes.push(m); } },
   };
-  if (sheets) {
-    app.ui = {
-      selectFromList: async (spec) => { out.offered = spec.items.map((i) => i.label); return sheets; },
-    };
-  }
-  await readXlsx(app, { name });
+  // The host decides which sheets and which variables, and hands the answer down as
+  // `plan` — the codec stopped putting up its own dialog on 2026-11-20, when `catalog`
+  // started declaring a source per sheet. `sheets` is the common case written short.
+  const importPlan = plan
+    ?? (sheets ? { sources: Object.fromEntries(sheets.map((sn) => [sn, null])) } : null);
+  await readXlsx(app, { name, plan: importPlan });
 
   const columns = {};
   for (const v of out.variables ?? []) columns[v.name] = [];
@@ -328,9 +332,6 @@ test('a multi-sheet workbook asks, and splits the extra sheet into its own datas
   ]);
   const r = await run(bytes, { answer: () => [], sheets: ['Data', 'Codebook'] });
 
-  assert.deepEqual(r.offered, ['Data  (2 rows × 2 cols)', 'Codebook  (2 rows × 1 cols)'],
-    'the picker labels each tab with its size, read from the dimension without inflating it',
-  );
   assert.deepEqual(r.columns, { a: [1, 3], b: [2, 4] }, 'the first chosen sheet is the primary');
   assert.equal(r.created.length, 1);
   assert.equal(r.created[0].name, 'Codebook');
@@ -340,7 +341,7 @@ test('a multi-sheet workbook asks, and splits the extra sheet into its own datas
   assert.equal(r.created[0].activate, false);
 });
 
-test('with no UI service the first sheet is used, not a failure', async () => {
+test('with no plan the first sheet is used, not a failure', async () => {
   const bytes = zip([
     { name: 'xl/workbook.xml', data: WORKBOOK_XML, deflate: true },
     { name: 'xl/_rels/workbook.xml.rels', data: RELS_XML, deflate: true },
@@ -350,30 +351,31 @@ test('with no UI service the first sheet is used, not a failure', async () => {
   const r = await run(bytes, { answer: () => [] });
   assert.deepEqual(r.variables.map((v) => v.name), ['a']);
   assert.equal(r.created.length, 0);
+  // ...and it says which one, because two sheets means a choice was made for the user.
+  assert.equal(r.notes.length, 1);
+  assert.match(r.notes[0], /2 sheets/);
 });
 
-test('cancelling the sheet picker cancels the import', async () => {
+test('a plan naming no sheet of this workbook falls back rather than importing nothing', async () => {
+  // Cancelling is the HOST's job now — it owns the dialog, and a cancel throws before the
+  // read is ever started (`import-service`). What this codec still has to get right is a
+  // plan whose sheet names do not match this file: a recorded import replayed against a
+  // revised workbook, or a multi-file selection where file 2 has different tabs. Falling
+  // back to the first sheet is right, and saying so is the part that matters — importing
+  // a codebook silently because the data tab was renamed is the bug.
   const bytes = zip([
     { name: 'xl/workbook.xml', data: WORKBOOK_XML, deflate: true },
     { name: 'xl/_rels/workbook.xml.rels', data: RELS_XML, deflate: true },
     { name: 'xl/worksheets/sheet1.xml', data: sheetXml('A1:A2', sheetOf([['a'], [1]])), deflate: true },
     { name: 'xl/worksheets/sheet2.xml', data: sheetXml('A1:A2', sheetOf([['b'], [2]])), deflate: true },
   ]);
-  const began = [];
-  const app = {
-    codec: {
-      size: async () => bytes.length,
-      read: async (off, len) => bytes.subarray(off, off + len),
-      loadAsset: async () => STREAM_SOURCE,
-      begin: async (v) => { began.push(v); },
-      batch: async () => {},
-    },
-    ui: { selectFromList: async () => null }, // null is a cancel; [] is "none chosen"
-    data: { create: async () => {} },
-  };
-  await assert.rejects(() => readXlsx(app, { name: 'x.xlsx' }), /cancelled/i);
-  assert.equal(began.length, 0, 'nothing was ingested before the cancel');
-
-  app.ui.selectFromList = async () => [];
-  await assert.rejects(() => readXlsx(app, { name: 'x.xlsx' }), /no sheets selected/i);
+  const said = [];
+  const r = await run(bytes, {
+    answer: () => [],
+    plan: { sources: { 'A sheet that is not in this file': null } },
+    note: (m) => said.push(m),
+  });
+  assert.deepEqual(r.variables.map((v) => v.name), ['a'], 'it used the first sheet');
+  assert.equal(r.created.length, 0, 'and did not invent datasets from the unmatched plan');
 });
+
