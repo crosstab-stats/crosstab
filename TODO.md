@@ -3047,6 +3047,81 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 
 ## Completed
 
+- [x] **Data ingest consolidated: six routes into the engine became one (owner, 2026-11-20).
+      DONE.** The owner read the `app.data.create` analysis and reframed it: *"the root of the
+      problem is that we have multiple paths to get data into the system… three paths to data
+      ingest means three places to watch for bugs and three feature sets that can drift. is
+      there a reason we don't just consolidate all data ingest paths into one that streams no
+      matter the anticipated size of the data?"*
+
+      There were six, not three, and the drift was already measurable:
+
+      | route | budget recorded | missing codes | decided wide | names cleaned |
+      |---|---|---|---|---|
+      | `#createSource({columns})` | no | no | no | yes |
+      | `#createSource({parquet})` | no | no | no | yes |
+      | `loadStreaming` | **yes** | yes | yes | no |
+      | `loadWide` | n/a | yes | yes | no |
+      | `#restoreWideSource` | n/a | yes | n/a | no |
+      | `#createSourceFromSql` | no | no | no | no |
+
+      One of six recorded what the shared budget needs. Not carelessness — each was added
+      for a real need at a different time and none ever looked worth a rewrite alone.
+
+      **THE FRAMING THAT DECIDED THE SHAPE, and it is the owner's:** *"if the plugins are
+      instantiating entire tables then calling app.data.create that's not the true risk,
+      it's having those tables hit the engine in one piece."* Exactly right, and it means
+      the sink does not try to bound callers. A caller spending its own JS heap is its own
+      business; what cannot happen is a table reaching DuckDB unbatched, because the
+      ceiling there is the checkpoint, it cannot spill, and its failure is FATAL to the
+      whole database rather than to the one import. So a whole-columns caller is served by
+      the same code as a streaming one — the host slices and picks the batch size.
+
+      **What landed** (`core/ingest.js` + `DataStore#load`, three commits):
+      1. The file-import path, with `loadStreaming`/`loadWide` deleted — callers no longer
+         pick, because the pick needs facts callers do not have.
+      2. `loadDataset({columns})` as sugar: `app.data.create`, the demo seed, the legacy
+         parse importers and Run R script's reverse bridge all slice now. Measured at
+         60,000 × 30: 2 batches, `loadedTableBytes` 0 → 14,880,000, and row 59,999 (second
+         batch) reads correctly, so the seam joins.
+      3. Restore stopped putting each persisted Parquet in the wasm heap, and started
+         being counted. Verified by save-and-reopen with an edited cell: row ids came back
+         unchanged and the edit still lands.
+
+      **The route decision moved to `DuckDBManager#planIngest`**, because two of its three
+      inputs belong to the engine instance and one of them is not synchronous. The first
+      draft put it in `ingest.js` and read `canStreamOutOfCore` directly — which is `null`
+      until DuckDB is ready, and the FIRST import routes before anything has touched
+      DuckDB. That is verbatim the bug that killed an iPhone, and the suite caught it.
+
+      **Two things found by counting rather than by anything failing:**
+      * `producedBy` (#160 — which run in this project made the data) had one producer and
+        zero readers: `#addSourceOp` destructured four fields and not that one, so the Run
+        R script bridge had been writing the run id into a void since it shipped.
+      * The column-name ingress carried the comment *"every route that puts data in a
+        dataset comes through this function"* and lived in the one route a FILE IMPORT does
+        not take. Codec-delivered names were never cleaned, so a lone surrogate from a
+        damaged header went straight into the store — the nasty case, because it survives
+        JSON, IndexedDB and a sync hop and then becomes U+FFFD the first time anything
+        encodes it, leaving two peers holding different values with nothing reporting it.
+
+      **NOT consolidated, deliberately:** `#createSourceFromSql` (Extract, Join) keeps its
+      `CREATE TABLE AS SELECT`. It never materialises in JS at all (#121), so routing it
+      through a batch protocol would pull gigabytes out through JS that currently never
+      leave the engine. It is the best ingest in the file and should be used more. It did
+      gain the byte accounting, because "does not go through JS" was never a reason not to
+      be counted.
+
+      `noteTableBytes` had one caller when this started and now has three: the one way in,
+      the restore, and the in-engine SELECT — which is every route that builds a table.
+      That is the test of whether the consolidation was real.
+
+      *Still open, and unchanged by this:* the extra-sheet entry below wanted "a streaming
+      form of dataset creation". It now exists as `DataStore#load`, but it is HOST-side —
+      a plugin still has only `app.data.create`, which takes whole columns. A plugin that
+      wants to stream needs a sandbox-facing begin/batch/finish, which is the remaining
+      piece and is what that entry should now be read as asking for.
+
 - [x] **"Choose which variables to import" for every format, not just SPSS/SAS/Stata (owner,
       2026-11-18). DONE 2026-11-19.** `readImportPick` in builtin-readstat-codec was a real feature — picking 50 of
       the GSS's 7,000 variables — and it is a second import *verb*, reachable only for readstat
