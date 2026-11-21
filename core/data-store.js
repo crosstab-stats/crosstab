@@ -738,17 +738,6 @@ export class DataStore {
     return this.#duckdb.loadedTableBytes;
   }
 
-  /**
-   * Would ingesting a table of this shape push the database past
-   * {@link TABLE_BYTE_BUDGET}? If so the caller should route it out-of-core instead.
-   *
-   * @param {Array<{type?: string}>} variables
-   * @param {number} rowCount
-   * @returns {boolean}
-   */
-  async wouldExceedTableBudget(variables, rowCount) {
-    return this.#duckdb.wouldExceedTableBudget(variables, rowCount);
-  }
 
   /** Whether the ingest can stream out of core here — false on WebKit. Exposed so the
    * import can LOG it: two round trips were spent reasoning about this value when

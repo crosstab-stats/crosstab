@@ -18,7 +18,7 @@ bottom; they are the project's memory and are not summarised away.
 
 ### Now / near-term
 
-- [ ] **Import machinery: pull host policy OUT of the codecs (owner, 2026-11-18).** After a day
+- [~] **Import machinery: pull host policy OUT of the codecs (owner, 2026-11-18).** After a day
       of fixing one import, the owner asked the right question: *"special case upon special case
       upon special case does make me wonder if perhaps we're missing something more basic."* It
       does, and here it is.
@@ -260,8 +260,8 @@ bottom; they are the project's memory and are not summarised away.
          the table budget, width routing and cell-sized batches are the permanent ceiling
          management, and step 4 can be asked whenever someone wants to ask it. The hoist
          (2 and 3) is now the whole of the work.
-      2. **[~] Hoist typing + missing-code detection into the host — DONE for the three readers
-         that INFER types (543afa8, 2026-11-19).** `ingestTable` in `core/plugin-stdlib.js` owns
+      2. **[x] Hoist typing + missing-code detection into the host — DONE, both halves.**
+         The readers that INFER types went first (543afa8, 2026-11-19); `ingestTable` in `core/plugin-stdlib.js` owns
          the two-pass orchestration, `createTypeScan`, the missing-code ask, unique naming, the
          blank-name rule, the cell-sized batching and the storage routing. CSV is eight lines of
          read; NDJSON and Excel went through it unchanged in behaviour (every one of their 16+18
@@ -315,19 +315,31 @@ bottom; they are the project's memory and are not summarised away.
          exhaustively offline and always runs (11 tests); the round trip against real bytes
          needs the pinned CDN modules and skips cleanly without them (8 tests). Checked by
          running it with `fetch` disabled — 11 pass, 8 skip, 0 fail.
-      3. **[~] Move routing wholly to the host — the DUPLICATION is gone; the split remains.**
-         No codec computes the width rule any more: three call `ingestTable`, Parquet and
-         readstat call `isWideDataset` directly, and a test now asserts that NO codec carries a
-         copy of the arithmetic. What has not happened is the second half of the sentence — the
-         host deciding from the file AND from what is already resident. That second input exists
-         in `wouldExceedTableBudget` (c7265cf) and the two still do not meet, so routing is
-         decided in two places even though the RULE now lives in one.
+      3. **[x] Move routing wholly to the host — DONE 2026-11-20.** First the duplication
+         went: no codec computes the width rule any more (three call `ingestTable`, Parquet and
+         readstat report shape, and a test asserts NO codec carries a copy of the arithmetic).
+         Then the SPLIT went, which is the half this step was really about. The decision used to
+         need two parties to agree — a codec's view of the file (`head.wide`) and the host's
+         view of what was already resident (`wouldExceedTableBudget`), combined at the import
+         call site — while the four non-import routes into the engine consulted neither.
+         `DuckDBManager#planIngest` now takes both and there is exactly one call site
+         (`DataStore#load`), on every path in. It lives in the manager because two of the three
+         inputs are properties of that instance and one of them is not known synchronously; a
+         draft that decided it elsewhere read `canStreamOutOfCore` while it was still `null` and
+         reproduced the bug that killed an iPhone.
       4. **Then re-ask** which heuristics still earn their place. No longer gated: step 1 is
          struck, so the heap is the permanent ceiling and these are not temporary scaffolding.
          Expect the per-file width rule to still earn its place for that reason; do not assume
          it — re-measure, the numbers are in e85f8e4 and the 2026-11-19 desktop comparison above.
 
-      The test of whether this read is right: the protocol should get SMALLER, not larger.
+      **Step 4 is the only live step.** 1 is struck (upstream), 2 and 3 are done. What is left
+      is a measurement, and the one open question attached to it is the `isWideDataset` line in
+      the follow-ups index below.
+
+      The test of whether this read is right: the protocol should get SMALLER, not larger. It
+      did — `loadStreaming`/`loadWide` and `replaceTableFromParquet` are gone, `chooseSheets`
+      and the second readstat read verb are gone, and `noteTableBytes` went from one caller to
+      three, which is every route that builds a table.
 
 - [ ] **A SANDBOX-FACING streaming create — DEFERRED 2026-11-21 by decision, not by neglect.
       Do not pick this up without a plugin that needs it.** The owner asked the right question:
@@ -3060,10 +3072,15 @@ this is the index.
   columns that were NUMERIC, where per-column cost is small; the 2026-11-18 OOM was 99.6%
   VARCHAR, where it is not. The typing fix removed the symptom for this file. A genuinely
   wide file that is legitimately text still has the old problem. Re-measure before
-  changing the rule — the number to beat is in that commit. **Superseded 2026-11-18 as a
-  standalone item:** it is step 3/4 of "Import machinery: pull host policy OUT of the
-  codecs" in Now/near-term, which also says not to re-tune it before the OPFS fix. Kept
-  here because this index is where someone looks for it. *(under #98, codec interface)*
+  changing the rule — the number to beat is in that commit. **STILL LIVE, and it is now the
+  whole of step 4** of "Import machinery: pull host policy OUT of the codecs" in
+  Now/near-term — steps 1–3 are settled, so this is the only part of that entry left.
+  Both of its old qualifiers are gone: it used to be filed as "step 3/4", and step 3 is
+  done; and it used to say "not before the OPFS fix", which is struck as upstream-blocked,
+  so nothing gates the re-measure any more. The heap is the permanent ceiling, which is an
+  argument for the width rule earning its place rather than against it — but that is a
+  prediction, and the point of the step is to measure instead of predicting. Kept here
+  because this index is where someone looks for it. *(under #98, codec interface)*
 - **Latent transition analysis** — **DEFERRED 2026-11-02 until someone asks** (feasible: `depmixS4`, closure 17 — demand is the only blocker). *(under #141, More analyses)*
 - ~~**Building-block eligibility**~~ — **CLOSED as moot 2026-10-13**, and this index line
   outlived it by three weeks. The building-block library was removed on 2026-10-02 and

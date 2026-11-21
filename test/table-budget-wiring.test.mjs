@@ -130,8 +130,14 @@ test('every link in the budget chain awaits', () => {
   assert.match(dm, /async planIngest\(/, 'the plan is async');
   assert.match(dm, /const overBudget = await this\.wouldExceedTableBudget\(/,
     'and it AWAITS the budget rather than recomputing it — one computation, not two');
+  // DataStore no longer re-exposes the budget check. It delegated it for one caller — the
+  // routing block in import-service — and that block is gone, so the delegate had zero
+  // callers. Removed rather than kept "for symmetry": an exposed check with nobody calling
+  // it is an invitation to open a second routing site, which is the thing this consolidation
+  // removed.
   const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
-  assert.match(ds, /async wouldExceedTableBudget\(/, 'DataStore still exposes it, async');
+  assert.ok(!/async wouldExceedTableBudget\(/.test(ds),
+    'a budget check with no caller invites a second routing site');
   assert.match(ds, /await this\.#duckdb\.planIngest\(variables, rowCount, \{ declaredWide \}\)/,
     'and the one load() awaits the plan');
 });
@@ -168,7 +174,6 @@ test('DatasetManager forwards what the budget needs', () => {
 test('DataStore defers to the instance instead of keeping its own total', () => {
   const src = readFileSync('core/data-store.js', 'utf8');
   assert.match(src, /return this\.#duckdb\.loadedTableBytes/, 'the getter delegates');
-  assert.match(src, /return this\.#duckdb\.wouldExceedTableBudget/, 'the method delegates');
   assert.doesNotMatch(src, /#tableBytes/, 'and keeps no per-dataset map of its own');
   assert.match(src, /this\.#duckdb\.noteTableBytes\(/, 'an ingested table is recorded');
   assert.match(src, /this\.#duckdb\.forgetTable\(/, 'a dropped table is forgotten');
