@@ -329,21 +329,84 @@ bottom; they are the project's memory and are not summarised away.
 
       The test of whether this read is right: the protocol should get SMALLER, not larger.
 
-- [ ] **An EXTRA sheet of a multi-sheet workbook is still built whole — `app.data.create` has no
-      streaming form (2026-11-18).** The Excel codec streams the primary sheet through the host
-      ingest, but every additional selected sheet goes through `app.data.create({variables,
-      columns})`, which takes finished columns. So a workbook whose SECOND tab is 3,379 columns
-      wide hits the ceiling the primary sheet no longer does.
+- [ ] **A SANDBOX-FACING streaming create — DEFERRED 2026-11-21 by decision, not by neglect.
+      Do not pick this up without a plugin that needs it.** The owner asked the right question:
+      *"Given the sink is naturally streaming anyway, what is the cost of adding this even
+      though we don't quite need it yet? If it's cheap and easy and having it means we are
+      ready for anything I'm inclined to include it. But if it's expensive then we can wait."*
+      It is not cheap, and the reason is worth writing down once so nobody re-derives it.
 
-      Not urgent and not papered over: a workbook's extra tabs are normally a codebook or a
-      summary, and the wide-data case is the first sheet. But the asymmetry is real, and it is
-      the same shape as the first-class-plugin-data gap — creating a dataset is only expressible
-      as "here are all the columns", while importing into one is expressible as a stream.
+      **FIRST, WHAT IS ALREADY DONE, because the entry this replaces reads as if it is not.**
+      `app.data.create` does NOT bypass the host ingest. It goes
+      `create` → `createWithData` → `loadDataset({columns})` → `#streamWholeColumns` →
+      `DataStore#load` → batches, so a plugin's table never reaches the engine in one piece
+      and it is accounted for in the table budget like any other ingest. The fatal failure —
+      a checkpoint OOM that takes down every dataset already loaded — is gone. The original
+      entry's "a workbook whose SECOND tab is 3,379 columns wide hits the ceiling the primary
+      sheet no longer does" is therefore no longer true of the ENGINE.
 
-      The fix is a streaming form of dataset creation (begin/batch against a NEW dataset rather
-      than the active one), which the codec would then use for every sheet including the first,
-      deleting the two-path split in `readStreaming`. Worth doing when something else needs it;
-      the Parquet and ReadStat codecs would use it the same way for multi-table sources.
+      **WHAT IS ACTUALLY LEFT** is one layer further out, and it is host JS heap rather than
+      engine memory:
+
+          plugin realm        postMessage         host realm        engine
+          ──────────────────────────────────────────────────────────────────
+          whole columns   →   ONE message    →   sliced        →   batches ✔
+                              (clone/transfer)
+
+      `call('data.create', args)` is a single message, so the whole payload crosses at once —
+      and a string column is a guaranteed CLONE on every platform, since a plain array is not
+      transferable. So the host briefly holds the payload too, then slices it.
+
+      Which matters for exactly one kind of plugin: one whose generation is **naturally
+      incremental** but which the API forces to materialise anyway — a simulation or bootstrap
+      loop, an `expand.grid`-style expansion, a wide→long reshape, a document-term matrix, a
+      paged remote fetch. Those never needed a ceiling and currently get one. No shipped plugin
+      is one of those.
+
+      **THE TWO DESIGNS, AND WHY BOTH ARE EXPENSIVE.**
+
+      *A — the plugin pushes (`begin`/`batch`/`finish`).* The producer/consumer handoff is the
+      cheap half: `codec-service.js#startRead` already does it (queue + notify, with `batch()`
+      not resolving until the consumer has taken it), so that is copy-a-proven-shape. The
+      expensive half is LIFETIME. Every ingest today is scoped to a host-driven invocation and
+      ends when it returns; a plugin-held open ingest has no natural end, holds a DuckDB
+      ingester and a half-built table, and the plugin can simply never call `finish`. That needs
+      session keying, cleanup on deactivate/unload, a timeout or abort, and a rule for
+      concurrent sessions — a new category of long-lived host resource owned by sandboxed code.
+      And by this project's own rule — *a guard that only neutralises a state means the state
+      should not exist* — designing that lifetime IS the work, not an afterthought.
+
+      *B — the host pulls (a `nextBatch` callback).* Much cleaner: one `create` call, no
+      session, no abandonment, backpressure for free. Callbacks already cross the broker… but
+      **fire-and-forget**:
+
+          #makeCallback(cbId) {
+            return (...cbArgs) => { this.#post({ t: 'cb', cbId, args: cbArgs }); };
+          }
+
+      No request id, no return channel. The host can INVOKE a plugin callback; it cannot AWAIT
+      a value from one. Adding that is a `PROTOCOL_VERSION` bump on the callback wire — which
+      menus, events and every codec ride on. That is the wrong thing to disturb for a feature
+      nothing needs.
+
+      **THE CHEAP APPROXIMATION, AND WHY IT IS A TRAP.** A plugin could call `app.data.create`
+      repeatedly in an append mode; each call crosses postMessage separately, which is the
+      actual win, and `loadDataset` already supports `append`. About an hour's work. But every
+      call appends a source OP AND ITS OWN SOURCE TABLE, reconciled by `UNION ALL BY NAME` in
+      the view — so a 100-chunk stream becomes 100 DuckDB tables. That is a worse shape than
+      the problem it solves, and it only behaves for a handful of chunks, which is the case
+      that does not need it.
+
+      **SO: WAIT.** Not because it is unimportant, but because the first plugin that genuinely
+      wants this will say whether it wants push or pull, and that answer picks the design.
+      Building it now means guessing and then living with the guess in the protocol — which is
+      the opposite of being ready for anything.
+
+      *What remains true from the original entry:* an extra Excel sheet still goes through
+      `app.data.create` with whole columns, and with a sandbox-facing stream the codec would use
+      one path for every sheet, deleting the two-path split in `readStreaming`. The Parquet and
+      ReadStat codecs would use it the same way for multi-table sources. That is the clean-up
+      this would buy, and it is not a reason to build it on its own.
 
 - [ ] **Collaboration on WebKit (Safari / iPhone / iPad) — three separate gaps, none of them
       urgent (owner, 2026-10-07: *"we will eventually need collab support on WebKit devices so
@@ -3142,11 +3205,14 @@ missing line is worse, but it is to be read as "look here", never as "this is op
       the restore, and the in-engine SELECT — which is every route that builds a table.
       That is the test of whether the consolidation was real.
 
-      *Still open, and unchanged by this:* the extra-sheet entry below wanted "a streaming
-      form of dataset creation". It now exists as `DataStore#load`, but it is HOST-side —
-      a plugin still has only `app.data.create`, which takes whole columns. A plugin that
-      wants to stream needs a sandbox-facing begin/batch/finish, which is the remaining
-      piece and is what that entry should now be read as asking for.
+      *The one thing this did NOT give:* `DataStore#load` is host-side. A plugin still has
+      only `app.data.create`, which takes whole columns — so the payload crosses postMessage
+      in one message even though the engine then receives it in batches. **Deferred by
+      decision on 2026-11-21**, with both candidate designs and their real costs written up
+      under "A SANDBOX-FACING streaming create" in Now/near-term. The short version: the
+      push design needs a lifetime for an abandonable ingest, the pull design needs a return
+      channel on the callback wire (a `PROTOCOL_VERSION` bump), and nothing shipped needs
+      either — so the first plugin that wants it gets to pick.
 
 - [x] **"Choose which variables to import" for every format, not just SPSS/SAS/Stata (owner,
       2026-11-18). DONE 2026-11-19.** `readImportPick` in builtin-readstat-codec was a real feature — picking 50 of
