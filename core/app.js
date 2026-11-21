@@ -184,6 +184,12 @@ const BUILTIN_PLUGINS = [
  *
  * @type {Readonly<{ get: (url: string) => Promise<{ok: boolean, status: number, text: string}> }>}
  */
+/** A URL's origin, for the log. Never the path or the query: a scrape's parameters live
+ * there, and so would a leak. Unparseable input is reported as such rather than echoed. */
+function safeOrigin(url) {
+  try { return new URL(String(url)).origin; } catch { return '(unparseable)'; }
+}
+
 const webService = Object.freeze({
   get: async (url) => {
     if (!/^https?:\/\//i.test(String(url))) throw new Error('web.get: only http(s) URLs');
@@ -194,7 +200,15 @@ const webService = Object.freeze({
     // approved, defeating the gate (#89). `redirect: 'manual'` makes a redirect a
     // dead-stop opaque response, so the cross-origin hop never fires; we surface a
     // clear error instead of leaking. Callers must use a direct endpoint.
+    // The ONE network path a plugin has (the sandbox CSP blocks the rest), so it is the
+    // one place that can say a plugin went out to the network at all. Origin only — never
+    // the path or the query, which is where a scrape puts its parameters and where a
+    // leak would show up as data in a URL. The gate that approves this is per-ORIGIN too,
+    // so the origin is also the unit the decision was made in.
+    const t0 = Date.now();
+    debug('net', 'web.get →', { origin: safeOrigin(url) });
     const res = await fetch(String(url), { redirect: 'manual' });
+    debug('net', 'web.get ←', { origin: safeOrigin(url), status: res.status, ms: Date.now() - t0 });
     if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
       throw new Error(
         'web.get: the server returned a redirect, which is not followed for your safety ' +

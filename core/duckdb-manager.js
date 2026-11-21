@@ -28,10 +28,36 @@
  */
 
 import { getAssets } from './assets.js';
+import { debug, isDebug } from './debug.js';
 
 /**
  * Manages the lifecycle of, and access to, the single DuckDB-WASM runtime.
  */
+/** Statements that change something. Logged always; everything else only when slow. */
+const MUTATING_SQL = /^\s*(CREATE|DROP|INSERT|UPDATE|DELETE|ALTER|COPY|ATTACH|DETACH|CHECKPOINT|PRAGMA|SET|USE|BEGIN|COMMIT|ROLLBACK)\b/i;
+
+/** A read slower than this is a finding rather than noise. */
+const SLOW_QUERY_MS = 250;
+
+/**
+ * A statement's SHAPE, for the log — never its values.
+ *
+ * The debug log is exported and attached to bug reports, so it must not carry the user's
+ * data, and a `WHERE` clause or an `INSERT` can. This keeps the keywords and identifiers
+ * that make a statement recognisable, collapses whitespace and truncates; quoted string
+ * literals are replaced wholesale.
+ *
+ * @param {string} sql
+ * @returns {string}
+ */
+function sqlShape(sql) {
+  return String(sql)
+    .replace(/'(?:[^']|'')*'/g, "'?'") // string literals out, including '' escapes
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
 export class DuckDBManager {
   /** Loaded DuckDB module namespace. @type {any} */
   #duckdb = null;
@@ -183,7 +209,35 @@ export class DuckDBManager {
    */
   async query(sql) {
     const { conn } = await this.#ensureReady();
-    return conn.query(sql);
+    // EVERY statement the engine runs goes through here, which is what makes this the
+    // place to instrument — and also why it cannot simply log all of them. A grid scroll
+    // issues a window query per frame, so logging reads unconditionally would push 2,000
+    // routine SELECTs through the ring buffer and throw away the context a bug report
+    // needs. (The buffer IS the log: `saveLog()` exports it, most recent entries only.)
+    //
+    // So: every statement that CHANGES something is logged, because those are the ones
+    // whose order matters when reconstructing what happened. Reads are logged only when
+    // slow, because a slow read is a finding and a fast one is noise.
+    if (!isDebug()) return conn.query(sql);
+    const mutating = MUTATING_SQL.test(sql);
+    const t0 = Date.now();
+    try {
+      const out = await conn.query(sql);
+      const ms = Date.now() - t0;
+      // Statement SHAPE, never its values: a log that goes into a bug report must not
+      // carry the user's data, and a WHERE clause can.
+      if (mutating) debug('sql', sqlShape(sql), { ms, rows: out?.numRows ?? null });
+      else if (ms >= SLOW_QUERY_MS) debug('sql', `SLOW ${sqlShape(sql)}`, { ms, rows: out?.numRows ?? null });
+      return out;
+    } catch (err) {
+      // A failing statement is always worth a line, read or not: this is the one place
+      // that knows both the statement and that it threw.
+      debug('sql', `FAILED ${sqlShape(sql)}`, {
+        ms: Date.now() - t0,
+        message: String(err?.message ?? err).slice(0, 200),
+      });
+      throw err;
+    }
   }
 
   /**

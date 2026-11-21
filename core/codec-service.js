@@ -502,6 +502,13 @@ export class CodecService {
         `app.codec.loadAsset: "${name}" is neither declared by the plugin nor a host-vetted shared library`,
       );
     }
+    // A codec's library arrives over the network on first use — multi-megabyte bundles
+    // (SheetJS, hyparquet, duckdb) fetched from a pinned CDN. When one of these is slow or
+    // blocked, the symptom is an import that hangs with nothing on screen, and the log has
+    // had nothing to say about it. URL, because these are OUR pinned dependencies rather
+    // than anything the user typed.
+    const t0 = Date.now();
+    debug('net', 'asset →', { name, url: entry.url, kind: entry.kind });
     let value;
     if (entry.kind === 'bytes') {
       const res = await fetch(entry.url);
@@ -511,6 +518,14 @@ export class CodecService {
       value = await this.#fetchSelfContainedModule(entry.url);
     }
     this.#assetCache.set(cacheKey, value);
+    // Size and timing, which together say "the import was waiting on the network" rather
+    // than leaving a gap in the log where the wait was. Cached on the way back, so this
+    // fires once per asset per session.
+    debug('net', 'asset ←', {
+      name,
+      bytes: value?.length ?? null,
+      ms: Date.now() - t0,
+    });
     return value;
   }
 

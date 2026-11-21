@@ -51,11 +51,41 @@ let _tags = 'all';
 /** @type {Array<{ts: number, tag: string, args: any[]}>} */
 const _buffer = [];
 
+/** Told when the gate flips, so a consumer that CACHES the answer can refresh it.
+ * The sandboxes are the reason this exists: a plugin's `app.debug()` is gated inside the
+ * iframe so a disabled call costs no postMessage, which means the iframe holds a copy of
+ * this boolean and has to be told when it changes. @type {Set<(on: boolean) => void>} */
+const _watchers = new Set();
+
+/**
+ * Subscribe to gate changes. Returns an unsubscribe.
+ *
+ * Fires only on a CHANGE, not on every re-read: `apply` runs whenever the setting is
+ * written, including writing the same value, and a watcher that posts into every sandbox
+ * should not do so because someone re-saved an unchanged setting.
+ *
+ * @param {(on: boolean) => void} fn
+ * @returns {() => void}
+ */
+export function onDebugChange(fn) {
+  _watchers.add(fn);
+  return () => _watchers.delete(fn);
+}
+
 function _readGate() {
+  const was = _enabled;
   const raw = gateSetting.get();
-  if (!raw) { _enabled = false; return; }
-  _enabled = true;
-  _tags = (raw === '1' || raw === '*') ? 'all' : new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  if (!raw) { _enabled = false; } else {
+    _enabled = true;
+    _tags = (raw === '1' || raw === '*') ? 'all' : new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+  }
+  if (_enabled !== was) {
+    for (const fn of _watchers) {
+      // A watcher must never be able to break the logger: this runs inside `apply`, which
+      // runs inside saving a setting.
+      try { fn(_enabled); } catch { /* ignore */ }
+    }
+  }
 }
 _readGate();
 

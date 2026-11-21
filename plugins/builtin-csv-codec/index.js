@@ -118,6 +118,15 @@ const WRITE_BATCH = 50_000; // rows per output flush on export
 export async function readCsv(app, { name, select }) {
   const size = await app.codec.size();
   const delimiter = /\.tsv$/i.test(name || '') ? '\t' : ',';
+  // A plugin's own line in the HOST's log (`app.debugLog`, gated inside the sandbox so a
+  // call costs nothing when logging is off). Here because the delimiter is the one
+  // decision this reader makes alone, and a `.txt` read as comma-delimited when the file
+  // was tab-delimited produces one wide column — which looks like a parse bug and is not.
+  app.debugLog?.('read', {
+    bytes: size,
+    delimiter: delimiter === ',' ? 'comma' : 'tab',
+    narrowed: !!select,
+  });
   await ingestTable(app, {
     select,
     dropSingleEmptyRow: true,

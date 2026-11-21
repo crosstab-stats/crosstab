@@ -580,7 +580,11 @@ export class PluginLoader {
       iframe,
       services: this.#gatedServices(ctx),
       onError: (err) => console.error(`[plugin ${label}]`, err),
+      // Reads the holder above, filled in once the manifest has been parsed — so log
+      // lines carry the plugin's real id rather than `unknown`.
+      pluginId: () => ctx.id ?? ctx.name ?? null,
     });
+
 
     // Append + point the iframe at a blob: URL of the sandbox document; the runtime
     // posts {t:'ready'} once wired up. blob: (not the host URL) so it works offline —

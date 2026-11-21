@@ -65,9 +65,17 @@
         let stdlibSource = null;
         let std = null; // the general plugin stdlib, imported once at load
 
-        /** Debug logging gate — set to true when the host sends `debug: true`
-         * in the activate message. Plugins read `app.debug` to gate their own
-         * diagnostic output. */
+        /** Debug logging gate.
+         *
+         * Set from the `activate` message, and UPDATED by `{t:'debug', on}` when the gate
+         * is flipped mid-session — which is the case that matters, because someone turning
+         * logging on is usually trying to see something that is happening right now.
+         * Before that update existed the flag was whatever it had been at activate, so a
+         * plugin's own diagnostics stayed dark until a reload.
+         *
+         * Plugins read `app.debug` (a boolean) to gate their own `console` output, and
+         * call `app.debugLog(tag, …)` to write into the HOST's log — the one `saveLog()`
+         * exports into a bug report. */
         let debugEnabled = false;
 
         // Post a message to the host. Prefer TRANSFERRING any ArrayBuffers (zero-copy):
@@ -249,6 +257,26 @@
             webr: makeWebr(),
             ui: makeNamespace('ui', ['selectVariables', 'selectFromList', 'showForm']),
             web: makeNamespace('web', ['get']),
+            /**
+             * Write a line into the HOST's debug log — the one `saveLog()` exports into a
+             * bug report, and the one the user can turn off. `console.log` reaches
+             * neither.
+             *
+             * LOCALLY GATED, which is the point: with logging off this returns without a
+             * postMessage, so a call can sit inside a loop without costing a round trip
+             * per iteration. The host tags every entry `plugin:<id>` and records argument
+             * SHAPES rather than values, so a plugin can neither impersonate the engine in
+             * the log nor put the user's data into a file they are about to email.
+             *
+             * @param {string} tag - a short label for the line
+             * @param {...any} args - values; recorded as kinds and sizes
+             */
+            debugLog: (tag, ...args) => {
+              if (!debugEnabled) return;
+              // Fire-and-forget: a log line must never be something a plugin awaits, and
+              // a rejected log must never surface as a plugin error.
+              try { call('debug.log', [tag, args]).catch(() => {}); } catch { /* ignore */ }
+            },
             // The current user's identity snapshot (#148): { authorId, initials, name,
             // colour } — for stamping authorship on what the plugin creates (CAQDAS
             // code applications → inter-coder reliability). Read-only, self-asserted.
@@ -355,6 +383,11 @@
           if (!msg || msg.__crosstab !== PROTOCOL) return;
 
           switch (msg.t) {
+            // The gate changed. Additive message: an older sandbox falls through to
+            // `default` and ignores it.
+            case 'debug':
+              debugEnabled = !!msg.on;
+              break;
             case 'load':
               setStep('loading');
               stdlibSource = msg.stdlib || null;

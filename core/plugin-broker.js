@@ -29,6 +29,8 @@
  *   {t:'activate', plugin}             call activate(app)
  *   {t:'result', id, ok, value, error}  RPC response; value may hold {__handle:n}
  *   {t:'cb', cbId, args}                invoke a plugin-side callback
+ *   {t:'debug', on}                     debug logging turned on/off (additive:
+ *                                       an older sandbox ignores it, so no version bump)
  *
  * All messages are tagged `__crosstab: PROTOCOL_VERSION`. Because the iframe is
  * sandboxed to an opaque origin, messages arrive with `origin === "null"`; we
@@ -36,13 +38,96 @@
  * iframe window, and post back with target origin `"*"`.
  */
 
-import { debug } from './debug.js';
+import { debug, isDebug, onDebugChange } from './debug.js';
 import { formatVarRef, parseVarRef } from './var-ref.js';
 import { PendingCalls } from './plugin-lifecycle.js';
 import { currentAuthor } from './user-identity.js';
 
 /** Bumped on any breaking change to the wire protocol above. */
 export const PROTOCOL_VERSION = 1;
+
+/**
+ * What a value IS, without saying what it holds.
+ *
+ * Every RPC argument and return crosses this boundary, and they are the user's data —
+ * variable names, cell values, search text, R source, file bytes. The debug log is
+ * exported and attached to bug reports, so it records sizes and kinds only. A count is
+ * almost always what a diagnosis needs anyway: "getColumns returned 3 columns" answers a
+ * different question from "getColumns returned 3,379", and neither needs a value.
+ *
+ * @param {any} v
+ * @param {number} [depth] - recursion guard; objects are summarised below the top level
+ * @returns {any} a JSON-safe description
+ */
+function shapeOf(v, depth = 0) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string') return `str(${v.length})`;
+  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'bigint') return typeof v;
+  if (typeof v === 'function') return 'fn';
+  if (v instanceof ArrayBuffer) return `bytes(${v.byteLength})`;
+  if (ArrayBuffer.isView(v)) return `${v.constructor?.name ?? 'view'}(${v.length})`;
+  if (v instanceof Blob) return `blob(${v.size})`;
+  if (v instanceof Date) return 'Date';
+  if (Array.isArray(v)) {
+    if (depth >= 2) return `array(${v.length})`;
+    // The first element's shape stands for the rest: a batch of 10,000 identical rows
+    // says everything in one entry, and listing them would be the flood this avoids.
+    return v.length ? [`array(${v.length})`, shapeOf(v[0], depth + 1)] : 'array(0)';
+  }
+  if (typeof v === 'object') {
+    const keys = Object.keys(v);
+    if (depth >= 2) return `object(${keys.length} keys)`;
+    const out = {};
+    for (const k of keys.slice(0, 12)) out[k] = shapeOf(v[k], depth + 1);
+    if (keys.length > 12) out['…'] = `${keys.length - 12} more`;
+    return out;
+  }
+  return typeof v;
+}
+
+/**
+ * A plugin's own log value: passed through when small, shaped when not.
+ *
+ * The counterpart to {@link shapeOf}, and the difference matters. `shapeOf` describes
+ * values that merely CROSS this boundary — RPC arguments, which are the user's data — so
+ * it never passes one through. This handles values a plugin deliberately chose to record,
+ * where the shape is useless: a delimiter, a byte count, a route decision, a state name.
+ *
+ * The cap is a BACKSTOP, not a guarantee. A plugin that logs a column of values will have
+ * the array summarised and a long string truncated, but nothing here can stop a determined
+ * plugin putting one cell value in a short string. The discipline the host's own lines
+ * follow — counts and kinds, never names or values — is the discipline a plugin should
+ * follow too, and the log is exported into bug reports precisely so that matters.
+ *
+ * @param {any} v
+ * @param {number} [depth]
+ * @returns {any} JSON-safe
+ */
+function logShape(v, depth = 0) {
+  if (v === null || v === undefined) return null;
+  const t = typeof v;
+  if (t === 'number' || t === 'boolean') return v;
+  if (t === 'bigint') return `${v}`;
+  if (t === 'string') return v.length <= 200 ? v : `str(${v.length})`;
+  if (t === 'function') return 'fn';
+  // Anything bulk or opaque is described rather than carried — the same call as `shapeOf`
+  // makes, for the same reason.
+  if (v instanceof ArrayBuffer || ArrayBuffer.isView(v) || v instanceof Blob || v instanceof Date) {
+    return shapeOf(v);
+  }
+  if (Array.isArray(v)) {
+    if (depth >= 1 || v.length > 16) return shapeOf(v, depth);
+    return v.map((x) => logShape(x, depth + 1));
+  }
+  if (t === 'object') {
+    const keys = Object.keys(v);
+    if (depth >= 2 || keys.length > 16) return shapeOf(v, depth);
+    const out = {};
+    for (const k of keys) out[k] = logShape(v[k], depth + 1);
+    return out;
+  }
+  return shapeOf(v, depth);
+}
 
 export class PluginBroker {
   /** @type {HTMLIFrameElement} */
@@ -102,6 +187,13 @@ export class PluginBroker {
   /** Whether host-side debug logging is active (forwarded to the iframe). */
   #debug = false;
 
+  /** Late-bound source of the plugin's id, for the log's `plugin:<id>` tag.
+   * @type {?() => ?string} */
+  #pluginIdFn = null;
+
+  /** Unsubscribes this broker from debug-gate changes. @type {?() => void} */
+  #stopDebugWatch = null;
+
   /**
    * @param {Object} args
    * @param {HTMLIFrameElement} args.iframe - The plugin's sandboxed iframe.
@@ -109,13 +201,22 @@ export class PluginBroker {
    *   menus/ui) plus the event bus, used to build the dispatch table.
    * @param {(err: Error) => void} [args.onError]
    */
-  constructor({ iframe, services, onError, attribution }) {
+  constructor({ iframe, services, onError, attribution, pluginId }) {
     this.#iframe = iframe;
     this.#onError = onError ?? ((e) => console.error('[plugin-broker]', e));
     this.#services = services;
     this.#attribution = attribution ?? null;
+    // A FUNCTION, not a value: the loader does not know the plugin's id when the broker
+    // is built — it reads the id out of the manifest afterwards, into a holder it passes
+    // here. Capturing a value at construction would tag every log line `unknown`.
+    this.#pluginIdFn = typeof pluginId === 'function' ? pluginId : null;
     try { this.#debug = typeof localStorage !== 'undefined' && !!localStorage.getItem('crosstab_debug'); } catch { /* sandboxed */ }
-    this.#dispatch = buildDispatch(services);
+    // Subscribed HERE rather than by the caller: a watcher holds a reference to this
+    // broker, so whoever subscribes has to remember to unsubscribe on teardown — and the
+    // first version left that disposer dangling in the loader. Owning it means `dispose`
+    // cannot forget.
+    this.#stopDebugWatch = onDebugChange((on) => this.setDebugGate(on));
+    this.#dispatch = buildDispatch({ ...services, pluginId: () => this.#pluginId() });
     // Output bracketing for plugin-driven output (e.g. a workspace's own buttons):
     // the plugin supplies only the title; the host stamps the trustworthy
     // attribution, so a plugin can't mislabel its output.
@@ -512,6 +613,8 @@ export class PluginBroker {
    */
   dispose() {
     window.removeEventListener('message', this.#listener);
+    try { this.#stopDebugWatch?.(); } catch { /* best-effort */ }
+    this.#stopDebugWatch = null;
     // Every outstanding call ends HERE rather than on a clock (#154): disposal is a real
     // event, a deadline is a guess. Without this a caller awaiting a torn-down frame
     // would hang forever, which is exactly why timeouts existed.
@@ -629,6 +732,33 @@ export class PluginBroker {
     }
   }
 
+  /**
+   * Tell the iframe whether debug logging is on.
+   *
+   * The flag already rides the `activate` message, which covers a plugin loaded while
+   * logging is on. This covers the other case, and it is the one that matters more:
+   * someone turning logging ON to watch something that is happening right now. Without
+   * it a plugin's own diagnostics stay dark until a reload — by which point whatever was
+   * being diagnosed has usually gone.
+   *
+   * Additive to the wire protocol: an older sandbox ignores an unknown message type, so
+   * this does not bump PROTOCOL_VERSION.
+   *
+   * @param {boolean} on
+   */
+  setDebugGate(on) {
+    this.#debug = !!on;
+    try { this.#post({ t: 'debug', on: this.#debug }); } catch { /* the frame may be gone */ }
+  }
+
+  /** Who the log line is about. Prefers the loader's late-bound id; falls back to the
+   * attribution, which carries the plugin's identity for output stamping. */
+  #pluginId() {
+    const fromLoader = this.#pluginIdFn?.();
+    if (fromLoader) return String(fromLoader);
+    return this.#attribution?.pluginId ?? this.#attribution?.id ?? this.#attribution?.name ?? null;
+  }
+
   /** Dispatch one RPC call and post the result (or error) back. */
   async #handleCall(msg) {
     const { id, method, args } = msg;
@@ -640,15 +770,26 @@ export class PluginBroker {
       method.startsWith('results.') &&
       this.#attribution &&
       typeof this.#services.results?.setActiveAttribution === 'function';
+    // EVERY plugin→host call lands here, so this one place covers the whole surface: what
+    // a plugin asked for, in order, how long it took, and how big the answer was. Only
+    // failures were logged before, which meant a plugin that did the wrong thing
+    // SUCCESSFULLY left no trace at all — and "it ran and the result was wrong" is the
+    // harder bug.
+    //
+    // Shapes, never values. The log is exported into bug reports, and these arguments are
+    // the user's data: variable names, cell values, search text, R source.
+    const t0 = isDebug() ? Date.now() : 0;
+    debug('rpc', `→ ${method}`, { plugin: this.#pluginId(), args: shapeOf(args) });
     try {
       const handler = this.#dispatch[method] ?? this.#builtinMethod(method);
       if (!handler) throw new Error(`unknown method "${method}"`);
       const revived = this.#reviveArgs(args ?? []);
       if (stampAttr) this.#services.results.setActiveAttribution(this.#attribution);
       const result = await handler(...revived);
+      debug('rpc', `← ${method}`, { ms: Date.now() - t0, result: shapeOf(result) });
       this.#post({ t: 'result', id, ok: true, value: this.#marshalReturn(result) });
     } catch (err) {
-      debug('broker', `RPC error: ${method} —`, err.message);
+      debug('rpc', `✗ ${method}`, { ms: Date.now() - t0, message: String(err?.message ?? err).slice(0, 200) });
       this.#post({ t: 'result', id, ok: false, error: String(err?.message ?? err) });
     } finally {
       if (stampAttr) this.#services.results.setActiveAttribution(null);
@@ -691,6 +832,11 @@ export class PluginBroker {
   #makeCallback(cbId) {
     return (...cbArgs) => {
       try {
+        // The other direction, which had no instrumentation at all: a menu command or an
+        // event handler the host invokes INSIDE the plugin. A log showing the host fire a
+        // callback and nothing happening afterwards is how you tell "the plugin was never
+        // asked" from "the plugin was asked and did nothing".
+        debug('rpc', `⇢ cb#${cbId}`, { plugin: this.#pluginId(), args: shapeOf(cbArgs) });
         this.#post({ t: 'cb', cbId, args: cbArgs });
       } catch (err) {
         // Most commonly: an event payload that is not structured-cloneable.
@@ -727,9 +873,14 @@ export class PluginBroker {
  * @param {object} s.webr    - WebRManager (run/install/files)
  * @param {object} s.ui      - UiService#api
  * @param {object} s.web - Host network fetch (`web.get`)
+ * @param {() => ?string} [s.pluginId] - reads whose calls these are, for the log's
+ *   `plugin:<id>` tag. A function because the id is not known when this is built.
  * @returns {Object<string, Function>}
  */
-function buildDispatch({ data, results, webr, ui, web }) {
+function buildDispatch({ data, results, webr, ui, web, pluginId }) {
+  // Read at CALL time: the table is built before the plugin's manifest has been parsed,
+  // so the id does not exist yet.
+  const who = () => (typeof pluginId === 'function' ? pluginId() : null) ?? 'unknown';
   return {
     'data.getDataFrame': (opts) => data.getDataFrame(opts),
     'data.getColumns': (opts) => data.getColumns(opts),
@@ -768,6 +919,28 @@ function buildDispatch({ data, results, webr, ui, web }) {
     'ui.pickFile': (opts) => ui.pickFile(opts),
 
     'web.get': (url) => web.get(url),
+
+    // A plugin's own diagnostics, into the host's gated log. Plugins could already READ
+    // the gate (`app.debug`) but had nowhere to write: the only option was `console.log`,
+    // which does not reach the file `saveLog()` exports into a bug report and which the
+    // user cannot turn off.
+    //
+    // Tagged `plugin:<id>` rather than with a tag of the plugin's choosing, so a plugin
+    // cannot write a line that reads as if the engine wrote it — the log is evidence.
+    //
+    // `logShape`, NOT the `shapeOf` every other line here uses — and that distinction was
+    // got wrong first time round. An RPC argument is the user's data in transit, so
+    // recording its shape is the only safe thing. A plugin's own log line is a fact the
+    // plugin DERIVED and chose to record, so shaping it destroys the whole point: the
+    // first version turned `{delimiter: 'tab', bytes: 8}` into
+    // `{delimiter: 'str(3)', bytes: 'number'}`, which says nothing at all.
+    'debug.log': (tag, args) => {
+      debug(
+        `plugin:${who()}`,
+        String(tag ?? '').slice(0, 80),
+        ...(Array.isArray(args) ? args.slice(0, 8).map((a) => logShape(a)) : []),
+      );
+    },
 
     // The current user's self-set identity snapshot (#148) — so a plugin can stamp
     // authorship on what it creates (e.g. CAQDAS code applications → inter-coder

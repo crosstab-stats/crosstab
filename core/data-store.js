@@ -84,6 +84,14 @@ const ROWID_STRIDE = 1_000_000_000;
  * second number would only invite the two to drift. */
 const INGEST_CELLS = 1_000_000;
 
+/** When an unwindowed read is worth a log line.
+ *
+ * The same million the ingest batches by, for the same reason — it is the point at which
+ * a copy stops being incidental. Below it a read is a grid window or a 40-column survey
+ * and saying so would be noise; above it, someone is pulling a dataset into JS and that is
+ * worth being able to see in a log. */
+const BIG_READ_CELLS = 1_000_000;
+
 /** Per-row sequential index baked into a **wide source**'s Parquet file (assigned
  * in import order). The stable row id is derived from it; it also gives reads a
  * cheap ordering key. Internal; never surfaced as a variable. */
@@ -2155,6 +2163,10 @@ export class DataStore {
    * @returns {Promise<Array<Object<string, number|string|null>>>}
    */
   async getDataFrame({ variables } = {}) {
+    // On top of `getColumns`'s copy this allocates one object per ROW, so it is the more
+    // expensive of the two and the one whose doc has always said "small-to-medium". The
+    // row objects are the part `getColumns` does not pay for, so it gets its own line
+    // rather than relying on the one below.
     const cols = await this.getColumns({ variables });
     const names = (variables ?? this.#variables.map((v) => v.name)).filter((n) => n in cols);
     const rows = new Array(this.#rowCount);
@@ -2165,6 +2177,11 @@ export class DataStore {
         row[n] = typeof v === 'number' && Number.isNaN(v) ? null : v;
       }
       rows[r] = row;
+    }
+    if (this.#rowCount * names.length >= BIG_READ_CELLS) {
+      debug('data', 'row objects built for the whole dataset', {
+        rows: this.#rowCount, columns: names.length,
+      });
     }
     return rows;
   }
@@ -2181,6 +2198,20 @@ export class DataStore {
   async getColumns({ variables, applyMissing = false } = {}) {
     const plan = this.#columnPlan(variables, { applyMissing });
     if (this.#rowCount === 0 || plan.length === 0) return {};
+    // SAY HOW MUCH IS BEING PULLED INTO JS. This is the one read verb with no window —
+    // `getRows` pages, this takes everything — and it is also the one plugins are steered
+    // toward for efficiency, so the convenience and the cliff sit on the same call.
+    //
+    // Not a guard: a caller that asks for the whole dataset gets it, and the failure is in
+    // its own heap rather than the engine's. What was missing is that a plugin author
+    // watching the log could not see the moment it became expensive. Logged past a
+    // threshold so a 40-column read stays silent and a 21-million-cell one does not.
+    const cells = plan.length * this.#rowCount;
+    if (cells >= BIG_READ_CELLS) {
+      debug('data', 'materialising the whole dataset into JS', {
+        columns: plan.length, rows: this.#rowCount, cells, applyMissing,
+      });
+    }
 
     const table = await this.#duckdb.query(
       `SELECT ${plan.map((p) => p.expr).join(', ')} FROM ${this.#readRelation().from}`,

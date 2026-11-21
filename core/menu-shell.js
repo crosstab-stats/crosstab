@@ -14,7 +14,7 @@
  * "Analyze ▸ Regression" without coordinating.
  */
 
-import { recordError } from './debug.js';
+import { debug, recordError } from './debug.js';
 import { currentScreenMode } from './screen-mode.js';
 
 /**
@@ -110,9 +110,19 @@ export function runCommand(item, report) {
       /* reporting a failure must never be a second failure */
     }
   };
+  // EVERY menu item runs through here, so one line covers the whole menu — and knowing
+  // which commands the user actually invoked, in order, is the single most useful thing a
+  // bug report can carry. Without it a log begins at the first thing that went wrong
+  // rather than at what was asked for.
+  debug('menu', 'run', { id: item?.id ?? null, label: item?.label ?? null });
   try {
     const out = item.command();
-    if (out && typeof out.then === 'function') return Promise.resolve(out).catch(fail);
+    if (out && typeof out.then === 'function') {
+      return Promise.resolve(out)
+        .then((v) => { debug('menu', 'done', { id: item?.id ?? null }); return v; })
+        .catch(fail);
+    }
+    debug('menu', 'done', { id: item?.id ?? null });
   } catch (err) {
     fail(err);
   }
