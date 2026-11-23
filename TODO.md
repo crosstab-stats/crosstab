@@ -327,14 +327,58 @@ bottom; they are the project's memory and are not summarised away.
          inputs are properties of that instance and one of them is not known synchronously; a
          draft that decided it elsewhere read `canStreamOutOfCore` while it was still `null` and
          reproduced the bug that killed an iPhone.
-      4. **Then re-ask** which heuristics still earn their place. No longer gated: step 1 is
-         struck, so the heap is the permanent ceiling and these are not temporary scaffolding.
-         Expect the per-file width rule to still earn its place for that reason; do not assume
-         it — re-measure, the numbers are in e85f8e4 and the 2026-11-19 desktop comparison above.
+      4. **[x] Re-asked which heuristics earn their place — MEASURED 2026-11-23, and the
+         answer is that `isWideDataset` does NOT.** Harness committed at
+         `spike/ingest-route-measure.mjs`, one run per page load (a second import in the same
+         session starts from a grown heap and a database already holding a table). Desktop
+         Chromium, 3,300 columns x 2,000 rows = 6.6M cells, every column the same type, the
+         route forced via `declaredWide`:
 
-      **Step 4 is the only live step.** 1 is struck (upstream), 2 and 3 are done. What is left
-      is a measurement, and the one open question attached to it is the `isWideDataset` line in
-      the follow-ups index below.
+         | type | route | time | JS heap peak | engine (duckdb_memory) |
+         |---|---|---|---|---|
+         | numeric | table | 6,073 ms | 81 MiB | **46 MiB** |
+         | numeric | wide | 3,642 ms | 200 MiB | 1 MiB |
+         | string | table | **26,651 ms** | 244 MiB | **76 MiB** |
+         | string | wide | 8,188 ms | 470 MiB | 1 MiB |
+
+         **TYPE changes the answer; width does not.** At identical width and cell count, text
+         costs the table path 4.4x the time and 1.65x the engine memory of numbers. So the
+         `isWideDataset` follow-up was right that the e85f8e4 rejection was measured on the
+         wrong type — but wrong about the fix. A width term is not what is missing.
+
+         **What is missing is nothing: the type-aware rule already exists beside it.** At
+         3,300 x 10,000 (33M cells, just past `isWideDataset`'s 32M threshold), on an empty
+         database:
+
+             isWideDataset        numeric true    string true     <- type-BLIND
+             estimateTableBytes   252 MiB         504 MiB         <- type-aware, 2x apart
+             exceedsTableBudget   false           TRUE
+
+         For text the byte budget already catches it and `isWideDataset` adds nothing. For
+         numbers `isWideDataset` fires where the budget does not — and per the table above,
+         numeric-as-a-table is the CHEAP case. So the cells rule routes the cheapest case out
+         of core while the rule next to it handles the expensive ones. It is not merely
+         redundant, it fires in the wrong direction.
+
+         **And the two paths' ceilings are different in kind, which is why this matters.**
+         `rowGroupFor(3300) * 3300` is 4.0M cells, so the wide path's JS peak is bounded by one
+         row group whatever the file's size — the 200/470 MiB above would not grow for a file
+         ten times larger. The table path's engine memory is cumulative across every import in
+         the session, and it is the engine's checkpoint that fails fatally. Trading bounded,
+         transient JS heap for unbounded, shared engine memory is the right trade; the cells
+         rule just picks the wrong files to make it for.
+
+         **RECOMMENDATION, not yet done — this is the owner's call, same as
+         `TABLE_BYTE_BUDGET`.** Delete `isWideDataset` and let `planIngest`'s byte budget
+         decide for every path, keeping `declaredWide` only for a codec that genuinely knows
+         better. Checked before proposing it: readstat's case (the full GSS, ~6,942 columns)
+         estimates in the gigabytes, so the budget catches it with room to spare — the
+         codec-side rule is not load-bearing for the file it was written for. That would take
+         the ingest from two routing rules to one, which is this entry's own test.
+
+      **All four steps are now settled.** 1 is struck (upstream), 2 and 3 are done, and 4 is
+      measured — leaving one decision on the table rather than one question open: whether to
+      act on step 4's recommendation and delete `isWideDataset`.
 
       The test of whether this read is right: the protocol should get SMALLER, not larger. It
       did — `loadStreaming`/`loadWide` and `replaceTableFromParquet` are gone, `chooseSheets`
@@ -3071,16 +3115,19 @@ this is the index.
   cells and built a plain table. e85f8e4 measured width-routing and rejected it, but on
   columns that were NUMERIC, where per-column cost is small; the 2026-11-18 OOM was 99.6%
   VARCHAR, where it is not. The typing fix removed the symptom for this file. A genuinely
-  wide file that is legitimately text still has the old problem. Re-measure before
-  changing the rule — the number to beat is in that commit. **STILL LIVE, and it is now the
-  whole of step 4** of "Import machinery: pull host policy OUT of the codecs" in
-  Now/near-term — steps 1–3 are settled, so this is the only part of that entry left.
-  Both of its old qualifiers are gone: it used to be filed as "step 3/4", and step 3 is
-  done; and it used to say "not before the OPFS fix", which is struck as upstream-blocked,
-  so nothing gates the re-measure any more. The heap is the permanent ceiling, which is an
-  argument for the width rule earning its place rather than against it — but that is a
-  prediction, and the point of the step is to measure instead of predicting. Kept here
-  because this index is where someone looks for it. *(under #98, codec interface)*
+  wide file that is legitimately text still has the old problem. **ANSWERED 2026-11-23 by
+  measurement** (step 4 of "Import machinery" in Now/near-term, which carries the numbers):
+  the suspicion was correct that the e85f8e4 rejection was measured on the wrong TYPE —
+  text costs the table path 4.4x the time of numbers at identical width — but the fix is
+  not a width term. `estimateTableBytes`/`exceedsTableBudget` sitting right next to
+  `isWideDataset` is already type-aware and residency-aware, and catches the text case that
+  the cells rule was blamed for missing; the cells rule's only distinct contribution is to
+  route the CHEAPEST case (wide numeric, under the byte budget) out of core. The
+  recommendation is therefore to delete the cells rule rather than extend it, which is the
+  owner's call and is recorded there. Also note the prediction in the previous version of
+  this line — "the heap is the permanent ceiling, which is an argument for the width rule
+  earning its place" — was wrong, which is the reason the step said to measure instead of
+  predicting. *(under #98, codec interface)*
 - **Latent transition analysis** — **DEFERRED 2026-11-02 until someone asks** (feasible: `depmixS4`, closure 17 — demand is the only blocker). *(under #141, More analyses)*
 - ~~**Building-block eligibility**~~ — **CLOSED as moot 2026-10-13**, and this index line
   outlived it by three weeks. The building-block library was removed on 2026-10-02 and
