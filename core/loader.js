@@ -20,6 +20,7 @@
  */
 
 import { PluginBroker } from './plugin-broker.js';
+import { debug } from './debug.js';
 import { attachSandbox } from './plugin-sandbox.js';
 import { collectModuleClosure } from './plugin-modules.js';
 import { scopedAssetList } from './asset-store.js';
@@ -575,6 +576,14 @@ export class PluginLoader {
     // loads, so the gate reads it from this holder — `web.get` only ever fires
     // after load + activate, by which point it's filled in.
     const ctx = { id: null, name: label };
+    // PHASE MARKERS for the chain in this file's own header — fetch → sandbox → import →
+    // version-check → activate. A plugin that does not appear in the menus has failed at
+    // exactly one of those, and they fail differently: a blocked fetch, a frame that never
+    // signals ready, a module that throws on import, an apiVersion mismatch, an
+    // `activate` that rejects. The log had nothing from this file at all, so the symptom
+    // ("the plugin isn't there") carried no information about which.
+    const t0 = Date.now();
+    debug('plugin-load', 'instantiating', { label, capability, bytes: code?.length ?? null });
     const iframe = this.#createIframe();
     const broker = new PluginBroker({
       iframe,
@@ -597,7 +606,9 @@ export class PluginLoader {
 
     try {
       await loaded;             // the frame's own load/error — not a clock
+      debug('plugin-load', 'frame loaded', { label, ms: Date.now() - t0 });
       await broker.whenReady(); // …and the guest's own ready signal
+      debug('plugin-load', 'sandbox ready', { label, ms: Date.now() - t0 });
       const modules = await this.#moduleClosure(code, label, { entryUrl, assets });
       const manifest = await broker.sendLoad(code, await chartStdlibSource(), modules, await pluginStdlibSource());
 
@@ -652,8 +663,16 @@ export class PluginLoader {
       // declared assets can be resolved on demand (#119) — from its own bundle, or
       // from a same-origin sibling of its entry URL.
       this.#plugins.set(manifest.id, { manifest, iframe, broker, origin, entryUrl, assets, apiCompat: compat.level });
+      debug('plugin-load', 'loaded', {
+        id: manifest.id, label, apiCompat: compat.level, ms: Date.now() - t0,
+      });
       return manifest;
     } catch (err) {
+      // WHERE it got to, which is the whole point of the markers above: this line plus the
+      // last one that printed localises the failure to one step.
+      debug('plugin-load', 'FAILED', {
+        label, ms: Date.now() - t0, message: String(err?.message ?? err).slice(0, 200),
+      });
       // Roll back a partially-loaded plugin so a failure leaves no orphan iframe.
       broker.dispose();
       iframe.remove();

@@ -24,6 +24,8 @@
  * guaranteed R-package closure prefetch + richer progress UI.
  */
 
+import { debug } from './debug.js';
+
 const SW_URL = 'sw.js';
 // The service worker owns the versioned cache name (`sw.js` CACHE, e.g.
 // `crosstab-offline-v3`) and keeps exactly ONE `crosstab-offline-*` cache — older
@@ -393,8 +395,16 @@ export class OfflineManager {
 
     // 1) App shell — re-fetch the same-origin files this page loaded (now through
     // the controlling SW). Enumerated from resource timing, so no hardcoded list.
+    // PHASE MARKERS. `onProgress` already tells the UI, but a progress string is gone the
+    // moment the dialog closes — and this sequence is long, network-bound, and the kind
+    // that half-completes: the shell, then a WebR restart to re-fetch the runtime, then a
+    // package closure fetched one at a time. "Offline mode says it is on but R does not
+    // work" needs to know which of those finished.
+    const t0 = Date.now();
+    debug('offline', 'warm: caching the app shell', { packages: wantedPackages.length });
     onProgress('Caching the app…');
     await this.#cacheShell();
+    debug('offline', 'warm: app shell cached', { ms: Date.now() - t0 });
 
     // 2) WebR runtime (the big one). It already initialised this session, so a
     // plain preload() wouldn't re-fetch. Restart so its worker re-loads the runtime
@@ -469,6 +479,7 @@ export class OfflineManager {
    * so an offline `installPackages` is served from cache. Downloads the .tgz files
    * (and the PACKAGES index WebR resolves against) — never installs them. */
   async #cachePackages(wanted, onProgress) {
+    debug('offline', 'warm: caching R packages', { wanted: wanted.length });
     if (!wanted.length) return;
     onProgress('Resolving R packages…');
     let index;
@@ -539,6 +550,9 @@ export class OfflineManager {
    * installed), skip — the SW's `offline-enable` message writes the marker into its
    * own cache once the page is under control (see {@link #runWarm}). */
   async #setMarker() {
+    // The last step, and the one that decides whether the app BELIEVES it is offline-ready
+    // on the next load. A log that ends before this line means the marker was never set.
+    debug('offline', 'warm: setting the ready marker');
     try {
       const [name] = await offlineCacheNames();
       if (!name) return;

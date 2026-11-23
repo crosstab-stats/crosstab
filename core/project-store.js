@@ -22,6 +22,8 @@
  * untrusted provider — only ever sees ciphertext (#143/#144).
  */
 
+import { debug } from './debug.js';
+
 import { OpfsDriver, FsaFolderDriver, capabilitiesOf } from './storage-driver.js';
 import { deriveKey, encryptWithKey, decryptWithKey, isEnveloped, newSalt, DEFAULT_ITERATIONS } from './crypto-envelope.js';
 import { liveOps } from './op-log.js';
@@ -661,11 +663,34 @@ export class ProjectStore {
       throw new Error('internal: encryption key does not match the project being saved');
     }
 
+    // PHASE MARKERS, and this is the sequence that most deserves them: the steps happen in
+    // a deliberate order (sources before the manifest, so a manifest never points at bytes
+    // that are not there yet), each one writes to storage that can fail for reasons the
+    // page cannot see — quota, a revoked folder permission, a locked file — and a save
+    // that stops halfway is the one failure here that costs the user work rather than
+    // time. A log that ends between two of these lines says which half happened.
+    const t0 = Date.now();
+    debug('project-store', 'save: writing sources', {
+      id,
+      flat: this.#flat,
+      encrypted: !!this.#key,
+      // The op LOG is the bundle's substance (`buildManifest` folds it; there is no
+      // `datasets` array — the first version logged one and printed `null` every time,
+      // which is a field that only ever says "the author guessed").
+      ops: bundle?.log?.length ?? null,
+    });
     // Parquet first, then the manifest — the same manifest shape folder-sync merges,
     // built by the shared {@link buildManifest} so save and sync never drift.
     await this.#writeSources(id, bundle, writeSourcesFor);
+    debug('project-store', 'save: sources written', { id, ms: Date.now() - t0 });
     const manifest = buildManifest({ name, savedAt, bundle });
     await this.#write(this.#file(id, 'project.json'), JSON.stringify(manifest));
+    // The moment the project becomes recoverable: the manifest now names bytes that are
+    // all on disk. Everything after this line is an index or a marker, and losing it costs
+    // a listing rather than the project.
+    debug('project-store', 'save: manifest written — project is recoverable', {
+      id, ms: Date.now() - t0,
+    });
     // NO reclamation here, deliberately (2026-10-21). Saving is about durability; what
     // to keep is a space decision, and making it as a side effect of every save is where
     // every bug in this area came from — including one that deleted a peer's half-synced
@@ -676,6 +701,7 @@ export class ProjectStore {
       // Folder = project: a plaintext marker makes the folder self-describing (and
       // lets the launcher show its name before unlocking). No catalog in flat mode.
       await this.#driver.write(MARKER, te.encode(JSON.stringify({ app: 'crosstab', name, savedAt })));
+      debug('project-store', 'save: done (folder marker written)', { id, ms: Date.now() - t0 });
       return id;
     }
 
@@ -692,16 +718,27 @@ export class ProjectStore {
       (prev) => this.#summaryFor(id, manifest, prev),
       { now: !this.#onDisk.has(id) },
     );
+    debug('project-store', 'save: done', { id, ms: Date.now() - t0 });
     return id;
   }
 
   /**
    * Load a project bundle (manifest + every dataset's sources).
+   *
+   * Instrumented for the same reason as `save`: this reads a manifest and then one
+   * Parquet per source, and when it stalls the symptom is a launcher that never finishes
+   * opening — with no indication whether it is still reading sources or stuck on one.
+   *
    * @param {string} id
    * @returns {Promise<{id: string, name: string, bundle: {activeId: number, datasets: Array<{id: number, name: string, state: object}>}}>}
    */
   async load(id) {
+    const t0 = Date.now();
+    debug('project-store', 'load: reading the manifest', { id });
     const manifest = JSON.parse(await this.#read(this.#file(id, 'project.json')));
+    debug('project-store', 'load: manifest read', {
+      id, ms: Date.now() - t0, ops: manifest?.log?.length ?? null,
+    });
     // Reconcile the index against what was just read. A catalog entry left stale by a
     // lost flush would otherwise STAY stale for a project nobody edits: opening one to
     // read its output stamps `lastOpenedAt` and nothing else, and without an edit there
@@ -731,6 +768,10 @@ export class ProjectStore {
     const workspaceOps = log.filter((o) => typeof o.target === 'string' && o.target.startsWith('ws:'));
     const assetOps = log.filter((o) => o.owner === 'core' && typeof o.target === 'string' && o.target.startsWith('asset:'));
     const itemOps = log.filter((o) => typeof o.target === 'string' && o.target.startsWith('item:')); // #152
+    // Sources re-attached. The expensive part of opening a project is the loop above —
+    // one Parquet sidecar per live source op — so this line closing the one that opened
+    // the manifest read is what distinguishes "still reading" from "stuck elsewhere".
+    debug('project-store', 'load: sources re-attached', { id, ms: Date.now() - t0 });
     return {
       id,
       name: manifest.name,

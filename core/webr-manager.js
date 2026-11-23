@@ -898,11 +898,19 @@ export class WebRManager {
     }
     const webR = await this.#ensureReady();
     this.#bus.emit(CoreEvents.WEBR_JOB, { id, kind, status: 'started' });
+    // Every R task funnels through here, so this is the one place that can say what R was
+    // asked to do and how long it took. The bus events already report the same three
+    // states to the UI, but a bus event is not a log line — it is gone the moment the
+    // spinner stops, and the spinner stopping is exactly when you want the history.
+    const t0 = Date.now();
+    debug('webr', `→ ${kind}`, { id });
     try {
       const value = await task(webR);
+      debug('webr', `← ${kind}`, { id, ms: Date.now() - t0 });
       this.#bus.emit(CoreEvents.WEBR_JOB, { id, kind, status: 'finished' });
       return value;
     } catch (err) {
+      debug('webr', `✗ ${kind}`, { id, ms: Date.now() - t0, message: String(err?.message ?? err).slice(0, 200) });
       this.#bus.emit(CoreEvents.WEBR_JOB, { id, kind, status: 'failed', error: err });
       if (!this.#crashed && isFatalRuntimeError(err)) {
         this.#crashed = true;
@@ -921,6 +929,14 @@ export class WebRManager {
 
   /** One-time runtime construction. */
   async #init() {
+    // PHASE MARKERS, because this is the longest thing the app does and every step of it
+    // can hang on its own: a multi-megabyte wasm payload over the network, a runtime init
+    // that spins up a worker, then package installs that each fetch and unpack. When it
+    // stalls the only question worth asking is WHICH of those it stalled in, and the log
+    // could not previously answer it — the last line before the gap was whatever ran
+    // before R was first needed.
+    const t0 = Date.now();
+    debug('webr', 'init: fetching the runtime', { url: this.#url, preload: this.#preload.length });
     // Dynamic import so the WASM payload is only fetched when first needed and
     // so the URL can be configured at runtime.
     const { WebR } = await import(/* @vite-ignore */ this.#url);
@@ -928,9 +944,15 @@ export class WebRManager {
     // (the vendored package mirror), so installs resolve from ./vendor/ too. Empty
     // in cdn mode — WebR then uses its own CDN defaults.
     const webR = new WebR(this.#webrOptions);
+    debug('webr', 'init: starting the runtime', { ms: Date.now() - t0 });
     await webR.init();
+    debug('webr', 'init: runtime ready', { ms: Date.now() - t0 });
     if (this.#preload.length) {
+      // Named, because one bad package in the preload list stalls the whole boot and
+      // "which one" is otherwise a bisect.
+      debug('webr', 'init: installing preloaded packages', { packages: this.#preload });
       await webR.installPackages(this.#preload, { quiet: true });
+      debug('webr', 'init: packages installed', { ms: Date.now() - t0 });
     }
     this.#webR = webR;
     this.#bus.emit(CoreEvents.WEBR_READY);
