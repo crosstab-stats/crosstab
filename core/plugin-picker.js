@@ -647,7 +647,7 @@ export class PluginPicker {
       try {
         savePreset(name, plugins);
         fill(name);
-        return this.note(`Saved “${name}” — ${plugins.length} plugins.`);
+        return this.note(`Saved “${name}” — ${plugins.length} plugin${plugins.length === 1 ? '' : 's'}.`);
       } catch (err) {
         return this.note(err.message, true);
       }
@@ -739,7 +739,8 @@ export class PluginPicker {
       // the superfluous step #161 objects to elsewhere.
       this.setSelected(keys);
       return this.note(
-        `${verb} “${preset.name}” — ${keys.size} plugins selected.${tail}`, missing.length > 0,
+        `${verb} “${preset.name}” — ${keys.size} plugin${keys.size === 1 ? '' : 's'} selected.${tail}`,
+        missing.length > 0,
       );
     }
     // Live, a preset switches the running toolkit — a bigger act than ticking one box, and one

@@ -3089,21 +3089,35 @@ this is the index.
   first-class-plugin-data note: plugin records now have no reuse path at all, rather
   than an incomplete one. *(under Plugin data as first-class citizens, #146)*
 - **A preset file per chapter** an INSTRUCTOR ships with their own course, paired with #185 deployments. Re-scoped 2026-10-23: CrossTab does not write the course. *(under #162)*
-- **Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin note. *(under #162)*
-  **Attempted 2026-11-02 and BLOCKED by the harness, not by the feature.** The preset flow
-  goes through `promptText`, which resolves in the `<dialog>` `close` listener — and in a
-  tab reporting `visibilityState: "hidden"` that event never fires, so the promise never
-  settles and the handler returns at `if (!name)`. Confirmed rather than guessed: the
-  store itself works (a direct `savePreset` wrote and `listPresets` read it back), the
-  dropdown and the hidden-until-selected Rename/Delete/Export buttons are all in the DOM,
-  and the picker reported no note and no error — the signature of a prompt that resolved
-  null. Then the renderer froze outright (the display-sleep symptom), so I stopped after
-  three failures rather than keep retrying.
-  **What it needs:** the window foregrounded and the screen kept awake. Mine to finish,
-  not the owner's — it is a one-sitting check once the tab is visible.
-- **Not browser-tested:** the arrows on an analysis row, the busy state during a move. *(under #190)*
-  Not attempted — the session's browser went unresponsive before reaching it. Same
-  prerequisite as the line above.
+- ~~**Not browser-tested:** the preset dropdown, Save/Rename/Delete, the missing-plugin
+  note *(under #162)*~~ — **TESTED 2026-11-23, all five, in a visible focused tab.** The
+  2026-11-02 attempt was blocked by the harness and not by the feature, exactly as it
+  said: `promptText` resolves in the `<dialog>` `close` listener, and in a tab reporting
+  `visibilityState: "hidden"` that event never fires. With the tab visible the whole flow
+  works — dropdown renders, Rename/Delete/Export are hidden until a preset is selected and
+  appear when it is, Save prompts and reports *Saved "Qual set" — 1 plugins*, Rename seeds
+  the prompt with the current name, Delete confirms with "The plugins stay as they are"
+  and re-hides the three buttons, and a preset naming an absent plugin reports
+  *Applied "Missing probe" — 10 on, 0 off. Not installed here: not-a-real-plugin*.
+  (10 rather than 1 because `resolvePreset` unions in the file-I/O categories by design.)
+
+  **Two things found while testing, neither a blocker:**
+  * `#applyPreset` uses a NATIVE `confirm()` for the live switch, and `savePreset`'s
+    overwrite check uses another. Everything else in the picker is a `<dialog>`
+    (`promptText`), so these two are inconsistent — and they are also why this is awkward
+    to automate at all: a native modal blocks the renderer, so every subsequent CDP eval
+    queues behind it. It froze the tab twice here before the cause was spotted, which is
+    the same symptom the 2026-11-02 attempt recorded and may be part of what it hit.
+  * The save note says "1 plugins". Needs a plural guard.
+- ~~**Not browser-tested:** the arrows on an analysis row, the busy state during a move
+  *(under #190)*~~ — **TESTED 2026-11-23.** Built a dataset with a transform, an analysis,
+  and a second transform, so the analysis had room to move both ways. ▲ moved it from
+  position 3 to 2 (ahead of `Computed z`), ▼ moved it back — a clean round trip. The busy
+  state is real and visible: 18 of 26 panel controls disabled during the move, back to 5
+  afterwards, and those 5 are the legitimately-bounded ones (▲ on the first row, ▼ on the
+  last). The output block count stayed at 2 across both moves, which is the reposition
+  recomputing in PLACE rather than appending a second copy — the behaviour #190's third
+  piece is about.
 - **[~] Browser pass by the owner** against a local bench. *(under #185)*
 - **~~Does any other baked figure want a legend?~~ ANSWERED 2026-11-01 — one did.**
   *(And the answer sat HERE for a day while the sub-item it belongs to stayed `[ ]` open —
