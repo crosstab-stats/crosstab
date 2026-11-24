@@ -50,7 +50,7 @@ async function run(text, { chunk = 1 << 22, name = 'data.csv' } = {}) {
         out.variables = variables;
         out.storageTypes = storageTypes;
         out.rowCount = opts?.rowCount ?? null;
-        out.wide = !!opts?.wide;
+        out.opts = opts ?? null;
       },
       progress: async (done, total) => { out.progress.push([done, total]); },
       batch: async (cols) => { out.batches.push(cols); },
@@ -244,23 +244,48 @@ test('every column in a batch has the SAME length', async () => {
 // Where the data goes once it is parsed
 // =============================================================================
 
-test('a dataset too big for a table is routed to the out-of-core ingest', async () => {
-  // readstat has routed on this rule for a while and the CSV reader did not, so a huge
-  // CSV built a DuckDB table however big it got. The threshold is ~32 million values;
-  // 400 columns x 90,000 rows is 36 million.
+test('a big file declares its real shape, and the HOST routes it', async () => {
+  // This test used to assert `r.wide === true` — the codec's own routing decision, which
+  // the CSV reader was missing while readstat had it, so a huge CSV built a DuckDB table
+  // however big it got. The decision is the host's now (`planIngest`), and the codec's
+  // only job is to declare honestly what it read. So the assertion moved: the codec is
+  // checked for an accurate declaration, and the HOST RULE is checked for the verdict.
+  //
+  // 400 columns x 90,000 rows, and note what the verdict is: all-numeric that is 275 MiB
+  // as a table, which FITS on desktop. The old cells rule called it wide (36 million
+  // cells, past its 32-million threshold) and that was the error the measurement found —
+  // numeric-as-a-table is the cheap case. The same file in VARCHAR is 550 MiB and does
+  // go out of core, which the cells rule could not tell apart.
   const cols = 400;
   const header = Array.from({ length: cols }, (_, c) => `v${c}`).join(',');
   const line = Array.from({ length: cols }, (_, c) => String(c)).join(',');
   const r = await run(`${header}
 ${`${line}
 `.repeat(90000)}`);
-  assert.equal(r.rowCount, 90000);
-  assert.equal(r.wide, true, 'a 36-million-value file must not become a DuckDB table');
+  assert.equal(r.rowCount, 90000, 'the row count is counted, not guessed');
+  assert.equal(r.variables.length, cols);
+  assert.ok(!('wide' in (r.opts ?? {})), 'the codec is routing again');
+
+  const { exceedsTableBudget } = await import('../core/duckdb-manager.js');
+  const shape = (type) => r.variables.map(() => ({ type }));
+  assert.equal(exceedsTableBudget(0, shape('numeric'), r.rowCount, true), false,
+    '275 MiB of doubles is a table on desktop');
+  assert.equal(exceedsTableBudget(0, shape('string'), r.rowCount, true), true,
+    'the same shape in VARCHAR is 550 MiB and is not');
+  assert.equal(exceedsTableBudget(0, shape('numeric'), r.rowCount, false), true,
+    'and on WebKit, where the ingest cannot stream, even the doubles go out of core');
 });
 
-test('an ordinary file is NOT routed out of core', async () => {
-  // The parquet path is slower and the file lands as a file rather than a table, so it
-  // is for the shapes that need it. Routing everything there would be its own bug.
+test('an ordinary file declares nothing that could route it out of core', async () => {
+  // The parquet path is slower and the file lands as a file rather than a table, so it is
+  // for the shapes that need it; routing everything there would be its own bug. Asserted
+  // on the host rule rather than on the absence of a flag — `!r.wide` passed vacuously
+  // the moment the codec stopped declaring one, which is exactly the trap an absence
+  // assertion sets for itself.
   const r = await run('a,b,c\n1,x,2\n2,y,3\n');
-  assert.ok(!r.wide, 'a three-column file went out of core');
+  const { exceedsTableBudget } = await import('../core/duckdb-manager.js');
+  const shape = r.variables.map((v) => ({ type: v.type }));
+  assert.equal(exceedsTableBudget(0, shape, r.rowCount, true), false,
+    'a three-column file went out of core');
+  assert.equal(exceedsTableBudget(0, shape, r.rowCount, false), false, '...even on WebKit');
 });

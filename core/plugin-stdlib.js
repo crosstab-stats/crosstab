@@ -1492,7 +1492,7 @@ export function tableVariableNames(rawNames) {
  *   not match anything in the file are ignored — a recorded import may carry a selection
  *   made against a different revision of it, and failing the whole import over a renamed
  *   column would be worse than importing what is still there.
- * @returns {Promise<{variables: object[], rowCount: number, wide: boolean,
+ * @returns {Promise<{variables: object[], rowCount: number,
  *                    missingCodes: string[], names: string[]}>} what was handed to
  *   `begin`, plus `names` — every variable the FILE had, selected or not, which a caller
  *   that creates extra datasets from the same source needs.
@@ -1597,13 +1597,18 @@ export async function ingestTable(app, {
     storageTypes[nm] = num ? 'numeric' : 'string';
   }
 
-  // A dataset too big for a DuckDB table goes to the out-of-core ingest instead — the host
-  // writes Parquet and queries that. This is the decision three of five codecs were not
-  // making, so a huge NDJSON file built a table however big it was.
-  const wide = isWideDataset(variables.length, total);
+  // No routing decision here, and that is the point: a codec says what it HAS — this many
+  // columns, of these types, and this many rows — and the host decides where it lands.
+  // This used to call `isWideDataset`, which was deleted once it was measured (2026-11-23,
+  // `spike/ingest-route-measure.mjs`): a cells-only rule is blind to type, the byte budget
+  // beside it is not, and the only files the cells rule caught that the budget did not were
+  // the CHEAP ones. The row count is the input that matters now, so pass it through
+  // honestly — `rowCount: -1` for "I do not know" is routed pessimistically and is a far
+  // better answer than a guess.
+  //
   // `missingCodes` travels with the schema so the ingest — and anything reading the
   // dataset's provenance later — can say WHY a column is numeric.
-  const opts = { rowCount: total, wide, missingCodes: [...accepted] };
+  const opts = { rowCount: total, missingCodes: [...accepted] };
   await app.codec.begin(variables, storageTypes, opts);
 
   // --- pass 2: fill and emit ----------------------------------------------------
@@ -1648,7 +1653,7 @@ export async function ingestTable(app, {
   }, { pass: 2, tick: () => app.codec.progress(emitted + fill, total) });
   await flush();
 
-  return { variables, rowCount: total, wide, missingCodes: opts.missingCodes, names: final };
+  return { variables, rowCount: total, missingCodes: opts.missingCodes, names: final };
 }
 
 /**
@@ -1688,13 +1693,33 @@ function sliceBuffers(buf, variables, isNum, n) {
   return out;
 }
 
-export function isWideDataset(varCount, rowCount) {
-  const cols = Number(varCount) || 0;
-  // An unknown row count is assumed substantial: guessing small is the guess that
-  // crashes, and the parquet path is only slower, never wrong.
-  const rows = rowCount >= 0 ? rowCount : 100000;
-  return Math.ceil((cols * rows) / 4_000_000) > 8;
-}
+/*
+ * `isWideDataset` WAS HERE, and it is deliberately gone rather than merely unused.
+ *
+ * It routed on cells — `ceil(cols*rows/4e6) > 8` — and it was the one routing rule a codec
+ * was allowed to apply to its own file. It was measured on 2026-11-23 against the byte
+ * budget it sat next to (`spike/ingest-route-measure.mjs` carries the numbers), and it lost
+ * on both counts:
+ *
+ *   - It is type-BLIND, and type is what costs. At the same width and cell count, text
+ *     costs a DuckDB table 4.4x the time and 1.65x the engine memory of numbers.
+ *     `estimateTableBytes` charges 16 bytes for a string slot and 8 for a double, so the
+ *     budget already separates the two cases the cells rule could not see.
+ *   - Where it fired and the budget did not, it was wrong. At 3,300 x 10,000 it said "wide"
+ *     for numeric and for text alike, while the budget said table for numeric (252 MiB) and
+ *     out-of-core for text (504 MiB). Numeric-as-a-table is the cheap case. So its only
+ *     distinct contribution was to push the cheapest files out of core.
+ *
+ * The one thing it did that the budget did not was treat an unknown row count as
+ * substantial, on the sound grounds that guessing small is the guess that crashes. That
+ * reasoning did not go with it: it moved into `routingRows` in `duckdb-manager.js`, beside
+ * the budget it now informs, which is the layer that owns the decision.
+ *
+ * Do not reintroduce a width or cells term here without re-running the measurement. The
+ * last two attempts to reason about this instead of measuring it both got it wrong —
+ * e85f8e4 rejected a width term from numeric-only figures, and the follow-up that reopened
+ * it predicted the width rule would earn its place. Neither prediction survived contact.
+ */
 
 /**
  * Rows per Parquet row group for a dataset this wide.

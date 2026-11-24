@@ -1,17 +1,26 @@
 /**
  * @file parquet-codec-routing.test.mjs
- * The Parquet reader's storage-routing decision, which it was not making.
+ * What the Parquet reader DECLARES to the host, which is what the host routes on.
  *
  * ## Why this file exists
  *
  * A dataset too big for a DuckDB table has to go out of core — the host writes Parquet
  * and queries that rather than building a table in the wasm heap, which has no spill (see
- * `core/duckdb-manager.js`). The 2026-11-18 codec audit found three of five codecs never
- * declaring it, this one included: a multi-gigabyte Parquet file built a table however big
- * it was, while the same data in a CSV did not, purely because of which reader opened it.
+ * `core/duckdb-manager.js`). The 2026-11-18 codec audit found three of five codecs
+ * declaring nothing the host could route on, this one included: a multi-gigabyte Parquet
+ * file built a table however big it was, while the same data in a CSV did not, purely
+ * because of which reader opened it.
  *
- * It is free in this format, which is the part worth pinning. Parquet's footer carries the
- * row count and the schema, so the decision is made before a single row group is read.
+ * The first fix had the codec apply the shared cells rule and declare a verdict. That rule
+ * was measured on 2026-11-23 and deleted (`spike/ingest-route-measure.mjs`): it was blind
+ * to column type, which is what a DuckDB table actually charges for. So the codec declares
+ * no verdict now — it declares FACTS, and the host's byte budget decides. These tests
+ * moved with it, from "is the flag right" to "are the facts right", which is the half this
+ * format can be held to a high standard on.
+ *
+ * Because it is free in this format, and that is the part worth pinning: Parquet's footer
+ * carries the row count AND the column types, so everything the host routes on is known
+ * before a single row group is read.
  *
  * ## Why hyparquet is stubbed
  *
@@ -94,35 +103,41 @@ const wideRow = (() => {
   return r;
 })();
 
-test('it declares a routing decision at all', async () => {
+test('it declares the facts the host routes on, and no verdict of its own', async () => {
   // The audit's finding, in one assertion: `begin` used to be called with two arguments
-  // and the host had nothing to route on.
+  // and the host had nothing to route on. What it needs is the row count and a type per
+  // column; what it must NOT be handed is a conclusion, which it would ignore.
   const r = await run([{ a: 1 }, { a: 2 }]);
   assert.ok(r.opts, 'begin() was called with no options at all');
-  assert.equal(typeof r.opts.wide, 'boolean', 'no routing decision');
+  assert.equal(r.opts.rowCount, 2);
+  assert.ok(!('wide' in r.opts), 'the codec is routing again');
+  assert.deepEqual(r.storageTypes, { a: 'numeric' }, 'a type per column, or bytes cannot be estimated');
 });
 
-test('the decision is the host rule, not a private copy of it', async () => {
-  // Asserted against `isWideDataset` rather than a hard-coded verdict, so re-tuning the
-  // threshold does not need this file edited — and so a second copy of the arithmetic
-  // cannot quietly diverge from the one every other reader uses.
-  const { isWideDataset } = await import('../core/plugin-stdlib.js');
-  for (const rows of [[{ a: 1 }], [{ a: 1, b: 'x' }, { a: 2, b: 'y' }]]) {
-    const r = await run(rows);
-    assert.equal(r.opts.wide, isWideDataset(r.variables.length, r.opts.rowCount));
-  }
-});
-
-test('a genuinely large file is routed out of core', async () => {
-  // 4,000 columns x 10,000 rows is 40 million cells, which is past the rule's threshold.
-  // The row count comes from the FOOTER, so this costs one small object, not 10,000 —
-  // which is the whole reason the decision can be made for free in this format.
+test('a genuinely large file is routed out of core — by the host, from the footer', async () => {
+  // The property worth pinning is that the routing input costs ONE SMALL OBJECT. The row
+  // count comes from the footer, so a 10,000-row file is routed without decoding 10,000
+  // rows — here the stub can only produce one of them, and the declaration is still right.
   const r = await run([wideRow], { groups: [1], numRowsInFooter: false });
-  assert.equal(r.opts.wide, false, 'one row of 4,000 is not wide');
+  assert.equal(r.opts.rowCount, 1);
+  assert.equal(r.variables.length, 4000);
 
   const big = await runWithFooterRows(wideRow, 10_000);
-  assert.equal(big.opts.rowCount, 10_000);
-  assert.equal(big.opts.wide, true, '40 million cells should not build a table');
+  assert.equal(big.opts.rowCount, 10_000, 'the footer, not the rows');
+
+  // And the verdict on that declaration, from the host rule. 4,000 columns x 10,000 rows
+  // of doubles is 305 MiB — under the 384 MiB budget, so it is a TABLE, where the old
+  // cells rule called it wide at 40 million cells. That reversal is the measured change:
+  // it is the same shape in VARCHAR, at 611 MiB, that cannot be a table.
+  const { exceedsTableBudget } = await import('../core/duckdb-manager.js');
+  const shape = (type) => big.variables.map(() => ({ type }));
+  assert.equal(exceedsTableBudget(0, shape('numeric'), big.opts.rowCount, true), false);
+  assert.equal(exceedsTableBudget(0, shape('string'), big.opts.rowCount, true), true);
+  // One more year of it, though, and the cumulative budget stops the second one — which
+  // is the ceiling the deleted per-file rule could not see at all.
+  const oneYear = 305 * 1024 * 1024;
+  assert.equal(exceedsTableBudget(oneYear, shape('numeric'), big.opts.rowCount, true), true,
+    'the budget belongs to the DATABASE, not to the file');
 });
 
 /** A footer claiming many rows while only one is actually decodable: the point is that the
@@ -159,9 +174,10 @@ test('the row count falls back to the row groups when the footer omits it', asyn
 });
 
 test('a BigInt row count does not poison the arithmetic', async () => {
-  // A real hyparquet footer hands back BigInt for the 64-bit fields. `isWideDataset`
-  // multiplies, and mixing BigInt with a Number throws a TypeError — which would have
-  // surfaced only on a real file, never in a test with plain numbers in it.
+  // A real hyparquet footer hands back BigInt for the 64-bit fields, and mixing BigInt
+  // with a Number throws a TypeError — which would surface only on a real file, never in
+  // a test with plain numbers in it. The codec used to multiply it itself; now it hands
+  // the count to the host, so what matters is that what it hands over is a NUMBER.
   const out = { opts: null };
   const src = `
     export async function parquetMetadataAsync() {
@@ -181,16 +197,28 @@ test('a BigInt row count does not poison the arithmetic', async () => {
   };
   await readParquet(app, {});
   assert.equal(out.opts.rowCount, 12);
-  assert.equal(typeof out.opts.wide, 'boolean');
+  assert.equal(typeof out.opts.rowCount, 'number', 'a BigInt reached the host');
+  // And the host's own arithmetic survives one anyway, since a third-party codec may not
+  // be so careful: both ends coerce.
+  const { estimateTableBytes, routingRows } = await import('../core/duckdb-manager.js');
+  assert.equal(routingRows(12n), 12);
+  assert.equal(estimateTableBytes([{ type: 'numeric' }], 12n), 12 * 16);
 });
 
 test('an empty file still declares a schema, and routes to a table', async () => {
-  // The host needs a schema to create the (empty) dataset. Nothing to route out of core.
+  // The host needs a schema to create the (empty) dataset. Nothing to route out of core —
+  // and note WHY the host gets that right: zero rows must stay zero. The pessimistic
+  // "unknown row count" assumption is `-1`, not falsy, precisely so an honest 0 is not
+  // charged 100,000 phantom rows. See `routingRows`.
   const r = await run([]);
   assert.deepEqual(r.variables, []);
   assert.equal(r.opts.rowCount, 0);
-  assert.equal(r.opts.wide, false);
+  assert.ok(!('wide' in r.opts), 'the codec is routing again');
   assert.equal(r.batches.length, 0, 'an empty batch was sent');
+
+  const { routingRows, exceedsTableBudget } = await import('../core/duckdb-manager.js');
+  assert.equal(routingRows(r.opts.rowCount), 0, 'an empty file became a forecast of 100,000 rows');
+  assert.equal(exceedsTableBudget(0, [], 0, false), false, 'even on the tightest budget');
 });
 
 test('it still streams row group by row group', async () => {

@@ -48,7 +48,7 @@ export const manifest = {
 
 /** The host's shared helpers (core/plugin-stdlib.js). Bound at module scope, as every
  * other plugin does it — the sandbox assigns the global before importing this module. */
-const { isWideDataset, tableVariableNames } = globalThis.ctStd;
+const { tableVariableNames } = globalThis.ctStd;
 
 const WRITE_BATCH = 50_000; // rows per write pass
 
@@ -203,17 +203,20 @@ function toText(v) {
 /**
  * Decode a Parquet file into the dataset, streaming one row group at a time.
  *
- * ## The storage-routing decision, which this reader was not making
+ * ## The storage-routing decision, which is no longer made here at all
  *
- * A dataset too big for a DuckDB table has to go out of core — the host writes Parquet
- * and queries that — and the 2026-11-18 audit found three of five codecs, this one
- * included, never declaring it. So a multi-gigabyte Parquet file built a table however
- * big it was, while the same data in a CSV did not, purely because of which reader opened
- * it.
+ * A dataset too big for a DuckDB table has to go out of core — the host writes Parquet and
+ * queries that — and the 2026-11-18 audit found three of five codecs, this one included,
+ * never declaring it: a multi-gigabyte Parquet file built a table however big it was,
+ * while the same data in a CSV did not, purely because of which reader opened it. The fix
+ * then was to call the shared rule from here. The fix now is that there is nothing to
+ * call: that rule was measured on 2026-11-23 and deleted, and the host decides from the
+ * schema and the row count every codec already declares.
  *
- * It is free here, and that is the part worth noticing: Parquet's footer carries the row
- * count and the schema, so the decision can be made before a single row group is read.
- * `isWideDataset` is the host's one rule, so this file goes the same way as any other.
+ * What survives is the part that was genuinely this format's: the footer carries BOTH the
+ * row count and the column types, so everything the host routes on reaches it before a
+ * single row group is read — no counting pass, no sniffing, and an exact estimate rather
+ * than a pessimistic one.
  *
  * ## Column types are DECLARED, from the footer
  *
@@ -261,7 +264,7 @@ export async function readParquet(app, { select } = {}) {
     await app.codec.begin(
       columns.map((c) => ({ name: c, type: types[c] })),
       types,
-      { rowCount, wide: isWideDataset(columns.length, rowCount) },
+      { rowCount },
     );
     began = true;
   };
@@ -344,7 +347,7 @@ export async function readParquet(app, { select } = {}) {
   if (!began) {
     const objs = await hp.parquetReadObjects({ file, metadata, ...only });
     if (objs.length) { await beginFrom(objs); await emit(objs); }
-    else await app.codec.begin([], {}, { rowCount: 0, wide: false });
+    else await app.codec.begin([], {}, { rowCount: 0 });
   }
 }
 

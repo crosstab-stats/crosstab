@@ -597,7 +597,9 @@ export class DataStore {
    * @param {Object<string, string>} [opts.storageTypes] - name → 'numeric'|'string';
    *   derived from `variables` when absent
    * @param {number} [opts.rowCount=-1] - total rows if known; -1 routes pessimistically
-   * @param {boolean} [opts.declaredWide] - the caller already knows it is too big
+   *   (`routingRows` charges it as 100,000, since guessing small is the guess that
+   *   crashes). This and `variables` ARE the routing input — there is no override, and
+   *   there used to be a `declaredWide` one; see `planIngest`.
    * @param {number} [opts.rowGroupRows] - override the derived Parquet row-group size
    * @param {string} [opts.source] - provenance label (the `source_file` column's value)
    * @param {string} [opts.origin] - the file name it came from
@@ -609,7 +611,7 @@ export class DataStore {
    * @returns {Promise<void>}
    */
   async load({
-    mode = 'replace', variables, storageTypes, rowCount = -1, declaredWide = false,
+    mode = 'replace', variables, storageTypes, rowCount = -1,
     rowGroupRows = 0, source, origin, importer, missingCodes, producedBy, stream, onProgress,
     joinKey, aliases, joinType,
   }) {
@@ -663,13 +665,12 @@ export class DataStore {
     // because whether this browser can stream out of core is probed during init and the
     // first import routes before anything has touched DuckDB. Reading that capability
     // synchronously is the bug that killed an iPhone; see `planIngest`.
-    const route = await this.#duckdb.planIngest(variables, rowCount, { declaredWide });
+    const route = await this.#duckdb.planIngest(variables, rowCount);
     // Everything the decision was made FROM, not just what it decided — two sessions were
     // spent reasoning about `canStream` from the outside when printing it would have ended
     // the question.
     debug('data', 'route', {
       wide: route.wide,
-      declaredWide,
       overBudget: route.overBudget,
       columns: variables.length,
       rows: rowCount,

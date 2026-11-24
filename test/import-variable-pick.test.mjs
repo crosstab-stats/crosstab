@@ -192,14 +192,29 @@ test('no selection imports everything, byte for byte as before', async () => {
   assert.deepEqual(nul.names, all.names);
 });
 
-test('the storage routing is recomputed for the NARROWED width', async () => {
-  // Picking 50 of 7,000 variables should be routed as a 50-column dataset, which is the
-  // memory win the feature exists for — not as a 7,000-column one.
+test('the storage routing follows the NARROWED width, because the declaration does', async () => {
+  // Picking 50 of 7,000 variables must be routed as a 50-column dataset — the memory win
+  // the feature exists for — and not as a 7,000-column one.
+  //
+  // It used to be asserted as `r.opts.wide === false`, which was weak twice over: the
+  // codec declared the route (it no longer does — the host decides from the schema), and
+  // 3,000 columns of ONE row was under the old threshold either way, so the assertion
+  // would have held with the narrowing broken. Now it compares the two verdicts at a row
+  // count where they genuinely differ.
   const wide = Array.from({ length: 3000 }, (_, c) => `v${c}`);
   const rows = [wide, wide.map((_, c) => String(c))];
   const r = await ingest(rows, { select: ['v0', 'v1'] });
-  assert.equal(r.names.length, 2);
-  assert.equal(r.opts.wide, false);
+  assert.equal(r.names.length, 2, 'the selection reached begin()');
+  assert.ok(!('wide' in (r.opts ?? {})), 'the codec is routing again');
+
+  // The claim, at a size where it matters: the same file is a table when narrowed and
+  // out-of-core when not.
+  const { exceedsTableBudget } = await import('../core/duckdb-manager.js');
+  const shape = (n) => Array.from({ length: n }, () => ({ type: 'numeric' }));
+  assert.equal(exceedsTableBudget(0, shape(r.names.length), 100000, true), false,
+    'two columns is a table');
+  assert.equal(exceedsTableBudget(0, shape(3000), 100000, true), true,
+    'and three thousand is not — so the narrowing is what decides');
 });
 
 // =============================================================================

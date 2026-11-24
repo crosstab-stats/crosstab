@@ -16,10 +16,15 @@
  *
  * ## What it measures
  *
- * One `DataStore#load` per run, through the real ingest, with the route forced by
- * `declaredWide`. Reports wall time, peak JS heap sampled across the run, and DuckDB's own
- * reported memory afterwards — the last because the ceiling this routing exists to respect
- * is the engine's, not the page's, and the two are different pools.
+ * One `DataStore#load` per run, through the real ingest, with the route FORCED. Reports
+ * wall time, peak JS heap sampled across the run, and DuckDB's own reported memory
+ * afterwards — the last because the ceiling this routing exists to respect is the
+ * engine's, not the page's, and the two are different pools.
+ *
+ * Forcing it used to be a `declaredWide` flag on `load`. That flag was removed by the very
+ * finding below, so this now wraps `planIngest` for the one call and overrides its verdict
+ * — which is the honest shape anyway: the point of the harness is to measure a route the
+ * rule would NOT have chosen, and a rule you can talk out of is not a rule.
  *
  * ## How to run it
  *
@@ -47,8 +52,13 @@
  * e85f8e4 had measured the wrong type was right — and the conclusion drawn from it, that a
  * width term was missing, was wrong. The type-aware rule already exists beside the cells
  * rule (`estimateTableBytes`/`exceedsTableBudget`), it catches the text case, and the cells
- * rule's only distinct contribution is to route the CHEAPEST case out of core. The full
- * reasoning and the recommendation are in TODO.md under "Import machinery", step 4.
+ * rule's only distinct contribution is to route the CHEAPEST case out of core.
+ *
+ * ACTED ON, same day: `isWideDataset` was deleted, and so was the `declaredWide` override
+ * that let a codec insist on a route — once measured, none of the three callers knew
+ * better than the budget. The byte budget is the only routing rule now. The reasoning is
+ * in TODO.md under "Import machinery", step 4, and in the gravestone comment where the
+ * function used to live in `core/plugin-stdlib.js`.
  *
  * Also worth keeping: `rowGroupFor(3300) * 3300` is 4.0M cells, so the wide path's JS peak is
  * bounded by ONE ROW GROUP whatever the file's size — the 200/470 MiB figures would not grow
@@ -92,7 +102,7 @@ async function engineMiB(duckdb) {
  * @param {number} spec.cols
  * @param {number} spec.rows
  * @param {'numeric'|'string'} spec.type - every column is this
- * @param {'table'|'wide'} spec.route - forced via `declaredWide`
+ * @param {'table'|'wide'} spec.route - forced, whatever the rule would have said
  */
 export async function measure({ cols = 3300, rows = 2000, type = 'numeric', route = 'table' } = {}) {
   const ct = globalThis.crosstab;
@@ -133,25 +143,40 @@ export async function measure({ cols = 3300, rows = 2000, type = 'numeric', rout
     return out;
   };
 
+  // Force the route for this one load, then put the real rule back. `wide` is what the
+  // ingest acts on; `overBudget` is left as the rule computed it, so the log line still
+  // says what WOULD have happened and a forced run is distinguishable from a natural one.
+  const real = ct.duckdb.planIngest.bind(ct.duckdb);
+  ct.duckdb.planIngest = async (...args) => ({ ...(await real(...args)), wide: route === 'wide' });
+
   const sampler = heapSampler();
   const t0 = performance.now();
-  await store.load({
-    mode: 'replace',
-    variables,
-    storageTypes,
-    rowCount: rows,
-    declaredWide: route === 'wide',
-    source: 'route-measure',
-    stream: async (batch) => {
-      for (let off = 0; off < rows; off += BATCH) {
-        // eslint-disable-next-line no-await-in-loop -- one batch in flight, as in a real read
-        await batch(batchFor(Math.min(BATCH, rows - off)));
-      }
-    },
-  });
-  const ms = Math.round(performance.now() - t0);
-  const heap = sampler.stop();
-  const engine = await engineMiB(ct.duckdb);
+  let ms;
+  let heap;
+  let engine;
+  try {
+    await store.load({
+      mode: 'replace',
+      variables,
+      storageTypes,
+      rowCount: rows,
+      source: 'route-measure',
+      stream: async (batch) => {
+        for (let off = 0; off < rows; off += BATCH) {
+          // eslint-disable-next-line no-await-in-loop -- one batch in flight, as in a real read
+          await batch(batchFor(Math.min(BATCH, rows - off)));
+        }
+      },
+    });
+  } finally {
+    ms = Math.round(performance.now() - t0);
+    heap = sampler.stop();
+    // In the finally, so a run that OOMs still leaves its sampler stopped and the override
+    // removed — an app left with a patched `planIngest` would route everything the
+    // harness's way for the rest of the session and look like a routing bug.
+    delete ct.duckdb.planIngest;
+    engine = await engineMiB(ct.duckdb);
+  }
 
   const row = {
     cols, rows, type, route, ms, ...heap, engineMiB: engine,

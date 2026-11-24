@@ -155,6 +155,22 @@ export class DuckDBManager {
    * neither half. Width is a property of the data; residency and the stream capability
    * are properties of THIS instance. Two of the three facts are here, so the decision is.
    *
+   * ## And ONE rule, since 2026-11-23
+   *
+   * The codec's half is not merely relocated, it is deleted. There was a `declaredWide`
+   * escape hatch here for "a codec that measured the file and knows better", and when the
+   * cells rule behind it (`isWideDataset`) was measured it turned out no codec did know
+   * better: all three callers were applying the same generic arithmetic, and that
+   * arithmetic was blind to the thing that actually costs — type. The numbers are in
+   * `spike/ingest-route-measure.mjs` and the reasoning is where the function used to live,
+   * in `plugin-stdlib.js`. A parameter with one reader and no honest producer is the drift
+   * this consolidation was about, so it went too.
+   *
+   * What a caller controls now is what it KNOWS: the columns, their types, and the row
+   * count (or `-1` for "not known", which {@link routingRows} routes pessimistically).
+   * Those three are the inputs to the estimate, so a caller that wants a different answer
+   * gets it by declaring the data accurately, not by overriding the conclusion.
+   *
    * ## Why it is async, which is not incidental
    *
    * The capability is probed during init, and the FIRST import routes before anything has
@@ -166,18 +182,22 @@ export class DuckDBManager {
    *
    * @param {Array<{type?: string}>} variables
    * @param {number} rowCount - rows, or -1 when not known (routed pessimistically)
-   * @param {object} [opts]
-   * @param {boolean} [opts.declaredWide] - the caller already measured the source and
-   *   knows a table cannot hold it (the full GSS FATAL-OOMs however empty the database).
    * @returns {Promise<{wide: boolean, overBudget: boolean, estBytes: number,
    *                    canStream: boolean, loadedBytes: number}>}
    */
-  async planIngest(variables, rowCount, { declaredWide = false } = {}) {
+  async planIngest(variables, rowCount) {
     const overBudget = await this.wouldExceedTableBudget(variables, rowCount);
     return {
-      wide: !!declaredWide || overBudget,
+      // The same fact under two names, kept because they answer different questions:
+      // `wide` is what the ingest acts on, `overBudget` is why. They were distinct when
+      // a codec could also declare a file wide; that they now agree is the point.
+      wide: overBudget,
       overBudget,
-      estBytes: estimateTableBytes(variables ?? [], rowCount),
+      // Through `routingRows`, so this reports the number the DECISION used. An unknown
+      // row count estimates as 100,000 here and 0 in the accounting, and a debug line
+      // printing the accounting figure next to a route it did not explain is how two
+      // sessions got spent on this last time.
+      estBytes: estimateTableBytes(variables ?? [], routingRows(rowCount)),
       canStream: this.canStreamOutOfCore === true,
       loadedBytes: this.loadedTableBytes,
     };
@@ -996,8 +1016,10 @@ export function estimateTableBytes(variables, rowCount) {
  * `loadWide` has said for a while that "DuckDB-WASM's checkpoint can't accumulate past
  * ~600 MB and can't spill (OPFS temp is unimplemented)". That is why the out-of-core
  * Parquet path exists. What was missed is that the ceiling belongs to the DATABASE while
- * `isWideDataset` judges one FILE — so any number of individually-modest imports can walk
- * into it together.
+ * the per-file rule it was added beside judged one FILE — so any number of
+ * individually-modest imports can walk into it together. (That per-file rule was
+ * `isWideDataset`, and this cumulative one has since replaced rather than joined it; see
+ * `plugin-stdlib.js`, where it used to live.)
  *
  * Which is what happened (owner, 2026-11-18), importing College Scorecard years one after
  * another, each 3,379 columns and none of them "wide" by the per-file rule:
@@ -1067,7 +1089,30 @@ export const TABLE_BYTE_BUDGET_IN_MEMORY = 64 * 1024 * 1024;
  */
 export function exceedsTableBudget(loadedBytes, variables, rowCount, canStreamOutOfCore = true) {
   const budget = canStreamOutOfCore ? TABLE_BYTE_BUDGET : TABLE_BYTE_BUDGET_IN_MEMORY;
-  return (Number(loadedBytes) || 0) + estimateTableBytes(variables, rowCount) > budget;
+  return (Number(loadedBytes) || 0) + estimateTableBytes(variables, routingRows(rowCount)) > budget;
+}
+
+/**
+ * Rows to ROUTE on, which is not always the rows there are.
+ *
+ * The only thing the deleted `isWideDataset` did that the byte budget did not: an unknown
+ * row count is assumed substantial, because guessing small is the guess that crashes. The
+ * two costs are not symmetric — route a small file out of core and the import is slower;
+ * route a large one into a table and the checkpoint takes the database down and every
+ * other table in it. So `-1` estimates as 100,000 rows, the same figure the old rule used.
+ *
+ * This is deliberately NOT inside {@link estimateTableBytes}, which is also the accounting
+ * function: `noteTableBytes` is told what a table that has already landed is holding, and
+ * there a non-positive row count means no rows rather than an unknown number of them.
+ * Charging a phantom 100,000 rows to the resident total would spend the budget on nothing.
+ * The pessimism belongs to the forecast, not to the ledger.
+ *
+ * @param {number} rowCount - rows, or a negative number for "not known"
+ * @returns {number}
+ */
+export function routingRows(rowCount) {
+  const rows = Number(rowCount);
+  return Number.isFinite(rows) && rows >= 0 ? rows : 100_000;
 }
 
 /**

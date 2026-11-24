@@ -192,22 +192,37 @@ test('a read verb refuses politely outside a read, rather than being undefined',
 // Where a dataset is ingested, and how much of it is in memory while that happens
 // =============================================================================
 
-test('the wide rule routes on SIZE, and a width term was measured and rejected', async () => {
-  const { isWideDataset } = await import('../core/plugin-stdlib.js');
-  // The shapes the rule is for.
-  assert.equal(isWideDataset(7000, 70000), true, 'the 7k-column GSS');
-  assert.equal(isWideDataset(50, 2_000_000), true, 'tall rather than wide');
-  assert.equal(isWideDataset(50, 1000), false, 'an ordinary file becomes a table');
-  // An unknown row count assumes substantial: guessing small is the guess that crashes.
-  assert.equal(isWideDataset(500, -1), true);
+test('the route is decided by BYTES, and the cells rule that rivalled it is gone', async () => {
+  // `isWideDataset` used to live in plugin-stdlib and route on cells. It was measured
+  // against the byte budget beside it on 2026-11-23 and deleted; the numbers are in
+  // `spike/ingest-route-measure.mjs`. This asserts both halves — that it is gone, and
+  // that the shapes it existed for are still caught by what replaced it.
+  const std = await import('../core/plugin-stdlib.js');
+  assert.equal(std.isWideDataset, undefined, 'the cells rule is back');
 
-  // And the one that is pinned BY A MEASUREMENT rather than by reasoning. A 3,300-column
-  // College Scorecard extract is 21 million values — under the threshold — and it is
-  // what killed a phone, so routing it out of core was the obvious guess. Measured on
-  // desktop: 7.3s and 178 MiB of JS heap through parquet, against 8.7s and 121 MiB as a
-  // table. The out-of-core path costs MORE, because it accumulates a row group in JS.
-  // If this ever flips to `true`, that measurement has to be redone first.
-  assert.equal(isWideDataset(3300, 6500), false);
+  const { exceedsTableBudget, routingRows } = await import('../core/duckdb-manager.js');
+  const cols = (n, type) => Array.from({ length: n }, () => ({ type }));
+  const over = (n, rows, type = 'numeric') => exceedsTableBudget(0, cols(n, type), rows, true);
+
+  // The shapes the old rule existed for, still routed out of core on an EMPTY database.
+  assert.equal(over(7000, 70000), true, 'the 7k-column GSS');
+  assert.equal(over(50, 2_000_000), true, 'tall rather than wide');
+  assert.equal(over(50, 1000), false, 'an ordinary file becomes a table');
+
+  // The one the new rule gets right and the old one got WRONG, which is why it was
+  // deleted rather than extended. Same width, same cells, 2x the bytes — and measured,
+  // 4.4x the time and 1.65x the engine memory as a table. The cells rule could not see
+  // it; this is the whole case for the change.
+  assert.equal(over(3300, 10000, 'numeric'), false, '252 MiB of doubles fits');
+  assert.equal(over(3300, 10000, 'string'), true, '504 MiB of VARCHAR does not');
+
+  // And the one property of the old rule that was worth keeping, which moved rather than
+  // died: an unknown row count is assumed substantial, because guessing small is the
+  // guess that crashes and the two errors are not symmetric.
+  assert.equal(routingRows(-1), 100000, 'unknown is not zero');
+  assert.equal(routingRows(0), 0, 'but a real zero is zero');
+  assert.equal(routingRows(12), 12);
+  assert.equal(over(7000, -1), true, 'the GSS with no row count still routes out');
 });
 
 test('a row group is sized by cells, so the wide path is bounded too', async () => {
@@ -225,23 +240,36 @@ test('a row group is sized by cells, so the wide path is bounded too', async () 
   assert.ok(rowGroupFor(100000) >= 256);
 });
 
-test('every codec routes on the SAME rule, or on nothing of its own', async () => {
-  // Two copies of a routing decision send the same file down different paths depending on
-  // which reader opened it. readstat had the only copy, CSV had none, and the 2026-11-18
-  // audit found three of five codecs making no routing decision at all.
+test('NO codec routes at all — not even on the shared rule', async () => {
+  // This assertion got STRICTER on 2026-11-23, and the history is the point. First there
+  // were two copies of a routing rule (readstat had one, CSV had none) and the same file
+  // went different ways depending on which reader opened it. Then there was one shared
+  // copy, `isWideDataset`, and every codec called it. Now there is none: it was measured
+  // against the host's byte budget and lost, because a cells rule cannot see column type
+  // and type is what costs.
   //
-  // There are now two legitimate ways to have one: call `isWideDataset`, or hand the rows
-  // to `ingestTable`, which calls it. What is never legitimate is a third copy of the
-  // arithmetic — so that is what this asserts the absence of, for EVERY codec rather than
-  // the two that once had a stake in it.
+  // So a codec declares what it READ — the columns, their types, the row count — and the
+  // host decides where it lands. Three things must stay absent for that to hold, and all
+  // three were present at some point in this file's history.
   const std = code(readFileSync('core/plugin-stdlib.js', 'utf8'));
-  assert.match(std, /const wide = isWideDataset\(/, 'the shared ingest does not route');
+  assert.ok(!/isWideDataset/.test(std), 'the deleted rule is back in the stdlib');
   for (const [name, src] of codecs()) {
     const body = code(src);
+    // 1. no private copy of the arithmetic
     assert.ok(
       !/Math\.ceil\(\(\w+ \* \w+\) \/ 4_?0{6}\)/.test(body),
       `${name} has its own copy of the width rule`,
     );
+    // 2. no call to the deleted shared rule, which would now be a TypeError at read time
+    //    rather than a wrong answer — `ctStd.isWideDataset` is undefined.
+    assert.ok(!/isWideDataset/.test(body), `${name} calls a rule that no longer exists`);
+    // 3. no routing flag declared to the host, which would be silently ignored. Matched on
+    //    the `begin` call itself, so a variable named `wide` for some other purpose does
+    //    not trip it.
+    const begins = body.match(/codec\.begin\([\s\S]*?\);/g) ?? [];
+    for (const call of begins) {
+      assert.ok(!/\bwide\b/.test(call), `${name} still declares a route in begin()`);
+    }
   }
   // And the readers that infer their types from raw values must go through the shared
   // ingest, which is what makes the typing, the missing-code pass and the routing one

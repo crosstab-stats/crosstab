@@ -175,22 +175,24 @@ test('a host with no missing-code verb reads exactly as before', async () => {
 // Storage routing and batching, which this format also never had
 // =============================================================================
 
-test('it makes the storage-routing decision at all, on the shared rule', async () => {
-  // The decision three of five codecs were not making: this reader declared no `wide`
-  // flag, so a multi-gigabyte JSON-lines file built a DuckDB table however big it was.
-  // The assertion is deliberately against `isWideDataset` rather than a hard-coded
-  // verdict — the point is that one rule decides, so the same file goes the same way
-  // whichever reader opened it, and re-tuning the threshold must not need this file
-  // edited. (The threshold itself is ~32 million cells and is tested in
-  // import-liveness.test.mjs, where it belongs.)
-  const { isWideDataset } = await import('../core/plugin-stdlib.js');
+test('it declares what the host routes on, and makes no routing decision itself', async () => {
+  // This reader declared nothing at all, so a multi-gigabyte JSON-lines file built a
+  // DuckDB table however big it was. The fix was first "call the shared rule"; since
+  // 2026-11-23 there is no rule to call — it was measured against the host's byte budget
+  // and deleted — so what this pins is the declaration the host needs instead: a column
+  // count, a TYPE per column, and a real row count. Routing on bytes needs the types, and
+  // this format is one that has to infer them, so "declared accurately" is the live risk.
   for (const file of [
     lines({ a: 1 }, { a: 2 }),
     lines({ a: 1, b: 'x' }, { a: 2, b: 'y' }, { a: 3, b: 'z' }),
   ]) {
     const r = await run(file);
-    assert.equal(typeof r.wide, 'boolean', 'no routing decision was made');
-    assert.equal(r.wide, isWideDataset(r.variables.length, r.rowCount));
+    assert.ok(!('wide' in (r.opts ?? {})), 'the codec is routing again');
+    assert.ok(r.rowCount > 0, 'no row count, so the host would have to assume one');
+    for (const v of r.variables) {
+      assert.ok(v.type === 'numeric' || v.type === 'string', `${v.name}: ${v.type}`);
+      assert.equal(r.types[v.name], v.type, 'the storage type and the variable disagree');
+    }
   }
 });
 

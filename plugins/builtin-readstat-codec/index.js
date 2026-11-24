@@ -73,13 +73,13 @@ function formatForName(name) {
   return FORMAT_BY_EXT[i >= 0 ? String(name).slice(i).toLowerCase() : ''] ?? null;
 }
 
-/** Route huge or very WIDE datasets to the out-of-core loadWide ingest rather than a
- * DuckDB table. The rule itself moved to the stdlib when the CSV codec turned out to
- * need it too — and to need a term this copy lacked: it measured total SIZE only, so a
- * 3,300-column by 6,500-row file came in under it and still killed an iPhone's web
- * view. See `isWideDataset`. */
-const { isWideDataset } = globalThis.ctStd;
-const isWide = (varCount, rowCount) => isWideDataset(varCount, rowCount);
+// NO ROUTING RULE HERE, and this file is where one lived longest: `isWide`, a local copy
+// of "is this too big for a DuckDB table", which moved to the stdlib when the CSV codec
+// turned out to need it too and was deleted outright on 2026-11-23 once it was measured
+// against the host's byte budget (`spike/ingest-route-measure.mjs`). It was blind to
+// column TYPE, which is the thing that costs — and this is a format where that matters,
+// since an SPSS file's string variables are declared in the dictionary this codec already
+// reads. What the host needs is the schema and the row count; it decides the rest.
 
 // --- engine (main-thread, ASYNCIFY) -----------------------------------------
 // One Module for the plugin's lifetime, instantiated on first use from the host-
@@ -343,7 +343,7 @@ async function offerCatalog(app, cat, labelSets) {
   }
 }
 
-/** Catalog (dictionary only) — for the wide check + the variable picker. */
+/** Catalog (dictionary only) — for the row count, the declared types and the picker. */
 async function catalog(app, file, format) {
   const Module = await getModule(app);
   installRead(Module, file);
@@ -433,8 +433,9 @@ async function stream(app, file, format, { onVariables, onBatch, variables = nul
  * unselected variable is never built — which is the whole reason picking 50 of the GSS's
  * 7,000 is worth doing.
  *
- * The row count and the `wide` decision come from the dictionary, so narrowing is
- * reflected in the storage routing: 50 columns are routed as 50, not as 7,000.
+ * The row count and the declared types come from the dictionary, which is what the host
+ * routes on — so narrowing is reflected in the routing for free: the 50 columns the user
+ * picked are declared as 50, not as 7,000, and the estimate follows.
  */
 export async function readImport(app, { select } = {}) {
   const file = await app.codec.sourceFile();
@@ -449,11 +450,10 @@ export async function readImport(app, { select } = {}) {
   if (keep !== null && !keep.length) {
     throw new Error('None of the selected variables are in this file.');
   }
-  const wide = isWide(keep === null ? cat.varCount : keep.length, cat.rowCount);
   await stream(app, file, format, {
     ...(keep === null ? {} : { variables: keep }),
     labelSets: cat.labelSets,
-    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount, wide }),
+    onVariables: (variables, storageTypes) => app.codec.begin(variables, storageTypes, { rowCount: cat.rowCount }),
     onBatch: (columns) => app.codec.batch(columns),
   });
   reportCatalog(app, attach);

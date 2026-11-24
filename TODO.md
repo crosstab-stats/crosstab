@@ -368,17 +368,55 @@ bottom; they are the project's memory and are not summarised away.
          transient JS heap for unbounded, shared engine memory is the right trade; the cells
          rule just picks the wrong files to make it for.
 
-         **RECOMMENDATION, not yet done — this is the owner's call, same as
-         `TABLE_BYTE_BUDGET`.** Delete `isWideDataset` and let `planIngest`'s byte budget
-         decide for every path, keeping `declaredWide` only for a codec that genuinely knows
-         better. Checked before proposing it: readstat's case (the full GSS, ~6,942 columns)
-         estimates in the gigabytes, so the budget catches it with room to spare — the
-         codec-side rule is not load-bearing for the file it was written for. That would take
-         the ingest from two routing rules to one, which is this entry's own test.
+         **DONE 2026-11-23, owner approved** ("remove the iswide step. The more we can
+         streamline the path the better"). `isWideDataset` is deleted, and so is the
+         `declaredWide` override that let a codec insist on a route — the recommendation had
+         kept it "for a codec that genuinely knows better" and the check showed none did: all
+         three callers were applying the same generic cells arithmetic. A parameter with one
+         reader and no honest producer is the drift this consolidation exists to remove.
 
-      **All four steps are now settled.** 1 is struck (upstream), 2 and 3 are done, and 4 is
-      measured — leaving one decision on the table rather than one question open: whether to
-      act on step 4's recommendation and delete `isWideDataset`.
+         **One property moved rather than died.** The cells rule treated an unknown row count
+         as 100,000, on the sound grounds that guessing small is the guess that crashes, while
+         `estimateTableBytes` treats `-1` as 0 bytes. Deleting the rule without noticing that
+         would have made every unknown-size source route to a table — the exact direction that
+         is fatal. It is now `routingRows` in `duckdb-manager.js`, deliberately NOT inside
+         `estimateTableBytes`, because that function is also the ACCOUNTING one: a forecast
+         should be pessimistic, a ledger should not charge a table for 100,000 phantom rows.
+
+         **Verified in the browser, with the negative control the rule exists for** — the same
+         3,300 x 8,000 shape loaded twice, differing only in type, so working and broken give
+         different answers:
+
+         | load | est | route | landed as |
+         |---|---|---|---|
+         | string | 403 MiB | `wide: true` | `opfs://ct_src_…parquet` |
+         | numeric | 201 MiB | `wide: false` | `ct_src_…` (a DuckDB table) |
+         | numeric again | 201 MiB, `loadedMiB: 201` | `wide: true` | parquet |
+
+         Identical width and cell count, opposite routes — which is precisely what the deleted
+         cells rule could not express. The third row is the cumulative budget still firing with
+         no per-file rule beside it: the same file that was a table moments earlier goes out of
+         core because the database is now holding 201 MiB, which is the FATAL the budget was
+         added for. Both datasets read back correctly (`v0` and `v3299`, 8,000 rows each), and
+         a real File ▸ Import data… of a small CSV still routes to a table and types correctly.
+
+         **A behaviour change worth stating plainly, not just a consolidation.** Some files now
+         route the other way. A 400 x 90,000 all-numeric CSV was "wide" by cells (36M, past the
+         32M threshold) and is a table by bytes (275 MiB, under 384) — and per the measurement
+         above, numeric-as-a-table is the cheap case, so that reversal is the point rather than
+         a side effect. The tests that pinned the old verdicts were rewritten to assert the new
+         rule's verdict rather than deleted, including two that had been passing vacuously once
+         the codec stopped declaring a flag (`!r.wide` on an absent property is always true —
+         the trap an absence assertion sets for itself).
+
+         Checked before relying on it: readstat's case (the full GSS, ~6,942 columns) estimates
+         in the gigabytes, so the budget catches it with room to spare — the codec-side rule was
+         not load-bearing even for the file it was written for. The ingest is now one routing
+         rule, which is this entry's own test.
+
+      **All four steps are DONE.** 1 is struck (upstream), 2 and 3 are done, and 4 is measured
+      and acted on — the ingest has one routing rule, `planIngest`'s byte budget, with no codec
+      override beside it.
 
       The test of whether this read is right: the protocol should get SMALLER, not larger. It
       did — `loadStreaming`/`loadWide` and `replaceTableFromParquet` are gone, `chooseSheets`
@@ -3110,6 +3148,19 @@ this is the index.
   fixed the hazard this exposed — four stacked Scorecard years asked the identical
   question four times, so the answer is now given once per import rather than once per
   file. *(under #98 / 643c30e)*
+- **Deleting an out-of-core dataset leaves its Parquet in OPFS** — noticed while cleaning up
+  after the 2026-11-23 routing verification, so it is a side observation and NOT caused by
+  that change. `DataStore#pruneDeadSources` releases a wide source's OPFS file when a
+  `replace` barrier drops it, which is the in-session case; `DatasetManager#remove` of a
+  whole dataset does not, and nothing sweeps on boot. After removing three probe datasets
+  and calling `purge()`, `navigator.storage.getDirectory()` still listed every
+  `ct_src_*.parquet` they had written — 24 files in all, several from EARLIER sessions,
+  including the `ct_src_1_2__part*` set left by the ingest measurements. So the leak
+  accumulates across reloads, and an out-of-core dataset is exactly the large kind: three
+  probes at 403/201/201 MiB estimated is the scale of what can be stranded by one session.
+  Not investigated further — it needs someone to decide whether the sweep belongs in
+  `remove`, in `purge`, or in a boot-time reconciliation against the op log (the last is the
+  only one that can also collect orphans from a session that crashed). *(under #98)*
 - **`isWideDataset` ignores width, and width is what costs** — it routes on cells
   (`ceil(cols*rows/4e6) > 8`), so the 3,379 × 6,272 Scorecard file was "not wide" at 21.2M
   cells and built a plain table. e85f8e4 measured width-routing and rejected it, but on
@@ -3123,11 +3174,12 @@ this is the index.
   `isWideDataset` is already type-aware and residency-aware, and catches the text case that
   the cells rule was blamed for missing; the cells rule's only distinct contribution is to
   route the CHEAPEST case (wide numeric, under the byte budget) out of core. The
-  recommendation is therefore to delete the cells rule rather than extend it, which is the
-  owner's call and is recorded there. Also note the prediction in the previous version of
-  this line — "the heap is the permanent ceiling, which is an argument for the width rule
-  earning its place" — was wrong, which is the reason the step said to measure instead of
-  predicting. *(under #98, codec interface)*
+  cells rule was therefore DELETED rather than extended (owner-approved, same day), along
+  with the `declaredWide` override beside it; the one property worth keeping — an unknown
+  row count is assumed substantial — moved to `routingRows`. **CLOSED.** Also note the
+  prediction in the previous version of this line — "the heap is the permanent ceiling,
+  which is an argument for the width rule earning its place" — was wrong, which is the
+  reason the step said to measure instead of predicting. *(under #98, codec interface)*
 - **Latent transition analysis** — **DEFERRED 2026-11-02 until someone asks** (feasible: `depmixS4`, closure 17 — demand is the only blocker). *(under #141, More analyses)*
 - ~~**Building-block eligibility**~~ — **CLOSED as moot 2026-10-13**, and this index line
   outlived it by three weeks. The building-block library was removed on 2026-10-02 and

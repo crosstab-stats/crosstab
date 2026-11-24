@@ -272,11 +272,18 @@ export class CodecService {
   /**
    * Start a streaming read and return a reader the host (import-service) consumes.
    * The plugin read fn runs as a producer: its `app.codec.begin(variables,
-   * storageTypes, {rowCount, wide})` resolves `reader.begin()`, and each
+   * storageTypes, {rowCount})` resolves `reader.begin()`, and each
    * `app.codec.batch(columns)` is handed to `reader.drain(cb)` with backpressure
    * (the plugin's batch() doesn't resolve until the consumer has taken it, so peak
-   * memory is one batch). Decoupling producer from consumer is what lets the host
-   * pick `loadStreaming` vs `loadWide` *after* seeing the catalog's `wide` hint.
+   * memory is one batch).
+   *
+   * Decoupling producer from consumer is what lets the host choose the ingest route
+   * *after* seeing the schema: `begin` resolves with the columns, their types and the row
+   * count, and `DataStore#load` plans from those. This used to say the host picked
+   * "`loadStreaming` vs `loadWide` after seeing the catalog's `wide` hint" — both
+   * functions are now one `load`, and the hint is gone: a codec declared `wide` from a
+   * cells rule that was measured and deleted (2026-11-23). What a codec declares is what
+   * it read; where it lands is the engine's call.
    */
   #startRead(spec, file, { plan = null } = {}) {
     const queue = [];
@@ -304,7 +311,7 @@ export class CodecService {
       sink: {
         begin: (variables, storageTypes, opts = {}) => {
           head = {
-            variables, storageTypes, rowCount: opts.rowCount ?? -1, wide: !!opts.wide,
+            variables, storageTypes, rowCount: opts.rowCount ?? -1,
             // What the codec was told to treat as missing. Carried so the import can
             // RECORD it: a script that re-reads the file without these codes reads
             // different data, which is the one thing an exported script must not do.
@@ -316,13 +323,22 @@ export class CodecService {
           // vs the out-of-core ingest) is chosen from these numbers, and recovering
           // them afterwards meant re-measuring the file by hand. Counts only — no
           // variable names, no values.
+          //
+          // `strings` is here because it is a ROUTING INPUT and it was invisible. A
+          // VARCHAR column costs a table 16 bytes a row against a double's 8, which is
+          // exactly the term the deleted cells rule could not see — so a route that looks
+          // surprising next to `columns` and `rows` is usually explained by this.
           debug('codec', 'begin', {
             codec: spec.pluginId,
             columns: variables?.length ?? 0,
+            strings: Object.values(storageTypes ?? {}).filter((t) => t === 'string').length,
             rows: head.rowCount,
             cells: (variables?.length ?? 0) * Math.max(0, head.rowCount),
-            wide: head.wide,
             missingCodes: Array.isArray(opts.missingCodes) ? opts.missingCodes.length : 0,
+            // Said rather than silently dropped. `wide` was a real field until 2026-11-23
+            // and a third-party codec may still declare it; it has no effect now, and a
+            // log that does not mention it is a log that cannot explain why.
+            ...('wide' in opts ? { ignoredWideHint: !!opts.wide } : {}),
           });
           headResolve(head);
         },

@@ -138,8 +138,17 @@ test('every link in the budget chain awaits', () => {
   const ds = stripComments(readFileSync('core/data-store.js', 'utf8'));
   assert.ok(!/async wouldExceedTableBudget\(/.test(ds),
     'a budget check with no caller invites a second routing site');
-  assert.match(ds, /await this\.#duckdb\.planIngest\(variables, rowCount, \{ declaredWide \}\)/,
+  assert.match(ds, /await this\.#duckdb\.planIngest\(variables, rowCount\)/,
     'and the one load() awaits the plan');
+  // No third argument, and that is a deliberate deletion rather than a tidy-up. There was
+  // a `declaredWide` override for "a codec that measured the file and knows better"; when
+  // the cells rule behind it was measured (2026-11-23) no codec did know better, and a
+  // parameter with one reader and no honest producer is the drift this consolidation
+  // exists to remove. The route is a function of the DECLARED DATA, with no escape hatch.
+  assert.ok(!/declaredWide/.test(dm), 'the routing override is back in the manager');
+  assert.ok(!/declaredWide/.test(ds), 'the routing override is back in the store');
+  const is = stripComments(readFileSync('core/import-service.js', 'utf8'));
+  assert.ok(!/declaredWide|head\.wide/.test(is), 'the import declares a route again');
 });
 
 test('garbage byte counts cannot poison the total', () => {

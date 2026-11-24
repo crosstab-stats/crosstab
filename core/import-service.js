@@ -954,23 +954,26 @@ export class ImportService {
           seen += k ? columns[k].length : 0;
           progress(seen, head.rowCount);
         };
-        // ONE call, whichever way it lands. The routing used to be decided HERE —
-        // `head.wide || overBudget`, half from the codec's view of the file and half from
-        // the host's view of what was already resident — and the four non-import routes
-        // into the engine consulted neither half. Both inputs belong to whoever owns the
-        // engine, so the decision moved there (`DataStore#load`, `chooseIngestRoute`) and
-        // this side simply streams.
+        // ONE call, whichever way it lands, and NOTHING of the routing left on this side.
+        // It used to be decided here — `head.wide || overBudget`, half from the codec's
+        // view of the file and half from the host's view of what was already resident —
+        // while the four non-import routes into the engine consulted neither half. Both
+        // inputs belong to whoever owns the engine, so the decision moved there
+        // (`DataStore#load` -> `planIngest`) and this side simply streams.
         //
-        // What is kept here is `declaredWide`: a codec that measured the file can insist,
-        // and `loadWide`'s reason for existing — the full GSS FATAL-OOMs as a table —
-        // is a property of the file the codec read, not of the engine.
+        // The codec's half lingered for a while as `declaredWide`, for "a codec that
+        // measured the file and knows better". Measured 2026-11-23: none of them did —
+        // all three were applying the same generic cells arithmetic, and it was blind to
+        // type, which is what costs. So `head.wide` is no longer read. A codec still
+        // influences the route, but only by declaring its data accurately: `head.variables`
+        // carries the types and `head.rowCount` the size, and those are the estimate's
+        // inputs.
         await this.#data.load({
           mode: fileMode,
           source: tag,
           variables: head.variables,
           storageTypes: head.storageTypes,
           rowCount: head.rowCount,
-          declaredWide: head.wide,
           missingCodes: head.missingCodes,
           onProgress: (done) => progress(done, head.rowCount),
           // RETURN the batch promise: `drain` awaits the callback, so this is the whole
