@@ -212,6 +212,19 @@ export class DataStore {
    * reliable cleanup — these are files, not tables. @type {Set<string>} */
   #wideFiles = new Set();
 
+  /**
+   * The OPFS working files this dataset is holding right now.
+   *
+   * Read by the lost-file scan (`core/storage-scan.js`), which has to tell a stranded
+   * file from one in use and can only do that by asking every live store. A copy, not
+   * the set: a caller that could delete from it would be editing the cleanup list.
+   *
+   * @returns {string[]}
+   */
+  wideFiles() {
+    return [...this.#wideFiles];
+  }
+
   /** @type {string|null} the folded frequency weight — see {@link DataStore#weightVar}. */
   #weightVar = null;
 

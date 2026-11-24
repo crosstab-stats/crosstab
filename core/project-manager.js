@@ -38,7 +38,10 @@
 import { duplicateName } from './copy-to-project.js';
 import { debug } from './debug.js';
 import { projectMetaLine } from './project-meta.js';
-import { el } from './plugin-stdlib.js';
+import { el, humanBytes } from './plugin-stdlib.js';
+
+/** For a confirm() body, where a real line break cannot be written inline. */
+const NEWLINE = String.fromCharCode(10);
 
 /** Tabs, in order. `verb` is what the tab does to the row you click. */
 export const TABS = Object.freeze([
@@ -157,7 +160,10 @@ export function storeVerb(currentKind) {
  * @param {Array<{label: string, run: Function}>} [opts.exporters]
  * @returns {Promise<void>} resolves when the dialog closes
  */
-export function openProjectManager({ tab = 'recents', projects, makeBackend, providers = [], results, exporters = [] }) {
+export function openProjectManager({
+  tab = 'recents', projects, makeBackend, providers = [], results, exporters = [],
+  scanLost = null, deleteLost = null,
+}) {
   return new Promise((resolve) => {
     const dialog = document.createElement('dialog');
     dialog.className = 'ct-dialog ct-dialog--wide ctpm';
@@ -211,7 +217,7 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
       if (active === 'recents') renderList(rows, { verb: 'open' });
       else if (active === 'open') renderRail(rows, { mode: 'open' });
       else if (active === 'store') renderRail(rows, { mode: 'store' });
-      else if (active === 'manage') renderList(rows, { verb: 'manage' });
+      else if (active === 'manage') { renderList(rows, { verb: 'manage' }); renderStorage(); }
       else renderExport();
     };
 
@@ -461,6 +467,92 @@ export function openProjectManager({ tab = 'recents', projects, makeBackend, pro
         + 'project, and cannot be reopened as one.',
         exporters.filter((x) => !x.reopens),
       );
+    }
+
+    /**
+     * Storage, at the bottom of Manage: working files no session owns any more.
+     *
+     * Here rather than in the sidebar because it is not about the OPEN project — a lost
+     * file belongs to no project at all, which is exactly why nothing was collecting it.
+     * Manage is already the tab that holds the destructive pair, and is where someone
+     * looking to free space goes.
+     */
+    function renderStorage() {
+      if (!scanLost) return;
+      body.append(el('h3', { class: 'ctpm__grouphead', text: 'Storage' }));
+      const hint = el('p', {
+        class: 'ctpm__hint',
+        text: 'An import too large for memory writes a working file. A tab that is closed, '
+          + 'reloaded or crashes leaves its own behind, and nothing collects them. This '
+          + 'finds those files — never a project’s own data.',
+      });
+      body.append(hint);
+      const out = el('p', { class: 'ctpm__hint' });
+      const btn = el('button', { class: 'proj__add', text: 'Scan for lost files…' });
+      btn.type = 'button';
+      btn.addEventListener('click', () => void runScan(btn, out));
+      body.append(btn, out);
+    }
+
+    /**
+     * Scan, report, and offer to delete — report FIRST, every time.
+     *
+     * The deletion is gated on the scan being safe (see `core/storage-scan.js`: no other
+     * CrossTab tab open, which is what makes "nobody owns this" provable rather than
+     * guessed). When it is not, the files are still reported — knowing the bytes are
+     * there is useful on its own — and only the button goes away, with the reason given.
+     * Silently rendering "nothing to reclaim" for a scan that could not establish safety
+     * is the failure the asset sweep already learned to avoid.
+     */
+    async function runScan(btn, out) {
+      btn.disabled = true;
+      out.textContent = 'Scanning…';
+      try {
+        const found = await scanLost();
+        if (!found.files.length) {
+          out.textContent = found.blocked
+            ? 'Nothing here that this tab can account for as lost.'
+            : 'Nothing lost — every working file belongs to something open.';
+          return;
+        }
+        const n = found.files.length;
+        const size = humanBytes(found.bytes);
+        if (found.blocked === 'other-tabs') {
+          out.textContent = `Found ${n} file${n === 1 ? '' : 's'} (${size}), but `
+            + `${found.sessions} CrossTab tabs are open and a file here may be the other `
+            + 'one’s working data. Close the others and scan again to delete them.';
+          return;
+        }
+        if (found.blocked) {
+          out.textContent = `Found ${n} file${n === 1 ? '' : 's'} (${size}). This browser `
+            + 'cannot tell CrossTab how many tabs are open, so they cannot be deleted '
+            + 'safely from here.';
+          return;
+        }
+        out.textContent = `Found ${n} file${n === 1 ? '' : 's'} — ${size}.`;
+        if (!deleteLost) return;
+        if (!confirm(
+          `Delete ${n} lost file${n === 1 ? '' : 's'} and free ${size}?${NEWLINE}${NEWLINE}`
+          + 'These are working files from sessions that have ended. No open project or '
+          + 'dataset refers to them. This cannot be undone.',
+        )) return;
+        const done = await deleteLost(found.files.map((f) => f.name));
+        if (done.blocked) {
+          out.textContent = 'Not deleted — another CrossTab tab opened while that was on '
+            + 'screen, so the files may now belong to it. Scan again.';
+          return;
+        }
+        const parts = [`Deleted ${done.removed.length} file${done.removed.length === 1 ? '' : 's'}, freeing ${humanBytes(done.bytes)}.`];
+        if (done.failed.length) parts.push(`${done.failed.length} could not be removed.`);
+        out.textContent = parts.join(' ');
+        results?.appendText?.(`**Reclaimed ${humanBytes(done.bytes)}** from `
+          + `${done.removed.length} lost working file${done.removed.length === 1 ? '' : 's'}.`);
+      } catch (err) {
+        debug('project', 'lost-file scan failed', err);
+        out.textContent = `Scan failed: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     shell.append(tabBar, body, footer);

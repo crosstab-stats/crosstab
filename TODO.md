@@ -3148,19 +3148,26 @@ this is the index.
   fixed the hazard this exposed — four stacked Scorecard years asked the identical
   question four times, so the answer is now given once per import rather than once per
   file. *(under #98 / 643c30e)*
-- **Deleting an out-of-core dataset leaves its Parquet in OPFS** — noticed while cleaning up
-  after the 2026-11-23 routing verification, so it is a side observation and NOT caused by
-  that change. `DataStore#pruneDeadSources` releases a wide source's OPFS file when a
-  `replace` barrier drops it, which is the in-session case; `DatasetManager#remove` of a
-  whole dataset does not, and nothing sweeps on boot. After removing three probe datasets
-  and calling `purge()`, `navigator.storage.getDirectory()` still listed every
-  `ct_src_*.parquet` they had written — 24 files in all, several from EARLIER sessions,
-  including the `ct_src_1_2__part*` set left by the ingest measurements. So the leak
-  accumulates across reloads, and an out-of-core dataset is exactly the large kind: three
-  probes at 403/201/201 MiB estimated is the scale of what can be stranded by one session.
-  Not investigated further — it needs someone to decide whether the sweep belongs in
-  `remove`, in `purge`, or in a boot-time reconciliation against the op log (the last is the
-  only one that can also collect orphans from a session that crashed). *(under #98)*
+- **An out-of-core working file outlives the session that made it** — noticed while cleaning
+  up after the 2026-11-23 routing verification, so it is a side observation and NOT caused by
+  that change. Every out-of-core source writes `ct_src_<dataset>_<seq>.parquet` to the OPFS
+  ROOT (a saved project does not reference it — `save` COPIES the bytes to
+  `projects/<id>/src_<opId>.parquet`, so the root file is pure session scratch). The
+  in-session releases are all correct and were checked one at a time: `#pruneDeadSources`
+  frees a source a `replace` barrier dropped, `remove()` BINS a recoverable dataset on
+  purpose so a restore costs nothing, and `purge()` disposes and frees. What is missing is
+  the end: a reload, a crash or a closed tab disposes nothing, so everything that session
+  wrote stays on disk forever, and nothing sweeps on boot.
+
+  *(Corrected the same day. The first version of this entry said `remove()` leaks, on the
+  strength of files surviving a `remove` + `purge` in the console. It does not — I had called
+  `purge()` with no argument, so it purged nothing. The harness was wrong, not the product.
+  What is left over the line is the cross-session half, which the `ct_src_1_2__part*` files
+  from the earlier ingest measurements prove on their own.)*
+
+  **FIXED** by *Scan for lost files* — project manager ▸ Manage ▸ Storage — which collected
+  this profile's 24 stranded files (239 MB) on its first run. See the entry under Completed
+  for why it is a scan a person runs rather than a sweep on boot. *(under #98)*
 - **`isWideDataset` ignores width, and width is what costs** — it routes on cells
   (`ceil(cols*rows/4e6) > 8`), so the 3,379 × 6,272 Scorecard file was "not wide" at 21.2M
   cells and built a plain table. e85f8e4 measured width-routing and rejected it, but on
@@ -3485,6 +3492,63 @@ missing line is worse, but it is to be read as "look here", never as "this is op
 The record of what shipped and why. Kept in full, in the original sections.
 
 ### Now / near-term
+
+- [x] **Scan for lost files (owner, 2026-11-23) — SHIPPED.** An out-of-core ingest writes
+      `ct_src_<dataset>_<seq>.parquet` to the OPFS ROOT, and that file is session scratch:
+      saving a project does not reference it, `save` COPIES the bytes to
+      `projects/<id>/src_<opId>.parquet`. Every in-session release is correct —
+      `#pruneDeadSources` frees what a `replace` barrier dropped, `purge()` disposes and
+      frees, and `remove()` BINS a recoverable dataset on purpose so a restore costs
+      nothing. What had no owner was the END of a session: a reload, a crash or a closed
+      tab disposes nothing. This browser profile had **24 stranded files, 239 MB**, some
+      from sessions weeks old.
+
+      **Project manager ▸ Manage ▸ Storage ▸ "Scan for lost files…"**, in `core/storage-scan.js`.
+      Manage rather than the sidebar because a lost file belongs to no project at all,
+      which is exactly why nothing was collecting it.
+
+      **Why a scan a person runs and not a sweep on boot**, which is the whole design: the
+      rule the rest of this codebase keeps is *never delete what you cannot account for*
+      (`ProjectStore#discardUnreferenced` argues it at length — an unaccounted file is
+      routinely a collaborator's data that arrived ahead of its index). A boot sweep would
+      have to decide that at the moment it knows least.
+
+      **Three gates, and "nobody owns this" is made PROVABLE rather than guessed:**
+      1. *No other session.* Every tab holds a shared Web Lock (`crosstab-session`), so
+         `navigator.locks.query()` counts live sessions across the origin. One holder means
+         this tab is alone. The browser drops the lock when a tab dies — which is the very
+         event that strands the files, so a crashed session cannot hold its orphans
+         hostage. No Web Locks, or a query that throws, is UNKNOWN and refuses; it never
+         collapses to the permissive answer.
+      2. *An allow-list of names WE write*, never "anything unfamiliar". This profile's OPFS
+         root also held `crosstab-duckdb.db`, `projects/`, `recycle/`, `media-assets/`,
+         `plugin-packages/`, `rs_gss.sav` and a dozen spike leftovers — a
+         delete-what-I-don't-recognise sweep would have taken the database out with it.
+      3. *Not live here, and not warm.* Files this session's datasets hold are excluded (the
+         BIN counts: a binned dataset is one Undo from being back, which is why its files
+         are deliberately left intact), and so is anything written in the last 60 s, because
+         an ingest in flight has parts on disk that it has not registered yet.
+
+      Deleting re-runs the scan first, so a tab opened while the confirm box sat on screen
+      cancels the whole thing, and the agreed list is intersected with what is still lost
+      rather than obeyed.
+
+      **Browser-verified with the control that distinguishes the gates.** With a 403 MiB
+      out-of-core dataset live and **80 seconds old** — past the warm window, so warmth could
+      not be what saved it — the disk held 25 working files and the scan offered 24. Deleting
+      freed 239 MB, left all 24 non-`ct_src` entries untouched, and the live dataset still
+      read all 8,000 rows afterwards. That run also caught a real bug before it shipped:
+      `wideFiles()` returns `opfs://ct_src_…`, prefixed, so without `opfsName()` on the way
+      in the live file would not have matched the live set and would have been offered for
+      deletion. A second tab was opened and the scan correctly reported the bytes and
+      refused, showing no confirm at all.
+
+      **Not addressed, seen while verifying:** the same root holds other apparent leftovers —
+      `crosstab-probe-*.db` (nine of them, from `core/storage-probe.js`), `mp0/1/2.parquet`,
+      `ct-slash-a/b.db`, `ct_export.bin`, `crosstab-probe-write.parquet`. They are almost
+      certainly spike and probe residue that should clean up after itself, but "almost
+      certainly" is not the standard this feature is built to, so the allow-list does not
+      touch them. Worth a look at whether `storage-probe` deletes what it writes.
 
 - [x] **DONE 2026-11-19. A multi-file import asked the mode ONCE and the missing codes N times (owner,
       2026-11-18).** One answer now carries across the import: a file whose candidates are all

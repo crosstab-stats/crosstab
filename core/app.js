@@ -12,7 +12,7 @@
 import { showSharingSettings } from './sharing-settings.js';
 import { EventBus, CoreEvents } from './event-bus.js';
 import { DatasetManager, DATASETS_CHANGED } from './dataset-manager.js';
-import { DuckDBManager } from './duckdb-manager.js';
+import { DuckDBManager, opfsName } from './duckdb-manager.js';
 import { WebRManager } from './webr-manager.js';
 import { ResultsPane } from './results-pane.js';
 import { MenuShell } from './menu-shell.js';
@@ -25,6 +25,7 @@ import {
   DropboxBackend, WebDavBackend, FolderBackend, OpfsBackend, backendFor,
 } from './storage-backend.js';
 import { openProjectManager } from './project-manager.js';
+import { holdSessionLock, scanLostFiles, deleteLostFiles } from './storage-scan.js';
 import { registerHelpMenu, environmentRows, showBugReport } from './help.js';
 import { addDeployIssues, loadDeployConfig } from './deploy-config.js';
 import { loadSitePlugins } from './site-plugins.js';
@@ -1436,6 +1437,28 @@ export async function boot(mounts) {
    * abstain case, which must be reported rather than silently treated as "nothing to do".
    * @param {{dryRun?: boolean}} [opts]
    */
+  /**
+   * Every OPFS working file this session owns — the input the lost-file scan needs to
+   * tell stranded bytes from someone's open data.
+   *
+   * BINNED stores count. A binned dataset is one Undo from being back, its tables and
+   * files are deliberately left intact for exactly that reason, and a scan that forgot
+   * them would offer to delete the thing the bin exists to protect.
+   */
+  const liveWorkingFiles = () => {
+    const out = new Set();
+    for (const ds of [...datasets.all(), ...datasets.binnedStores()]) {
+      for (const f of ds.wideFiles?.() ?? []) out.add(opfsName(f));
+    }
+    return out;
+  };
+
+  /** What a lost-file scan would collect, without collecting it. */
+  const scanLost = () => scanLostFiles({ live: liveWorkingFiles() });
+
+  /** Collect it. Re-checks inside, so an agreed list cannot outlive its safety. */
+  const deleteLost = (names) => deleteLostFiles({ names, live: liveWorkingFiles() });
+
   const sweepAssets = async ({ dryRun = false } = {}) => {
     const index = (await assetStore.list()).map((a) => a.id);
     const { orphans, incomplete } = await findOrphans(index, assetRefSources());
@@ -1948,8 +1971,16 @@ export async function boot(mounts) {
     return new WebDavBackend({ url: chosen.url, username: chosen.username }, async () => chosen.password);
   };
 
+  // Held for the life of the page, so `navigator.locks.query()` can count open sessions.
+  // That count is the whole safety argument for deleting a lost file: one holder means
+  // this tab is alone, and the browser drops the lock when a tab dies — which is the very
+  // event that strands the files.
+  holdSessionLock();
+
   /** The one entry point to the project manager. */
   const openManager = (tab) => openProjectManager({
+    scanLost,
+    deleteLost,
     tab,
     projects,
     makeBackend,
