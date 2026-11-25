@@ -622,7 +622,9 @@ export class WebRManager {
    *
    * @param {string[]} columns - Checked variable names.
    * @param {boolean} multiple - Bind as a data.frame (true) or vector (false).
-   * @returns {Promise<{names: string[], multiple: boolean}>}
+   * @returns {Promise<{names: string[], multiple: boolean, na?: number, cells?: number}>}
+   *   `na`/`cells` describe what was bound — NA count and total values. Absent if the
+   *   count could not be taken; the console treats them as unknown, not as zero.
    */
   consoleBind(columns, multiple, { keepMissing = false } = {}) {
     return this.#enqueue(async (webR) => {
@@ -652,6 +654,23 @@ export class WebRManager {
         // the console as never stripped while `r-console.js` documented it as mirroring
         // the plugin contract; both could not be true.
         const applyMissing = !keepMissing;
+        // Count the NA actually present in what we bound, once per bind. The console
+        // uses it to explain an NA result in terms of the data it was handed; doing it
+        // here means no extra round trip per command typed, and it asks R about the
+        // real object rather than re-deriving a count from the store (either bind path,
+        // Parquet or JS arrays, lands on the same question).
+        const counts = async () => {
+          try {
+            const s = await webR.evalRString(
+              `local({ .v <- get("vars", envir = ${CONSOLE_REF}); `
+              + `paste(sum(is.na(.v)), NROW(.v) * NCOL(.v)) })`,
+            );
+            const [na, cells] = String(s).trim().split(/\s+/).map(Number);
+            return Number.isFinite(na) && Number.isFinite(cells) ? { na, cells } : {};
+          } catch {
+            return {}; // a count is a nicety; never fail a bind over it
+          }
+        };
         if (this.#getInjectionParquet && (await this.#ensureNanoparquet(webR))) {
           const bytes = await this.#getInjectionParquet({ variables: columns, applyMissing });
           if (bytes && bytes.byteLength) {
@@ -661,7 +680,7 @@ export class WebRManager {
               + `local({ .d <- as.data.frame(nanoparquet::read_parquet(${rLit(INJECT_PATH)}), check.names = FALSE); ${assign} })`,
               { env: G },
             );
-            return { names: columns, multiple };
+            return { names: columns, multiple, ...(await counts()) };
           }
         }
         const rawCols = await this.#getColumns({ variables: columns, applyMissing });
@@ -674,7 +693,7 @@ export class WebRManager {
           + `local({ .d <- as.data.frame(.crosstab_data, stringsAsFactors = FALSE, check.names = FALSE); ${assign} })`,
           { env: { '.crosstab_data': cols } },
         );
-        return { names: columns, multiple };
+        return { names: columns, multiple, ...(await counts()) };
       } finally {
         await shelter.purge();
       }

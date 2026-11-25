@@ -27,6 +27,10 @@ export class RConsole {
   /** Bind raw codes instead of NA-folded values (#159). Off = the plugin default. */
   #keepMissing = false;
   #keepMissingCb;
+  /** What the last bind put in `vars`: `{na, cells}` from consoleBind, `{}` if unknown. */
+  #bound = {};
+  /** Whether this binding has already explained its NA (see {@link #noteMissing}). */
+  #naExplained = false;
   /** Submitted command history for ↑/↓ recall. */
   #history = [];
   #histIdx = -1;
@@ -209,7 +213,11 @@ export class RConsole {
     const cols = [...this.#checked];
     const multiple = cols.length > 1;
     try {
-      await this.#webr.consoleBind(cols, multiple, { keepMissing: this.#keepMissing });
+      // The binding changed, so any earlier explanation of its NA is spent.
+      this.#bound = {};
+      this.#naExplained = false;
+      const res = await this.#webr.consoleBind(cols, multiple, { keepMissing: this.#keepMissing });
+      this.#bound = { na: res?.na, cells: res?.cells };
     } catch (err) {
       this.#append(`Could not expose variables: ${err.message}`, 'rc-err');
       return;
@@ -219,10 +227,64 @@ export class RConsole {
     } else {
       // Say WHICH data is bound. "vars — a data.frame (age, income)" gave no clue
       // whether -99 was still in there, which is the whole question this setting answers.
-      const missing = this.#keepMissing ? 'raw codes' : 'missing → NA';
+      // The NA count rides along for the same reason: the quietest place to disclose it
+      // is the line that already describes the binding.
+      const n = this.#bound.na;
+      const missing = this.#keepMissing
+        ? 'raw codes'
+        : `missing → NA${Number.isFinite(n) ? ` (${n} NA)` : ''}`;
       const shape = multiple ? `a data.frame (${cols.join(', ')})` : `a vector (${cols[0]})`;
       this.#varsInfo.textContent = `vars — ${shape} · ${missing}`;
     }
+  }
+
+  /**
+   * Explain an NA in the output in terms of the data we handed R — once per binding.
+   *
+   * This is deliberately a *diagnosis and nothing else*: it states how many NA are in
+   * `vars`, and where they came from if that is something the host did (folding each
+   * variable's designated missing codes, which the student never asked for and cannot
+   * see in the Data grid). It does not name `na.rm`, suggest dropping the NA, or
+   * otherwise imply that any particular handling is the right one — what to do about
+   * missing data is the analyst's call, and in a teaching setting it is the
+   * instructor's to teach. The tool's job stops at "here is why R said NA".
+   */
+  #noteMissing(output) {
+    if (this.#naExplained || !this.#checked.size) return;
+    const { na, cells } = this.#bound;
+    if (!Number.isFinite(na) || na <= 0) return;
+    if (!RConsole.#showsNA(output)) return;
+
+    const of = Number.isFinite(cells) ? ` of ${cells}` : '';
+    // Only credit the fold when a checked variable actually declares missing codes;
+    // otherwise these NA are empty cells in the source and claiming otherwise would
+    // teach the student something false about their own data.
+    // No `{variables}` filter here: the console's store is the DatasetManager api, whose
+    // getVariableMeta takes no options and would hand back every variable in the project
+    // — so a declaration on some unchecked variable would answer for the checked ones.
+    const meta = this.#store.getVariableMeta?.() ?? [];
+    const declared = meta.some(
+      (m) => this.#checked.has(m.name) && (m.missingValues?.length || m.missingRanges?.length),
+    );
+    const why = !this.#keepMissing && declared
+      ? "this binding folds each variable's designated missing codes to NA, as a plugin's inputs are"
+      : 'these values are empty in the data';
+    this.#append(
+      `# vars holds ${na} NA${of} — ${why}. R carries NA through most computations.`,
+      'rc-note',
+    );
+    this.#naExplained = true;
+  }
+
+  /** Does R's printed output contain the NA/NaN token? */
+  static #showsNA(output) {
+    if (!output) return false;
+    // Character values and labels can legitimately read "NA" (a country code, a level
+    // name), so drop quoted runs before looking for the bare token.
+    const bare = String(output)
+      .replace(/"(?:[^"\\]|\\.)*"/g, '')
+      .replace(/'(?:[^'\\]|\\.)*'/g, '');
+    return /\bNA\b|\bNaN\b/.test(bare);
   }
 
   // --- libraries -------------------------------------------------------------
@@ -312,6 +374,7 @@ export class RConsole {
       const res = await this.#webr.evalConsole(code);
       if (res.output) this.#append(res.output, res.error ? 'rc-err' : 'rc-result');
       for (const img of res.images || []) this.#appendPlot(img);
+      if (!res.error) this.#noteMissing(res.output);
     } catch (err) {
       this.#append(String(err?.message ?? err), 'rc-err');
     } finally {
